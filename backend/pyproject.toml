@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "万智创界" },
+    { name = "ZJ-Unicom-AI" },
 ]
 
 dependencies = [
