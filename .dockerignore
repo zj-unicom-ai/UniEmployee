@@ -1,0 +1,34 @@
+# 版本控制忽略
+.git
+.venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+frontend/node_modules/
+frontend/dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 运行时数据与日志（由卷 / 备份脚本管理，不进镜像 / 仓库）
+data/
+backups/
+logs/
+*.log
+checkpoints.db*
+store.db*
+catalog.db*
+conversations.db*
+traces.db*
+
+# 用户上传的自定义技能（运行期产生）
+skills-custom/
+
+# 依赖锁可选忽略（保留亦可，便于审计）
+# requirements.lock.txt
+
+# 系统文件
+.DS_Store

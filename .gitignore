@@ -1,0 +1,31 @@
+.venv/
+.env
+.workbuddy/
+checkpoints.db*
+store.db*
+catalog.db*
+conversations.db*
+traces.db*
+__pycache__/
+*.pyc
+.DS_Store
+skills-custom/
+backend/tmp/
+logs/
+backups/
+*.log
+data/
+workspace/
+node_modules/
+*.zip
+docker_err.txt
+frontend/dist/
+
+# 本机技能软链接（指向开发者本地 ~/.agents/skills，他人环境不存在）
+backend/skills/docx-reference
+
+# 内部开发文档（不随开源仓库发布）
+TODO.md
+AGENT_RUNTIME_TODO.md
+项目逻辑与问题分析.md
+.docs/

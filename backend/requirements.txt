@@ -1,0 +1,17 @@
+# 运行期依赖（顶层，固定版本）。生产部署推荐直接用 requirements.lock.txt 获得完全可复现的环境。
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+pydantic==2.11.10
+python-dotenv==1.2.2
+pyyaml==6.0.3
+PyJWT==2.13.0
+bcrypt==5.0.0
+deepagents==0.7.5
+langchain-deepseek==1.1.0
+langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.0
+langchain-mcp-adapters==0.3.0
+langchain-openai==1.4.1
+fastmcp==3.4.4
+httpx==0.28.1
+tzdata==2025.2

@@ -1,0 +1,220 @@
+/* 全局样式：CSS 变量、滚动条、卡片、标签、按钮基础样式 */
+/* =============================================================
+   UniEmployee Design Tokens — 企业级数字员工平台视觉系统
+   =============================================================
+   色阶：50/100/200/300/400/500/600/700/800/900
+   基于 oklch 色域，确保 WCAG AA 对比度
+   ============================================================= */
+
+/* ---------- 设计 Token ---------- */
+:root {
+  /* ✦ 品牌色系：蓝色 (Primary) */
+  --ue-blue-50:  #eff6ff;
+  --ue-blue-100: #dbeafe;
+  --ue-blue-200: #bfdbfe;
+  --ue-blue-300: #93c5fd;
+  --ue-blue-400: #60a5fa;
+  --ue-blue-500: #3b82f6;
+  --ue-blue-600: #2563eb;
+  --ue-blue-700: #1d4ed8;
+  --ue-blue-800: #1e40af;
+  --ue-blue-900: #1e3a8a;
+
+  /* ✦ 强调色系：青色 (Info/Action) */
+  --ue-cyan-400: #22d3ee;
+  --ue-cyan-500: #06b6d4;
+  --ue-cyan-600: #0891b2;
+
+  /* ✦ 中性色系：灰 (Neutral) */
+  --ue-gray-50:  #f8fafc;
+  --ue-gray-100: #f1f5f9;
+  --ue-gray-200: #e2e8f0;
+  --ue-gray-300: #cbd5e1;
+  --ue-gray-400: #94a3b8;
+  --ue-gray-500: #64748b;
+  --ue-gray-600: #475569;
+  --ue-gray-700: #334155;
+  --ue-gray-800: #1e293b;
+  --ue-gray-900: #0f172a;
+
+  /* ✦ 语义色 */
+  --ue-success: #10b981;
+  --ue-success-bg: #ecfdf5;
+  --ue-warning: #f59e0b;
+  --ue-warning-bg: #fffbeb;
+  --ue-error: #ef4444;
+  --ue-error-bg: #fef2f2;
+  --ue-info: #3b82f6;
+  --ue-info-bg: #eff6ff;
+
+  /* ✦ 排版 Token */
+  --font-sans: "Inter", -apple-system, "PingFang SC", "Segoe UI", "Noto Sans SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  --text-xs:   0.6875rem;   /* 11px */
+  --text-sm:   0.75rem;     /* 12px */
+  --text-base: 0.8125rem;   /* 13px — 正文（小型） */
+  --text-body: 0.875rem;    /* 14px — 正文（默认） */
+  --text-md:   0.9375rem;   /* 15px — 大正文 */
+  --text-lg:   1rem;        /* 16px — 小标题 */
+  --text-xl:   1.125rem;    /* 18px — 标题 */
+  --text-2xl:  1.375rem;    /* 22px — 大标题 */
+  --text-3xl:  1.75rem;     /* 28px — 页面标题 */
+  --text-4xl:  2.25rem;     /* 36px — 首页大标题 */
+
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semibold: 600;
+  --fw-bold:    700;
+
+  --lh-tight: 1.25;
+  --lh-normal: 1.5;
+  --lh-relaxed: 1.625;
+  --lh-loose: 1.75;
+
+  /* ✦ 间距 Token（4px 基数的八分法） */
+  --space-0:  0;
+  --space-1:  0.25rem;   /* 4px  */
+  --space-2:  0.5rem;    /* 8px  */
+  --space-3:  0.75rem;   /* 12px */
+  --space-4:  1rem;      /* 16px */
+  --space-5:  1.25rem;   /* 20px */
+  --space-6:  1.5rem;    /* 24px */
+  --space-8:  2rem;      /* 32px */
+  --space-10: 2.5rem;    /* 40px */
+  --space-12: 3rem;      /* 48px */
+  --space-16: 4rem;      /* 64px */
+  --space-20: 5rem;      /* 80px */
+
+  /* ✦ 圆角 Token */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* ✦ 阴影 Token */
+  --shadow-xs: 0 1px 2px 0 rgba(15,23,42,0.04);
+  --shadow-sm: 0 1px 3px 0 rgba(15,23,42,0.06), 0 1px 2px -1px rgba(15,23,42,0.04);
+  --shadow-md: 0 4px 6px -1px rgba(15,23,42,0.06), 0 2px 4px -2px rgba(15,23,42,0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(15,23,42,0.08), 0 4px 6px -4px rgba(15,23,42,0.04);
+  --shadow-xl: 0 20px 30px -8px rgba(15,23,42,0.12);
+  --shadow-glow-blue: 0 0 24px rgba(59,130,246,0.15);
+
+  /* ✦ 动画 Token */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ---------- 全局 Reset ---------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-normal);
+  background: var(--ue-gray-100);
+  color: var(--ue-gray-900);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* ---------- 科技感背景 ---------- */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(59,130,246,0.07), transparent 60%),
+    radial-gradient(ellipse 40% 30% at 80% 80%, rgba(6,182,212,0.04), transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ue-gray-300);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--ue-gray-400); }
+
+/* ---------- 排版通用 ---------- */
+::selection {
+  background: var(--ue-blue-200);
+  color: var(--ue-blue-900);
+}
+
+/* ---------- 品牌渐变文字 ---------- */
+.gradient-text {
+  background: linear-gradient(135deg, var(--ue-blue-500), var(--ue-cyan-500));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ---------- 通用卡片 ---------- */
+.card {
+  background: #ffffff;
+  border: 1px solid var(--ue-gray-200);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+.card-hover:hover {
+  border-color: var(--ue-blue-300);
+  box-shadow: var(--shadow-glow-blue);
+}
+
+/* ---------- 状态点 ---------- */
+.status-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--ue-success);
+  box-shadow: 0 0 8px rgba(16,185,129,0.4);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* ---------- 渐入动画 ---------- */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity var(--transition-normal);
+}
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.slide-up-enter-active {
+  transition: all var(--transition-normal) var(--ease-out);
+}
+.slide-up-leave-active {
+  transition: all var(--transition-fast);
+}
+.slide-up-enter-from {
+  opacity: 0; transform: translateY(8px);
+}
+.slide-up-leave-to {
+  opacity: 0; transform: translateY(-4px);
+}
