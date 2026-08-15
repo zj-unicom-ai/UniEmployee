@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 架构
 
-**UniEmployee 数字员工平台** —— 基于 **deepagents 0.6.12** (LangGraph 1.2.9) 的多租户数字员工运行平台。
+**UniEmployee 数字员工平台** —— 基于 **deepagents 0.7.5** (LangGraph 1.2.9) 的多租户数字员工运行平台。
 
 五层能力模型：`Employee → Workflow/SOP → Skill → Connector → Tool`
 
@@ -20,10 +20,11 @@ backend/                     # 后端（Python FastAPI）
 │   │   └── compile_agent()   #   主入口：skill 播种→工具装配→system_prompt→create_deep_agent
 │   ├── runtime.py            # agent 缓存 / checkpointer / store / 预热 / 失效
 │   ├── spec.py               # EmployeeSpec Pydantic 模型 + load_spec(yaml)
-│   ├── catalog.py            # catalog.db（员工 / 技能 / 工具 / 知识库 / SOP / 连接器 CRUD + 用户管理）
+│   ├── catalog/               # catalog.db（db / employees / resources / seeds / users CRUD）
 │   ├── auth.py               # bcrypt + JWT + FastAPI 鉴权依赖（get_current_user / get_admin_user）
-│   ├── approvals.py          # HITL 审批单（内存版）
+│   ├── approvals.py          # HITL 审批单（SQLite 落库，TTL 过期自动拒绝）
 │   ├── conversations.py      # 会话元数据 conversations.db
+│   ├── ontology.py           # 企业业务本体 ontology.db（schema + data 两层）
 │   ├── traces.py             # Trace 追踪 + TraceHandler(AsyncCallbackHandler)
 │   ├── errors.py             # 全局异常处理 → 干净 JSON 500
 │   ├── paths.py              # 统一数据目录 DB 路径（APP_DATA_DIR 控制）
@@ -66,15 +67,17 @@ scripts/backup.sh             # 数据库备份脚本
 workspace/                    # 数据分析看板输出（按用户隔离）
 ```
 
-### SQLite 数据库（5 个，均在 `data/db/` 或 `$APP_DATA_DIR`）
+### SQLite 数据库（7 个，均在 `data/db/` 或 `$APP_DATA_DIR`）
 
 | 文件 | 作用 |
 |------|------|
-| `catalog.db` | 员工/技能/工具/知识库/SOP/连接器/用户/分配（CRUD 全在 catalog.py） |
+| `catalog.db` | 员工/技能/工具/知识库/SOP/连接器/用户/分配（CRUD 全在 catalog/ 包） |
 | `conversations.db` | 会话元数据（标题/预览/归属/计数/软删） |
 | `checkpoints.db` | LangGraph checkpointer（对话状态/消息历史，SqliteSaver） |
 | `store.db` | 长期记忆（AsyncSqliteStore，按 user+员工隔离，重启不丢） |
 | `traces.db` | 执行过程追踪（runs + events，TraceHandler 异步写入） |
+| `approvals.db` | HITL 审批单（持久化，带过期自动拒绝） |
+| `ontology.db` | 企业业务本体（schema 层 + data 层，按租户隔离） |
 
 ### 核心数据流
 
@@ -93,14 +96,14 @@ workspace/                    # 数据分析看板输出（按用户隔离）
 
 ### 技能路由机制
 
-1. 编译期 `compile_agent()` 把技能内容播种进 Store `namespace=(spec.id,)`
+1. 编译期 `compile_agent()` 把技能内容播种进 Store `namespace=(user_id or "default", spec.id)`（运行时 get_agent 也会先同步技能到 Store，不依赖编译期副作用）
 2. `_build_skill_routing()` 从 SKILL.md 提取触发条件 → 拼进 system_prompt 的"技能路由"节
 3. `create_deep_agent(skills=["/skills/"])` 挂载 StoreBackend
 4. 运行时模型通过 `read_file` 查阅完整规程，不能凭记忆跳过
 
 ### 记忆隔离
 
-- CompositeBackend: 默认后端 + `/memories/` → StoreBackend `namespace=(user_id, emp_id)` + `/skills/` → StoreBackend `namespace=(spec.id,)`
+- CompositeBackend: 默认后端 + `/memories/` → StoreBackend `namespace=(user_id, emp_id)` + `/skills/` → StoreBackend `namespace=(user_id or "default", spec.id)`
 - 记忆在编译期通过 `memory_namespace(user_id, emp_id)` 闭包捕获
 - `ensure_user_memory()` 在首次对话时懒播种 AGENTS.md 模板
 
@@ -170,14 +173,19 @@ curl http://localhost:8787/health
 - `xiaoshu.yaml` — 数据分析师
 - `xiaoxiao.yaml` — 销售
 - `hrbp.yaml` — HR 合作伙伴
+- `biz-analyzer.yaml` — 经营分析与决策顾问（含 market-researcher 子代理）
 
 ### 内置技能（backend/skills/）
 - `product-faq/` — 产品 FAQ 查询
 - `complaint-handling/` — 投诉处理规程
 - `data-analysis/` — 数据分析
-- `frontend-design/` — 前端设计指导
+- `frontend-design/` — 前端设计指导（Apache 2.0，第三方技能）
 - `enterprise-sales/` — 企业销售
 - `hr-assistant/` — HR 助手
+- `business-overview/` — 经营全景（KPI/趋势）
+- `root-cause-analysis/` — 指标异常归因
+- `decision-analysis/` — 决策分析与方案比选
+- `market-intelligence/` — 市场情报
 
 均含 frontmatter（`name`/`description`）+ `## 触发条件` 段落，前端管理后台可见内容。
 

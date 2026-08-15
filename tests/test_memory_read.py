@@ -38,7 +38,7 @@ def test_build_backends_memory_namespace_uses_user_id():
     assert ns_a == ("u_A", "xiaoshu")
     assert ns_b == ("u_B", "xiaoshu")
     assert ns_a != ns_b
-    # 技能命名空间也按用户隔离：#72 允许用户覆盖各自技能集合
+    # 技能命名空间也按用户隔离：允许用户覆盖各自技能集合
     assert build_backends(spec, None, user_id="u_A").routes["/skills/"]._namespace(None) == ("u_A", "xiaoshu")
 
 

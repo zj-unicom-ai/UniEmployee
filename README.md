@@ -1,5 +1,6 @@
 # UniEmployee 数字员工平台
 
+[![CI](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml/badge.svg)](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](backend/pyproject.toml)
 [![Vue](https://img.shields.io/badge/Vue-3.5%2B-4FC08D.svg)](frontend/package.json)
@@ -10,7 +11,7 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 
 ## 核心亮点
 
-- 🧑‍💼 **数字员工构建与管理**：人设、模型、技能、工具、知识库、SOP、连接器全部页面化配置，运行时以目录库为准；内置 4 个示例员工（客服 / 数据分析 / 销售顾问 / HR），支持软删除与恢复。
+- 🧑‍💼 **数字员工构建与管理**：人设、模型、技能、工具、知识库、SOP、连接器全部页面化配置，运行时以目录库为准；内置 5 个示例员工（客服 / 数据分析 / 销售顾问 / HR / 经营分析），支持软删除与恢复。
 - 🧩 **流程型技能与 SOP**：技能以 `SKILL.md` 规程沉淀（含触发条件与执行步骤），播种进 Store 供模型按需查阅，不凭记忆跳过；关键业务流程可用 StateGraph 状态机固化（含人工审批节点），保证多步流程准确执行。
 - 📚 **企业知识本体**：知识按主题、规则、规程与来源组织为带业务语义的结构化资产，数字员工基于真实资料作答并标注来源；已接入 FAQ、产品 Wiki 与 RAGFlow 多源知识，概念类型化与检索调试持续建设中。
 - 🔌 **连接器与工具生态**：通过 MCP 标准接入 CRM、新闻等外部系统（stdio 与 npx 两种形态），内置工单、搜索、文档生成、数据分析等原子工具，业务系统可轻松扩展。
@@ -48,8 +49,8 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 ### 1. 克隆并配置
 
 ```bash
-git clone <your-repo-url>
-cd UniEmployeePro
+git clone https://github.com/zj-unicom-ai/UniEmployee.git
+cd UniEmployee
 cp .env.example .env
 ```
 
@@ -69,7 +70,15 @@ python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.lock.txt   # 完全可复现
 ```
 
-### 3. 启动服务
+### 3. 生成演示数据（可选）
+
+数据分析师（`xiaoshu`）与经营分析师（`biz-analyzer`）依赖 `workspace/data/` 下的模拟经营数据集。本地体验请先生成：
+
+```bash
+python3 scripts/generate_biz_data.py   # 生成 sales_detail.csv 等 4 个演示数据集
+```
+
+### 4. 启动服务
 
 ```bash
 # 单进程即可全功能（内置前端静态文件）
@@ -92,7 +101,7 @@ Docker 一键部署：
 docker compose up -d --build
 ```
 
-### 4. 验证安装
+### 5. 验证安装
 
 ```bash
 curl http://localhost:8787/health
@@ -139,14 +148,17 @@ Employee ── 数字员工（人设 / 模型 / 技能 / 工具 / 知识库 / �
 | 员工 | 岗位 | 技能 | 连接器 |
 |------|------|------|--------|
 | `xiaosu` | 客服 | 产品 FAQ、投诉处理 | CRM |
-| `xiaoshu` | 数据分析师 | 数据分析 | CRM、新闻 |
+| `xiaoshu` | 数据分析师 | 数据分析 | 新闻 |
 | `xiaoxiao` | 销售顾问 | 企业销售、方案文档生成 | CRM |
 | `hrbp` | HR 合作伙伴 | HR 助手 | CRM |
+| `biz-analyzer` | 经营分析与决策顾问 | 经营全景、归因分析、决策分析、市场情报 | — |
+
+> 内置技能存于 `backend/skills/`（各含 `SKILL.md` 规程）。其中 `frontend-design` 技能基于 [Matt Pocock](https://github.com/mattpocock) 的开源技能库编写，按 [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt) 分发，其内独立附带原始许可证。
 
 ## 项目结构
 
 ```
-UniEmployeePro/
+UniEmployee/
 ├── backend/                  # FastAPI 接口、Agent 运行时、存储
 │   ├── app/
 │   │   ├── main.py           # 网关：SSE 流 / 审批恢复 / 鉴权 / /health
@@ -192,7 +204,7 @@ UniEmployeePro/
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
 | `APP_DATA_DIR` | 项目根 | SQLite 库与运行时数据目录 |
-| `APP_VERSION` | `0.3.0` | 打印在 /health 与日志 |
+| `APP_VERSION` | `0.3.1` | 打印在 /health 与日志 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
 
@@ -239,6 +251,10 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
 
 全部本地 SQLite 落盘（可配置 `APP_DATA_DIR` 或挂载卷），密钥仅存 `.env` 不进仓库；模型 API Key 只用于出站请求，不暴露给对话。
 
+**没有 newsnow 容器，MCP 连接器会报错吗？**
+
+不会。内置 `newsnow` 新闻连接器默认指向本机 `localhost:4444` 的新闻服务，未部署时该连接器初始化失败会自动降级（仅跳过 MCP 工具，服务正常启动）。如需彻底跳过 MCP 初始化，可设置 `MCP_DISABLED=1`。客服/销售/HR 员工依赖的 CRM 连接器为内置 mock 服务，开箱即用。
+
 ## 路线图
 
 - **多副本部署**：登录限流、会话热映射、agent 缓存迁移至 Redis / 共享存储
@@ -250,4 +266,4 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
 
 ## 许可证
 
-[MIT](LICENSE) © 万智创界
+[MIT](LICENSE) © ZJ-Unicom-AI · 文本对齐自 [copilot-wps-plugin-doc/LICENSE](https://github.com/zj-unicom-ai/copilot-wps-plugin-doc/blob/main/LICENSE)

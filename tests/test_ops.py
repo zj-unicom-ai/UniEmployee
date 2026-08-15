@@ -59,5 +59,5 @@ def test_db_path_default_is_project_root(monkeypatch):
 
 def test_db_path_honors_app_data_dir(monkeypatch):
     """设 APP_DATA_DIR 后，db_path 把库指向该目录（容器持久化用）。"""
-    monkeypatch.setattr(paths, "DATA_DIR", Path("/tmp/myagents-data"))
-    assert str(paths.db_path("catalog.db")) == "/tmp/myagents-data/catalog.db"
+    monkeypatch.setattr(paths, "DATA_DIR", Path("/tmp/UniEmployee-data"))
+    assert str(paths.db_path("catalog.db")) == "/tmp/UniEmployee-data/catalog.db"

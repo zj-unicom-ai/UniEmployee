@@ -1,6 +1,6 @@
 [project]
 name = "uniemployee"
-version = "0.3.0"
+version = "0.3.1"
 description = "UniEmployee 数字员工平台——基于 deepagents 的多租户数字员工运行平台"
 requires-python = ">=3.12"
 readme = "README.md"

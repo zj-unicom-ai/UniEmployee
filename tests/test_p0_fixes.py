@@ -103,7 +103,7 @@ def test_create_ticket_accepts_valid_urgency():
 
 
 def test_make_kb_search_reads_catalog_at_runtime(monkeypatch):
-    """#74：kb_search 运行时读取 catalog，不固化编译期知识库配置快照。"""
+    """kb_search 运行时读取 catalog，不固化编译期知识库配置快照。"""
     from app.connectors import ragflow_client
     seen = {}
     monkeypatch.setattr(ragflow_client, "is_ragflow_configured", lambda: True)

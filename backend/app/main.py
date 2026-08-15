@@ -29,7 +29,7 @@ from app.routes import router as app_router
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.3.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.3.1")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -40,7 +40,7 @@ _PASSWORD_CHANGE_ALLOWED = {"/api/auth/login", "/api/auth/change-password", "/ap
 async def lifespan(app):
     dotenv.load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
-    log.info("启动 myagents v%s | 数据目录=%s", APP_VERSION, db_path("catalog.db").parent)
+    log.info("启动 UniEmployee v%s | 数据目录=%s", APP_VERSION, db_path("catalog.db").parent)
     catalog.init()
     catalog.seed_if_empty()
     catalog.backfill_connectors()
@@ -108,7 +108,6 @@ async def request_logging_middleware(request: Request, call_next):
 @app.get("/health")
 async def health():
     """健康检查（无需登录）：供容器探针 / 监控使用。"""
-    import sqlite3
     dbs: dict[str, str] = {}
     for name in DB_FILES:
         try:

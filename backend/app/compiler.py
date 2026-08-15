@@ -225,7 +225,7 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
     # --- MCP 连接器工具 ---
     mcp_client = None
     # 临时运维开关：连接器 stdio 初始化有问题时，可先禁用 MCP，避免后台线程错误拖垮服务。
-    # 修复 MCP Manager（#82/#83）后应移除该开关。
+    # MCP Manager 落地重试/健康检查/进程回收后应移除该开关。
     if spec.mcp_servers and os.environ.get("MCP_DISABLED") != "1":
         servers = {}
         for name, cfg in spec.mcp_servers.items():
@@ -244,7 +244,7 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             tools += mcp_tools
         except Exception as e:
             # MCP 连接器失败不应拖垮服务：先降级，仅保留本地工具。
-            # 后续 #82/#83 MCP Manager 会补齐重试、健康检查与进程回收。
+            # 后续由 MCP Manager 补齐重试、健康检查与进程回收。
             print(f"[mcp] 连接器初始化失败，已跳过 MCP 工具：{type(e).__name__}: {e}")
             mcp_client = None
     return tools, mcp_client
@@ -306,7 +306,7 @@ def memory_namespace(user_id: str | None, emp_id: str) -> tuple[str, ...]:
 def skills_namespace(user_id: str | None, emp_id: str) -> tuple[str, ...]:
     """技能 Store 命名空间：(user_id or "default", emp_id)。
 
-    #72：技能内容按用户视角隔离。不同用户即使共享同一员工模板，
+    技能内容按用户视角隔离。不同用户即使共享同一员工模板，
     也可能因为 overrides 拥有不同的有效技能集合，因此 /skills/ 存储
     需要按用户级命名空间挂载，避免互相覆盖。
     """
@@ -323,7 +323,7 @@ def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     if spec.backend == "local_shell":
         # virtual_mode=False：execute 是真实 shell（cwd=PROJECT_ROOT），输出会暴露真实绝对路径；
         # 若 virtual_mode=True，模型用这些绝对路径调用 write_file 会被 _resolve_path 当成虚拟路径
-        # 拼到 root_dir 下，产生 PROJECT_ROOT/Users/wrg/... 镜像目录（8月7日 make_news_xlsx.py 事故）。
+        # 拼到 root_dir 下，产生 PROJECT_ROOT/<主机绝对路径> 镜像目录（曾引发文件落错位置的线上事故）。
         # 关掉后绝对路径按字面落位，与 execute 语义一致。/data/ 等虚拟路由不受影响。
         default_backend = LocalShellBackend(
             root_dir=str(PROJECT_ROOT),

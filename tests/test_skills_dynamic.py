@@ -19,7 +19,7 @@ from app.compiler import (
 
 
 def test_invalidate_user_only_drops_user_variant():
-    """#73：invalidate_user 只清某用户变体，不影响模板/其他用户缓存。"""
+    """invalidate_user 只清某用户变体，不影响模板/其他用户缓存。"""
     runtime._agents["emp_demo"] = ("agent_template", {})
     runtime._agents["emp_demo|u_1"] = ("agent_u1", {})
     runtime._agents["emp_demo|u_2"] = ("agent_u2", {})
@@ -34,7 +34,7 @@ def test_invalidate_user_only_drops_user_variant():
 
 
 def test_refresh_skills_user_variant_invalidates_that_user(tmp_path, monkeypatch):
-    """#73：refresh_skills(emp, user) 刷新用户技能并只清该用户变体。"""
+    """refresh_skills(emp, user) 刷新用户技能并只清该用户变体。"""
     skill_a = _make_skill_dir(tmp_path, "a-skill", "## 触发条件\nA\n")
     monkeypatch.setattr(
         runtime.catalog,
@@ -139,7 +139,7 @@ def test_sync_skills_uses_effective_dirs_for_user(tmp_path, monkeypatch):
 
 
 def test_skill_store_namespace_isolates_users(tmp_path, monkeypatch):
-    """#72：不同用户视角的技能 Store 命名空间必须隔离，避免互相覆盖。"""
+    """不同用户视角的技能 Store 命名空间必须隔离，避免互相覆盖。"""
     skill_a = _make_skill_dir(tmp_path, "a-skill", "## 触发条件\nA\n")
     skill_b = _make_skill_dir(tmp_path, "b-skill", "## 触发条件\nB\n")
 
@@ -182,7 +182,7 @@ def test_skill_store_namespace_isolates_users(tmp_path, monkeypatch):
 
 
 def test_skill_routing_keeps_full_procedure_out_of_system_prompt():
-    """#71 契约：system_prompt 只保留技能清单与触发摘要，
+    """契约：system_prompt 只保留技能清单与触发摘要，
     详细规程必须留在 Store/read_file 里，不随 system_prompt 固化。"""
     skill_md = """---
 name: secret-skill
@@ -207,7 +207,7 @@ description: 秘密技能描述，当用户触发时使用。
 
 
 def test_sop_routing_keeps_full_text_out_of_system_prompt():
-    """#81 契约：SOP 全文不拼进 system_prompt，只保留清单与路径。"""
+    """SOP 全文不拼进 system_prompt，只保留清单与路径。"""
     sop_text = "# 退款 SOP\n\n" + "必须严格按照此流程执行。" * 40 + "\n机密全文内容：不要在 system_prompt 里泄露这一段。\n"
     routing = _build_sop_routing([
         {"id": "sop_refund", "preview": _extract_sop_preview(sop_text)},
@@ -218,7 +218,7 @@ def test_sop_routing_keeps_full_text_out_of_system_prompt():
 
 
 def test_sync_sops_to_store_writes_sop_content(tmp_path, monkeypatch):
-    """#80：SOP 内容变更后 sync_sops_to_store 能写入 /sops/<id>.md。"""
+    """SOP 内容变更后 sync_sops_to_store 能写入 /sops/<id>.md。"""
     monkeypatch.setattr(
         runtime.catalog,
         "get_sop",

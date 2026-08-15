@@ -171,7 +171,7 @@ async def sync_skills_to_store(employee_id: str, user_id: str | None = None,
     - skill_dirs / desired_skills 未提供时从 catalog 自动取
       （普通用户视角取 effective 技能，管理员/模板视角取员工模板技能）。
     - 只增不删：compile_agent 也能继续播种，避免先删除旧技能导致 read_file 失败；
-      后续 #70/#73 再补齐“移除已取消技能”的精确回收逻辑。
+      后续再补齐“移除已取消技能”的精确回收逻辑。
     """
     from deepagents.backends.utils import create_file_data
     if _store is None:
@@ -215,7 +215,7 @@ async def refresh_skills_for_employees(employee_ids: list[str]):
 
 
 async def refresh_skills(employee_id: str, user_id: str | None = None):
-    """技能资源统一刷新入口（#73）。
+    """技能资源统一刷新入口。
 
     - user_id 为空：刷新员工模板技能 Store，保持已编译 agent 不变。
     - user_id 指定：刷新该用户技能视图，并只清该用户变体缓存。

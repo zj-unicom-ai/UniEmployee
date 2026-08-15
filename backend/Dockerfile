@@ -1,4 +1,4 @@
-# 数字员工平台（myagents）运行镜像
+# 数字员工平台（UniEmployee）运行镜像
 # 构建上下文是项目根目录（docker-compose.yml 里 context: .）。
 # 布局约定：后端代码 /app/backend，前端构建产物 /app/frontend/dist，
 # 数据目录 /app/data（挂载卷），工作区 /app/workspace（挂载卷）。
