@@ -172,7 +172,7 @@ def make_start_refund(checkpointer):
             {"order_id": order_id, "reason": reason, "inner_thread": inner},
             config={"configurable": {"thread_id": inner}},
         )
-        st = graph.get_state({"configurable": {"thread_id": inner}})
+        st = await graph.aget_state({"configurable": {"thread_id": inner}})
         # 若挂起在审批节点，重抛 interrupt() 让其冒泡到外层 agent 的 __interrupt__
         if st.next and "await_approval" in st.next:
             payload = (
@@ -198,5 +198,5 @@ async def resume_refund(inner_thread: str, approved: bool, checkpointer) -> str:
         Command(resume={"approved": approved}),
         config={"configurable": {"thread_id": inner_thread}},
     )
-    st = graph.get_state({"configurable": {"thread_id": inner_thread}})
+    st = await graph.aget_state({"configurable": {"thread_id": inner_thread}})
     return st.values.get("summary", "流程异常终止")

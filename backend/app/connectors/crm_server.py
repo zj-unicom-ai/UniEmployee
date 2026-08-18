@@ -11,7 +11,7 @@ ORDERS = {
     "O12347": {"order_id": "O12347", "product": "X1 智能音箱", "amount": 399.0,
                "status": "运输中", "sign_date": None, "customer": "张总", "company": "华强电子", "phone": "138****5678"},
     "O12348": {"order_id": "O12348", "product": "W5 智能手表（硅胶版）", "amount": 599.0,
-               "status": "已签收", "sign_date": "2026-07-24", "customer": "王老师", "company": "阳光中学", "phone": "136****2345"},
+               "status": "已签收", "sign_date": "2026-08-14", "customer": "王老师", "company": "阳光中学", "phone": "136****2345"},
     "O12349": {"order_id": "O12349", "product": "H7 降噪耳机", "amount": 499.0,
                "status": "已签收", "sign_date": "2026-07-20", "customer": "陈工", "company": "先锋设计院", "phone": "158****6789"},
     "O12350": {"order_id": "O12350", "product": "P3 智能投影仪", "amount": 2599.0,

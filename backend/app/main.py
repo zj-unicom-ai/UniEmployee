@@ -58,6 +58,7 @@ async def lifespan(app):
         [e["id"] for e in runtime.discover_employees()]
     )
     async with AsyncSqliteSaver.from_conn_string(str(db_path("checkpoints.db"))) as cp:
+        await cp.setup()  # 全新环境懒建表，先建好避免 recover_conversations 直查失败
         runtime.set_checkpointer(cp)
         async with AsyncSqliteStore.from_conn_string(str(db_path("store.db"))) as store:
             runtime.set_store(store)
