@@ -309,4 +309,4 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
 
 ## 许可证
 
-[MIT](LICENSE) © ZJ-Unicom-AI · 文本对齐自 [copilot-wps-plugin-doc/LICENSE](https://github.com/zj-unicom-ai/copilot-wps-plugin-doc/blob/main/LICENSE)
+[MIT](LICENSE) © ZJ-Unicom-AI 
