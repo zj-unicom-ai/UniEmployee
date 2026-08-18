@@ -42,7 +42,7 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
 
 ## 新增数字员工 / 技能 / 工具
 
-见 [CLAUDE.md](CLAUDE.md#员工管理) 与 [AGENTS.md](AGENTS.md) 的说明——新增员工 = `backend/employees/*.yaml` + `catalog/seeds.py` 注册 + 重启；新工具在 `app/tools/` 定义后登记进 `compiler.ALL_LOCAL_TOOLS`。
+新增员工 = `backend/employees/*.yaml` + `catalog/seeds.py` 注册 + 重启；新工具在 `app/tools/` 定义后登记进 `compiler.ALL_LOCAL_TOOLS`。
 
 ## 行为准则
 

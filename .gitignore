@@ -28,5 +28,7 @@ backend/skills/docx-reference
 TODO.md
 AGENT_RUNTIME_TODO.md
 项目逻辑与问题分析.md
+CLAUDE.md
+AGENTS.md
 .docs/
 docs/
