@@ -61,10 +61,10 @@ def employee_of(conv_id: str) -> str:
 def text_of(msg) -> str:
     c = getattr(msg, "content", "")
     if isinstance(c, str):
-        return c
+        return _strip_thinking(c)
     if isinstance(c, list):
-        return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-    return str(c)
+        return _strip_thinking("".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text"))
+    return _strip_thinking(str(c))
 
 
 def reconstruct(messages: list) -> list[dict]:
@@ -189,15 +189,52 @@ async def recover_conversations(limit: int | None = None):
         conversations.create(tid, emp, title=(first[:40] or "历史对话"), preview=first[:60])
 
 
+def _strip_thinking(text: str) -> str:
+    """过滤掉模型的思考过程标签和内容（用于标题生成等场景）。
+
+    支持常见格式：
+    - <think>...[/think] / <think>...[/think]
+    - <thinking>...</thinking>
+    - [思考]...[/思考]
+    - ~~...~~ (部分模型用删除线标记思考)
+    - 裸思考标签（如 <think>开头但没有结束标签）
+    """
+    if not text:
+        return ""
+    # 处理带结束标签的完整思考块（注意 [] 需要转义）
+    text = re.sub(r"<think>.*?\[\/think\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<think>.*?\[\/think\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<think\s*>.*?</think\s*>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<thinking\s*>.*?</thinking\s*>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"\[思考\].*?\[/思考\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"\[THINKING\].*?\[/THINKING\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 处理删除线包裹的思考
+    text = re.sub(r"(?<!~)(~~)(?!~)(.*?)(?<!~)(~~)(?!~)", r"\2", text, flags=re.DOTALL)
+    # 处理裸思考标签（开始但没有结束标签的情况）
+    # 例如：思考以换行或句子结束
+    text = re.sub(r"<think>[\s\S]*?(?=\n\n|$)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<think>[\s\S]*?(?=\.)(?:\.|$)", "", text, flags=re.IGNORECASE)
+    # 清理多余空白
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 async def _gen_title(conv_id: str, user_text: str, bot_text: str):
     """用模型把首轮对话提炼成 ≤16 字标题。失败静默。"""
     try:
+        # 过滤思考内容
+        clean_bot_text = _strip_thinking(bot_text)
+        if not clean_bot_text.strip():
+            clean_bot_text = bot_text
+
         m = _init_model(os.environ.get("MODEL_NAME", ""))
         prompt = ("请根据以下对话生成一个不超过16个字的中文标题，"
                   "直接输出标题文字，不要引号、不要解释、不要句号。\n"
-                  f"用户：{user_text[:200]}\n助手：{bot_text[:200]}")
+                  f"用户：{user_text[:200]}\n助手：{clean_bot_text[:200]}")
         r = await m.ainvoke([HumanMessage(content=prompt)])
-        title = r.content.strip().strip('"').strip("“”").strip("《》")[:24]
+        title = r.content.strip().strip('"').strip("\u201c\u201d").strip("\u300a\u300b")[:24]
+        # 二次过滤标题中的思考标签
+        title = _strip_thinking(title)
         if title:
             conversations.set_title(conv_id, title)
     except Exception:
