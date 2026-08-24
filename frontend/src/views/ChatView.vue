@@ -261,7 +261,12 @@ function setStage(id, status, detail) {
 }
 
 /* ---------- SSE 流式解析 ---------- */
+let inThinking = false  // 思考状态标记
+let thinkContent = ''  // 当前思考内容
+
 async function readStream(resp, msgIdx) {
+  inThinking = false
+  thinkContent = ''
   const reader = resp.body.getReader()
   const dec = new TextDecoder()
   let buf = ''
@@ -293,15 +298,100 @@ function handleEvent(ev, msgIdx) {
     }
   } else if (ev.type === 'thinking') {
     if (!msg.trace) msg.trace = []
-    let box = msg.trace.find(t => t.type === 'think' && !t._closed)
-    if (!box) { box = { type: 'think', content: '' }; msg.trace.push(box) }
+    let box = msg.trace.find(t => t.type === 'think' && !t._closed && t.source === 'event')
+    if (!box) { box = { type: 'think', content: '', source: 'event' }; msg.trace.push(box) }
     box.content += ev.content
     msg.trace = [...msg.trace]
     scrollToBottom()
   } else if (ev.type === 'token') {
     if (!msg._md) msg._md = ''
-    msg._md += ev.content
-    msg.html = renderMd(msg._md)
+    let content = ev.content
+    // 检测思考标签
+    const startMatch = content.match(/<think>|\[思考\]/i)
+    const endMatch = content.match(/\[\/think\]|<\/think\s*>/i)
+    if (startMatch && endMatch) {
+      // 同时有开始和结束标签，提取思考内容并保留标签后的内容
+      const thinkStartIdx = content.search(/<think>|\[思考\]/i)
+      const thinkEndIdx = content.search(/\[\/think\]|<\/think\s*>/i)
+      const thinkPart = content.slice(thinkStartIdx, thinkEndIdx)
+      // 提取思考内容（去掉标签）
+      const thinkText = thinkPart.replace(/<think>|\[思考\]|\[\/think\]|<\/think\s*>/gi, '')
+      if (thinkText) {
+        if (!msg.trace) msg.trace = []
+        let thinkBox = msg.trace.find(t => t.type === 'think' && !t._closed && t.source === 'token')
+        if (!thinkBox) {
+          thinkBox = { type: 'think', content: '', source: 'token' }
+          msg.trace.push(thinkBox)
+        }
+        thinkBox.content += thinkText
+        msg.trace = [...msg.trace]
+      }
+      // 保留标签后的内容
+      const afterIdx = Math.max(
+        content.indexOf('>', thinkEndIdx),
+        content.lastIndexOf(']', content.length)
+      )
+      content = content.slice(afterIdx + 1)
+      inThinking = false
+    } else if (startMatch) {
+      // 只有开始标签，提取开始标签后的思考内容
+      const thinkStartIdx = content.search(/<think>|\[思考\]/i)
+      const thinkPart = content.slice(thinkStartIdx + 6)  // 去掉开始标签
+      const thinkText = thinkPart.replace(/<think>|\[思考\]|\[\/think\]|<\/think\s*>/gi, '')
+      if (thinkText) {
+        if (!msg.trace) msg.trace = []
+        let thinkBox = msg.trace.find(t => t.type === 'think' && !t._closed && t.source === 'token')
+        if (!thinkBox) {
+          thinkBox = { type: 'think', content: '', source: 'token' }
+          msg.trace.push(thinkBox)
+        }
+        thinkBox.content += thinkText
+        msg.trace = [...msg.trace]
+      }
+      inThinking = true
+      content = ''
+    } else if (inThinking) {
+      // 在思考状态中
+      if (endMatch) {
+        // 遇到结束标签，提取结束标签前的思考内容
+        const thinkEndIdx = content.search(/\[\/think\]|<\/think\s*>/i)
+        const thinkText = content.slice(0, thinkEndIdx).replace(/<think>|\[思考\]|\[\/think\]|<\/think\s*>/gi, '')
+        if (thinkText) {
+          if (!msg.trace) msg.trace = []
+          let thinkBox = msg.trace.find(t => t.type === 'think' && !t._closed && t.source === 'token')
+          if (!thinkBox) {
+            thinkBox = { type: 'think', content: '', source: 'token' }
+            msg.trace.push(thinkBox)
+          }
+          thinkBox.content += thinkText
+          msg.trace = [...msg.trace]
+        }
+        // 保留标签后的内容
+        const afterIdx = Math.max(
+          content.indexOf('>', thinkEndIdx),
+          content.lastIndexOf(']', content.length)
+        )
+        content = content.slice(afterIdx + 1)
+        inThinking = false
+      } else {
+        const thinkText = content.replace(/<think>|\[思考\]|\[\/think\]|<\/think\s*>/gi, '')
+        if (thinkText) {
+          if (!msg.trace) msg.trace = []
+          let thinkBox = msg.trace.find(t => t.type === 'think' && !t._closed && t.source === 'token')
+          if (!thinkBox) {
+            thinkBox = { type: 'think', content: '', source: 'token' }
+            msg.trace.push(thinkBox)
+          }
+          thinkBox.content += thinkText
+          msg.trace = [...msg.trace]
+        }
+        content = ''
+      }
+    }
+    if (content) {
+      msg._md += content
+      msg.html = renderMd(msg._md)
+    }
     msg.content = ''
     messages.value = [...messages.value]
     scrollToBottom()
