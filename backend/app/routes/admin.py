@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from app import auth, catalog, runtime
+from app import auth, catalog, runtime, traces
 from app.models import UserCreateIn, UserUpdateIn, PasswordIn
 from app.paths import PROJECT_ROOT
 
@@ -382,3 +382,18 @@ async def admin_unassign_employee(uid: str, emp_id: str,
     ok = catalog.unassign_employee(uid, emp_id)
     runtime.invalidate(emp_id)
     return {"ok": ok}
+
+
+# ── 运行评估 ──────────────────────────────────────────────────────
+
+@router.get("/evaluation/stats")
+async def admin_evaluation_stats(employee_id: str = "", period: str = "30d",
+                                  admin: dict = Depends(auth.require_admin)):
+    return traces.get_evaluation_stats(employee_id or None, period)
+
+
+@router.get("/evaluation/feedback")
+async def admin_evaluation_feedback(employee_id: str = "", rating: int = None,
+                                     limit: int = 50, offset: int = 0,
+                                     admin: dict = Depends(auth.require_admin)):
+    return traces.get_feedback_list(employee_id or None, rating, limit, offset)

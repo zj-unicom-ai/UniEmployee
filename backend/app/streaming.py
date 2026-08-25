@@ -320,6 +320,9 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
         yield sse({"type": "stage", "stage": "report", "status": "done"})
+        yield sse({"type": "message_end", "message_id": trace_run_id,
+                    "run_id": trace_run_id, "employee_id": emp_id,
+                    "conversation_id": conv_id})
         meta = conversations.get(conv_id)
         if meta and (meta.get("message_count") or 0) <= 1 and bot_text.strip():
             user_text = ""

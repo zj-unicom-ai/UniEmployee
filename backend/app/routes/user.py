@@ -108,3 +108,27 @@ def _forbidden(msg):
 def _not_found(msg):
     from fastapi import HTTPException
     return HTTPException(404, msg)
+
+
+# ── 运行评估（用户反馈） ──────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class EvaluationIn(BaseModel):
+    run_id: str = ""
+    message_id: str = ""
+    employee_id: str = ""
+    conversation_id: str = ""
+    rating: int   # 1 or -1
+    reason: str = ""
+
+@router.post("/evaluations")
+async def submit_evaluation(body: EvaluationIn,
+                            user: dict = Depends(auth.get_current_user)):
+    from app import traces
+    traces.insert_evaluation(
+        run_id=body.run_id, message_id=body.message_id,
+        employee_id=body.employee_id, conversation_id=body.conversation_id,
+        user_id=user["id"], rating=body.rating, reason=body.reason,
+    )
+    return {"ok": True}

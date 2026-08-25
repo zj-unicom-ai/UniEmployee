@@ -87,6 +87,37 @@
               <span class="msg-copy" @click="copyText(msg.html || msg.content)" title="复制">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
               </span>
+              <template v-if="msg.run_id && !msg._evaluated">
+                <span class="eval-btn" @click="submitRating(msg, 1, idx)" title="有用">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg>
+                </span>
+                <span class="eval-btn" @click="showReasonPopover(msg, idx)" title="没用">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10zM17 2h3a2 2 0 012 2v7a2 2 0 01-2 2h-3"/></svg>
+                </span>
+              </template>
+              <template v-else-if="msg._evaluated === 1">
+                <span class="eval-btn evaluated-up" title="已评价有用">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg>
+                </span>
+              </template>
+              <template v-else-if="msg._evaluated === -1">
+                <span class="eval-btn evaluated-down" title="已评价没用">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10zM17 2h3a2 2 0 012 2v7a2 2 0 01-2 2h-3"/></svg>
+                </span>
+              </template>
+            </div>
+            <div v-if="reasonPopover.show && reasonPopover.msgIdx === idx" class="reason-popover">
+              <div class="reason-title">请告诉我们哪里不好：</div>
+              <div class="reason-options">
+                <span v-for="r in REASONS" :key="r.value" class="reason-chip"
+                      :class="{ active: reasonPopover.selected === r.value }"
+                      @click="reasonPopover.selected = r.value">{{ r.label }}</span>
+              </div>
+              <div class="reason-actions">
+                <n-button size="tiny" @click="reasonPopover.show = false">取消</n-button>
+                <n-button size="tiny" type="error" :disabled="!reasonPopover.selected"
+                          @click="confirmNegative">提交</n-button>
+              </div>
             </div>
           </div>
           <!-- Trace（思考/工具） -->
@@ -200,6 +231,14 @@ const hint = ref('向数字员工提问吧。')
 const stageStates = reactive({})
 const stageDetail = reactive({})
 const msgsRef = ref(null)
+const reasonPopover = reactive({ show: false, msgIdx: null, selected: null })
+const REASONS = [
+  { value: 'irrelevant', label: '答非所问' },
+  { value: 'factual_error', label: '事实错误' },
+  { value: 'wrong_process', label: '流程不对' },
+  { value: 'too_slow', label: '太慢' },
+  { value: 'other', label: '其他' },
+]
 
 const empOptions = computed(() =>
   employees.value.map(e => ({ label: e.role || e.name, value: e.id }))
@@ -346,6 +385,11 @@ function handleEvent(ev, msgIdx) {
     msg.trace.push({ type: 'tool', name: '⚠ ' + ev.message, args: '', status: 'done' })
     msg.trace = [...msg.trace]
     scrollToBottom()
+  } else if (ev.type === 'message_end') {
+    msg.run_id = ev.run_id
+    msg.message_id = ev.message_id
+    msg.employee_id = ev.employee_id
+    msg.conversation_id = ev.conversation_id
   }
 }
 
@@ -481,6 +525,36 @@ function copyText(text) {
   navigator.clipboard.writeText(typeof text === 'string' ? text.replace(/<[^>]+>/g, '') : '').catch(() => {})
 }
 
+function showReasonPopover(msg, idx) {
+  reasonPopover.show = true
+  reasonPopover.msgIdx = idx
+  reasonPopover.selected = null
+}
+
+async function submitRating(msg, rating, idx, reason = '') {
+  if (msg._evaluated) return
+  msg._evaluated = rating
+  messages.value = [...messages.value]
+  try {
+    await api.post('/me/evaluations', {
+      run_id: msg.run_id || '',
+      message_id: msg.message_id || '',
+      employee_id: msg.employee_id || currentEmp.value || '',
+      conversation_id: msg.conversation_id || convId.value || '',
+      rating,
+      reason,
+    })
+  } catch {}
+}
+
+async function confirmNegative() {
+  const idx = reasonPopover.msgIdx
+  const msg = messages.value[idx]
+  const reason = reasonPopover.selected
+  reasonPopover.show = false
+  if (msg && reason) await submitRating(msg, -1, idx, reason)
+}
+
 function subagentStatusText(status) {
   const map = { started: '运行中', completed: '已完成', failed: '失败', interrupted: '已中断' }
   return map[status] || status
@@ -588,7 +662,7 @@ onBeforeUnmount(() => {
 .msgs { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 .msg-wrapper { display: flex; flex-direction: column; max-width: 76%; gap: 2px; }
 .user-wrapper { align-self: flex-end; align-items: flex-end; }
-.bot-wrapper { align-self: flex-start; align-items: flex-start; }
+.bot-wrapper { align-self: flex-start; align-items: flex-start; position: relative; }
 .msg { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.7; word-break: break-word; animation: msg-in 0.25s ease-out; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -669,6 +743,34 @@ onBeforeUnmount(() => {
 
 .hint-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #e2e8f0; color: #64748b; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.15s; margin-left: 6px; flex-shrink: 0; }
 .hint-icon:hover { background: #3b82f6; color: #fff; }
+
+/* 反馈按钮 */
+.eval-btn {
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  color: #94a3b8; transition: all 0.2s ease;
+}
+.eval-btn:hover { background: #f1f5f9; color: #475569; transform: scale(1.1); }
+.eval-btn.evaluated-up { color: #10b981; background: #ecfdf5; }
+.eval-btn.evaluated-down { color: #ef4444; background: #fef2f2; }
+
+/* 点踩原因浮层 */
+.reason-popover {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 10;
+  background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;
+  padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); min-width: 260px;
+}
+.reason-title { font-size: 12px; color: #64748b; margin-bottom: 10px; font-weight: 500; }
+.reason-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.reason-chip {
+  font-size: 12px; padding: 4px 12px; border-radius: 16px;
+  border: 1px solid #e2e8f0; cursor: pointer; transition: all 0.15s; color: #475569;
+  background: #f8fafc;
+}
+.reason-chip:hover { border-color: #3b82f6; color: #3b82f6; background: #eff6ff; }
+.reason-chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.reason-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
 .input-bar {
   padding: 12px 20px; background: #ffffff; border-top: 1px solid #e2e8f0;
   display: flex; gap: 10px;

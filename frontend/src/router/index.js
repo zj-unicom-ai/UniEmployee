@@ -36,6 +36,7 @@ const routes = [
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue') },
       { path: 'resources', name: 'resources', component: () => import('../views/ResourcesView.vue') },
       { path: 'ontology', name: 'ontology', component: () => import('../views/OntologyView.vue') },
+      { path: 'evaluation', name: 'evaluation', component: () => import('../views/AdminEvaluation.vue') },
       { path: 'im', name: 'im', component: () => import('../views/ImView.vue') },
       { path: 'change-password', name: 'change-password', component: () => import('../views/ChangePasswordView.vue') },
     ],

@@ -15,6 +15,7 @@ import logging
 import sqlite3
 import time
 import uuid
+import datetime
 from pathlib import Path
 from typing import Any
 
@@ -292,3 +293,145 @@ class TraceHandler(AsyncCallbackHandler):
             _insert_event(self.trace_run_id, p["seq"], p["etype"], p["name"], "running",
                           p["input"], "", None, p["started_at"],
                           int((time.time() - p["t0"]) * 1000))
+
+
+# ── 运行评估（Evaluation）─────────────────────────────────────────────
+
+def _ensure_evaluations_table():
+    """首次写入时自动建表，避免每次读库都执行 DDL。"""
+    con = sqlite3.connect(DB)
+    con.execute("""CREATE TABLE IF NOT EXISTS evaluations(
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       TEXT,
+        message_id   TEXT,
+        employee_id  TEXT,
+        conversation_id TEXT,
+        user_id      TEXT,
+        rating       INTEGER NOT NULL,    -- 1=👍  -1=👎
+        reason       TEXT,
+        created_at   TEXT
+    )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_evals_emp ON evaluations(employee_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_evals_run ON evaluations(run_id)")
+    con.commit()
+    con.close()
+
+
+def insert_evaluation(run_id, message_id, employee_id, conversation_id,
+                      user_id, rating, reason=""):
+    """记录一条用户反馈评价。"""
+    try:
+        _ensure_evaluations_table()
+        con = sqlite3.connect(DB)
+        con.execute(
+            "INSERT INTO evaluations(run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, message_id, employee_id, conversation_id, user_id,
+             rating, reason, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        logger.warning("insert_evaluation 失败", exc_info=True)
+
+
+def get_evaluation_stats(employee_id=None, period="30d"):
+    """返回聚合统计指标，供管理员评估页面使用。"""
+    _ensure_evaluations_table()
+    days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
+
+    # runs 聚合
+    where = "WHERE r.started_at >= ?"
+    params: list[Any] = [since]
+    if employee_id:
+        where += " AND r.employee_id = ?"
+        params.append(employee_id)
+    row = con.execute(f"""
+        SELECT COUNT(*) AS total_runs,
+               AVG(r.duration_ms) AS avg_duration_ms,
+               AVG(r.total_tokens) AS avg_tokens,
+               SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END)*1.0 / MAX(COUNT(*),1) AS error_rate
+        FROM runs r {where}
+    """, params).fetchone()
+
+    # 工具成功率
+    tool_row = con.execute(f"""
+        SELECT SUM(CASE WHEN e.status='ok' THEN 1 ELSE 0 END)*1.0 / MAX(SUM(CASE WHEN e.etype='tool' THEN 1 ELSE 0 END),1) AS tool_success_rate
+        FROM events e JOIN runs r ON e.run_id=r.run_id {where}
+    """, params).fetchone()
+
+    # 用户满意度
+    ewhere = "WHERE created_at >= ?"
+    eparams: list[Any] = [since]
+    if employee_id:
+        ewhere += " AND employee_id = ?"
+        eparams.append(employee_id)
+    eval_row = con.execute(f"""
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN rating=1 THEN 1 ELSE 0 END) AS thumbs_up,
+               SUM(CASE WHEN rating=-1 THEN 1 ELSE 0 END) AS thumbs_down
+        FROM evaluations {ewhere}
+    """, eparams).fetchone()
+    total = eval_row["total"] or 0
+    thumbs_up = eval_row["thumbs_up"] or 0
+    score = thumbs_up / total if total else 0.0
+
+    # Top 工具
+    tw = "WHERE e.etype='tool' AND e.status='ok' AND r.started_at >= ?"
+    tparams: list[Any] = [since]
+    if employee_id:
+        tw += " AND r.employee_id = ?"
+        tparams.append(employee_id)
+    top_tools = [dict(r) for r in con.execute(f"""
+        SELECT e.name, COUNT(*) AS count
+        FROM events e JOIN runs r ON e.run_id=r.run_id
+        {tw}
+        GROUP BY e.name ORDER BY count DESC LIMIT 10
+    """, tparams).fetchall()]
+
+    # 日趋势
+    daily_trend = [dict(r) for r in con.execute(f"""
+        SELECT DATE(r.started_at) AS date,
+               r.employee_id,
+               COUNT(*) AS runs,
+               AVG(r.duration_ms) AS avg_ms,
+               SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END) AS errors
+        FROM runs r {where}
+        GROUP BY DATE(r.started_at), r.employee_id ORDER BY date
+    """, params).fetchall()]
+
+    con.close()
+    return {
+        "total_runs": row["total_runs"],
+        "avg_duration_ms": row["avg_duration_ms"],
+        "avg_tokens": row["avg_tokens"],
+        "error_rate": row["error_rate"],
+        "tool_success_rate": tool_row["tool_success_rate"],
+        "satisfaction": {"total": total, "thumbs_up": thumbs_up,
+                         "thumbs_down": eval_row["thumbs_down"] or 0, "score": score},
+        "top_tools": top_tools,
+        "daily_trend": daily_trend,
+    }
+
+
+def get_feedback_list(employee_id=None, rating=None, limit=50, offset=0):
+    """返回用户反馈列表，支持按员工/评分筛选。"""
+    _ensure_evaluations_table()
+    where, params = "WHERE 1=1", []
+    if employee_id:
+        where += " AND employee_id = ?"
+        params.append(employee_id)
+    if rating is not None:
+        where += " AND rating = ?"
+        params.append(rating)
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(f"""
+        SELECT id,run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at
+        FROM evaluations {where} ORDER BY created_at DESC LIMIT ? OFFSET ?
+    """, params + [limit, offset]).fetchall()
+    con.close()
+    return [dict(r) for r in rows]
