@@ -123,6 +123,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       msg.error = ev.message || '任务执行出错，请稍后重试'
       setStage('report', 'error', msg.error)
       touch()
+    } else if (ev.type === 'message_end') {
+      // 运行结束元信息：run_id 供评价按钮与 Trace 跳转使用（组件拆分时曾遗漏）
+      msg.run_id = ev.run_id
+      msg.message_id = ev.message_id
+      msg.employee_id = ev.employee_id
+      msg.conversation_id = ev.conversation_id
+      touch()
     }
   }
 
