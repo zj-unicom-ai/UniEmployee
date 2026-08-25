@@ -5,11 +5,13 @@
 - 捕获：TraceHandler（LangChain AsyncCallbackHandler）注入 agent 调用的
   config["callbacks"]，deepagents/LangGraph 内部所有模型调用与工具调用都会
   经过回调总线，无需改动 SSE 流式逻辑。
-- 原则：追踪失败绝不影响正常对话（所有写库均吞异常）。
+- 原则：追踪失败绝不影响正常对话（所有写库均吞异常），但必须记日志，
+  避免追踪数据悄悄丢失而无人察觉。
 """
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -22,6 +24,8 @@ from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = db_path("traces.db")
+
+logger = logging.getLogger(__name__)
 
 _PREVIEW = 2000  # 输入/输出留存的最大字符数
 
@@ -89,7 +93,7 @@ def start_run(conv_id: str, employee_id: str, user_id: str,
                 (run_id, conv_id, employee_id, user_id, kind,
                  _clip(input_preview, 500), "running", _now()))
     except Exception:
-        pass
+        logger.warning("trace start_run 写库失败 run_id=%s conv_id=%s", run_id, conv_id, exc_info=True)
     return run_id
 
 
@@ -113,7 +117,7 @@ def finish_run(run_id: str, status: str = "done", error: str = ""):
                 (status, _clip(error, 500), _now(), dur,
                  agg["l"] or 0, agg["t"] or 0, agg["tk"] or 0, run_id))
     except Exception:
-        pass
+        logger.warning("trace finish_run 更新失败 run_id=%s status=%s", run_id, status, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +132,7 @@ def list_runs(conv_id: str) -> list[dict]:
                 (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
+        logger.warning("trace list_runs 查询失败 conv_id=%s", conv_id, exc_info=True)
         return []
 
 
@@ -142,6 +147,7 @@ def employee_of_conv(conv_id: str) -> str | None:
                 (conv_id,)).fetchone()
         return r["employee_id"] if r else None
     except Exception:
+        logger.warning("trace employee_of_conv 查询失败 conv_id=%s", conv_id, exc_info=True)
         return None
 
 
@@ -157,6 +163,7 @@ def get_run(run_id: str) -> dict | None:
         out["events"] = [dict(e) for e in evs]
         return out
     except Exception:
+        logger.warning("trace get_run 查询失败 run_id=%s", run_id, exc_info=True)
         return None
 
 
@@ -170,6 +177,7 @@ def token_stats() -> dict:
             ).fetchone()[0]
         return {"total_tokens": total, "today_tokens": today}
     except Exception:
+        logger.warning("trace token_stats 查询失败", exc_info=True)
         return {"total_tokens": 0, "today_tokens": 0}
 
 
@@ -188,7 +196,8 @@ def _insert_event(run_id: str, seq: int, etype: str, name: str, status: str,
                 (run_id, seq, etype, name, status, input_, output,
                  tokens, started_at, duration_ms))
     except Exception:
-        pass
+        logger.warning("trace _insert_event 写库失败 run_id=%s etype=%s name=%s",
+                       run_id, etype, name, exc_info=True)
 
 
 class TraceHandler(AsyncCallbackHandler):
@@ -229,7 +238,7 @@ class TraceHandler(AsyncCallbackHandler):
                 last = m.content if isinstance(getattr(m, "content", None), str) else str(m)
             self._open(run_id, "llm", name, last)
         except Exception:
-            pass
+            logger.warning("trace on_chat_model_start 处理失败", exc_info=True)
 
     async def on_llm_end(self, response, *, run_id, **kwargs):
         try:
@@ -247,13 +256,13 @@ class TraceHandler(AsyncCallbackHandler):
                 pass
             self._close(run_id, text, "ok", tokens)
         except Exception:
-            pass
+            logger.warning("trace on_llm_end 处理失败", exc_info=True)
 
     async def on_llm_error(self, error, *, run_id, **kwargs):
         try:
             self._close(run_id, f"{type(error).__name__}: {error}", "error")
         except Exception:
-            pass
+            logger.warning("trace on_llm_error 处理失败", exc_info=True)
 
     # ---- Tool ----
     async def on_tool_start(self, serialized, input_str, *, run_id, inputs=None, **kwargs):
@@ -261,20 +270,20 @@ class TraceHandler(AsyncCallbackHandler):
             name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
             self._open(run_id, "tool", name, inputs if inputs is not None else input_str)
         except Exception:
-            pass
+            logger.warning("trace on_tool_start 处理失败", exc_info=True)
 
     async def on_tool_end(self, output, *, run_id, **kwargs):
         try:
             content = getattr(output, "content", output)
             self._close(run_id, content, "ok")
         except Exception:
-            pass
+            logger.warning("trace on_tool_end 处理失败", exc_info=True)
 
     async def on_tool_error(self, error, *, run_id, **kwargs):
         try:
             self._close(run_id, f"{type(error).__name__}: {error}", "error")
         except Exception:
-            pass
+            logger.warning("trace on_tool_error 处理失败", exc_info=True)
 
     def flush_pending(self):
         """运行结束（含中断/异常）时，把未配对的 start 事件落库为 running 状态。"""

@@ -42,13 +42,20 @@ def generate_solution_doc(
     返回:
         生成的 Word 文档文件路径
     """
-    # 获取当前用户 ID，用于按用户隔离文档目录
-    user_id = "default"
+    # 获取当前用户 ID，用于按用户隔离文档目录。
+    # 注意：user_id == "default" 是合法值（legacy 会话/IM 频道归属 default 用户），
+    # 真正的风险是 get_config() 取不到时静默回退 "default" 把文档写进共享目录。
+    # 因此：取不到运行时上下文 → 显式报错；config 里有明确 user_id（含 default）→ 正常使用。
     try:
         cfg = get_config() or {}
-        user_id = (cfg.get("configurable") or {}).get("user_id", "default")
-    except Exception:
-        pass
+        user_id = (cfg.get("configurable") or {}).get("user_id")
+    except Exception as e:
+        raise RuntimeError(f"无法获取运行时上下文以确定用户身份，拒绝生成文档：{e}")
+    if not user_id:
+        raise RuntimeError(
+            "运行时上下文中缺少 user_id，为避免文档写入错误的用户目录已拒绝生成。"
+            "请在正常会话运行时调用此工具。"
+        )
 
     # 用户专属文档目录（workspace/data/<user_id>/）
     user_dir = DATA_DIR / user_id

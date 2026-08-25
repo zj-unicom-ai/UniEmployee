@@ -6,11 +6,13 @@
 这些测试用 MemorySaver 离线跑图，不依赖 8787 服务或真实 LLM。
 """
 import asyncio
+import hashlib
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
 
-from app.workflows.refund import get_refund_graph, resume_refund
+from app.workflows.refund import get_refund_graph, make_start_refund, resume_refund
 
 
 def test_refund_graph_approve_path():
@@ -126,3 +128,59 @@ def test_extract_interrupt_old_format():
     assert tool_name == "create_ticket"
     assert tool_args == {"title": "投诉"}
     assert inner_thread is None
+
+
+# ---------------------------------------------------------------------------
+# make_start_refund 工具（双路径链路入口）
+# ---------------------------------------------------------------------------
+
+def test_make_start_refund_validation_fail_returns_summary():
+    """校验失败：start_refund 不挂起、不冒泡 interrupt，直接返回终止 summary。"""
+    cp = MemorySaver()
+    start_refund = make_start_refund(cp)
+    out = asyncio.run(start_refund.ainvoke({"order_id": "O99999", "reason": "x"}))
+    assert "不存在" in out, f"校验失败应直接返回终止 summary: {out}"
+
+
+def test_make_start_refund_double_path_resume():
+    """双路径完整链路：外层图挂起 → resume_refund 恢复内层 → summary 恢复外层。
+
+    复刻 decision 端点行为：工具 interrupt 冒泡为外层 __interrupt__（携带
+    inner_thread），审批后先恢复内层退款图拿到 summary，再用 Command(resume=summary)
+    恢复外层 agent。
+    """
+    cp = MemorySaver()
+    start_refund = make_start_refund(cp)
+
+    async def call_tool(state):
+        return {"result": await start_refund.ainvoke(
+            {"order_id": "O12345", "reason": "质量问题"})}
+
+    outer = StateGraph(dict)
+    outer.add_node("call", call_tool)
+    outer.add_edge(START, "call")
+    outer.add_edge("call", END)
+    app = outer.compile(checkpointer=cp)
+
+    tid = "outer-double-path"
+    cfg = {"configurable": {"thread_id": tid}}
+    asyncio.run(app.ainvoke({"input": "退款"}, config=cfg))
+
+    # 外层应在 call 节点挂起，__interrupt__ 携带 refund_approval payload
+    st = app.get_state(cfg)
+    assert "call" in st.next, f"外层图应挂起在 call 节点，实际 next={st.next}"
+    intr = st.tasks[0].interrupts[0].value
+    assert intr["type"] == "refund_approval"
+    inner = intr["inner_thread"]
+    # 内层 thread 由 (order_id, reason) 确定性派生，进程重启/多实例可定位
+    expected = f"refund:O12345:{hashlib.sha1('质量问题'.encode()).hexdigest()[:12]}"
+    assert inner == expected, f"inner_thread 应确定性派生: {inner} != {expected}"
+
+    # decision 端点等价逻辑：先恢复内层退款图
+    summary = asyncio.run(resume_refund(inner, True, cp))
+    assert "退款单号" in summary
+    # 再用 summary 恢复外层，作为工具调用结果喂回
+    asyncio.run(app.ainvoke(Command(resume=summary), config=cfg))
+    st = app.get_state(cfg)
+    assert not st.next, "外层恢复后应跑完"
+    assert st.values["result"] == summary, "外层应收到内层 summary 作为工具结果"
