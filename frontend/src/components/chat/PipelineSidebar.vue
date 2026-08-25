@@ -41,13 +41,20 @@ const STAGES = [
 .pipeline-title { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 12px; }
 .pipeline-body { display: flex; flex-direction: column; }
 .stage { display: flex; gap: 10px; padding: 6px 0; opacity: 0.4; }
-.stage.active, .stage.done { opacity: 1; }
+.stage.active, .stage.done, .stage.error { opacity: 1; }
 .dot {
   width: 18px; height: 18px; border-radius: 50%;
   border: 2px solid #cbd5e1; flex-shrink: 0; margin-top: 1px; position: relative;
 }
 .stage.active .dot { border-color: #3b82f6; background: #eff6ff; }
 .stage.done .dot { border-color: #10b981; background: #10b981; }
+.stage.error .dot { border-color: #ef4444; background: #fef2f2; }
+.stage.error .dot::after {
+  content: "×"; position: absolute; inset: 0;
+  color: #ef4444; font-size: 13px; font-weight: 700; line-height: 15px; text-align: center;
+}
+.stage.error .stage-name { color: #b91c1c; }
+.stage.error .stage-detail { color: #dc2626; }
 .stage.done .dot::after {
   content: ""; position: absolute; left: 5px; top: 2px;
   width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);

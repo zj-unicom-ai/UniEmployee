@@ -91,9 +91,10 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (ev.status === 'start') {
         msg.trace.push({ type: 'tool', name: ev.name, args, status: 'start' })
       } else {
+        const st = ev.status === 'error' ? 'error' : 'done'
         const pending = msg.trace.find(t => t.type === 'tool' && t.status === 'start' && t.name === ev.name)
-        if (pending) { pending.status = 'done'; pending.preview = ev.preview || '' }
-        else msg.trace.push({ type: 'tool', name: ev.name, args, status: 'done', preview: ev.preview || '' })
+        if (pending) { pending.status = st; pending.preview = ev.preview || '' }
+        else msg.trace.push({ type: 'tool', name: ev.name, args, status: st, preview: ev.preview || '' })
       }
       touch()
     } else if (ev.type === 'subagent') {
@@ -118,8 +119,9 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       setStage('skill', 'active', `审批中：${ev.tool}`)
       touch()
     } else if (ev.type === 'error') {
-      if (!msg.trace) msg.trace = []
-      msg.trace.push({ type: 'tool', name: '⚠ ' + ev.message, args: '', status: 'done' })
+      // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
+      msg.error = ev.message || '任务执行出错，请稍后重试'
+      setStage('report', 'error', msg.error)
       touch()
     }
   }

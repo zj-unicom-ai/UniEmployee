@@ -27,7 +27,8 @@ emit: rated(msg, rating, reason)
       <div class="msg bot">
         <div v-if="msg.html" class="md" v-html="msg.html"></div>
         <div v-else-if="msg.content" class="md">{{ msg.content }}</div>
-        <div v-else class="msg-loading">
+        <div v-if="msg.error" class="msg-error">⚠ {{ msg.error }}</div>
+        <div v-if="!msg.html && !msg.content && !msg.error" class="msg-loading">
           <span class="loading-dot">.</span>
           <span class="loading-dot">.</span>
           <span class="loading-dot">.</span>
@@ -80,10 +81,11 @@ emit: rated(msg, rating, reason)
               </div>
             </template>
             <template v-else-if="t.type === 'tool'">
-              <div class="tool-box">
+              <div class="tool-box" :class="{ 'tool-error': t.status === 'error' }">
                 <b>🔧 {{ t.name }}</b>
                 <span v-if="t.args">({{ t.args }})</span>
                 <span v-if="t.status === 'start'"> 调用中…</span>
+                <span v-else-if="t.status === 'error'" class="tool-status-err"> ✗ 失败</span>
                 <span v-else> ✓</span>
                 <pre v-if="t.preview">{{ t.preview }}</pre>
               </div>
@@ -217,6 +219,16 @@ function subagentStatusText(status) {
 }
 .tool-box b { color: #0369a1; }
 .tool-box pre { margin: 5px 0 0; background: #f0f9ff; border-radius: 6px; padding: 6px 9px; font-size: 11.5px; color: #334155; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+.tool-box.tool-error { background: #fef2f2; border-color: #fecaca; }
+.tool-box.tool-error b { color: #b91c1c; }
+.tool-box.tool-error pre { background: #fef2f2; color: #991b1b; }
+.tool-status-err { color: #dc2626; font-weight: 600; }
+
+/* 运行级错误卡 */
+.msg-error {
+  background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+  border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.6;
+}
 
 /* 子代理面板 */
 .subagent-panel {

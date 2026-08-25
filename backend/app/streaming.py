@@ -11,7 +11,7 @@ import re
 import sqlite3
 import time
 
-from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations
 from app.compiler import _init_model
@@ -45,6 +45,10 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     if ("authentication" in text or "api key" in text or "unauthorized" in text or
             "401" in text or "403" in text or "permission denied" in text or "access denied" in text):
         return "auth", "模型或工具鉴权失败，请联系管理员"
+    if ("connection refused" in text or "connection reset" in text or
+            "connection aborted" in text or "urlopen error" in text or
+            "failed to connect" in text or "network unreachable" in text):
+        return "upstream_unavailable", "上游服务连接失败（模型或知识库等服务不可达），请联系管理员检查"
     return "internal_error", "任务执行出错，请稍后重试"
 
 
@@ -295,7 +299,11 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                     if isinstance(m, ToolMessage):
                         name = m.name or "tool"
                         preview = (m.content if isinstance(m.content, str) else str(m.content))[:120]
-                        yield sse({"type": "tool", "name": name, "args": {}, "status": "end", "preview": preview})
+                        # 透传工具真实执行状态：LangGraph 会把工具异常包装为
+                        # status='error' 的 ToolMessage，前端据此显示失败标记。
+                        tool_status = "error" if getattr(m, "status", None) == "error" else "end"
+                        yield sse({"type": "tool", "name": name, "args": {}, "status": tool_status,
+                                   "preview": preview})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,
@@ -339,4 +347,10 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         error_code, user_message = _classify_error(e)
         logger.error("SSE 运行异常 conv=%s emp=%s code=%s: %s: %s",
                      conv_id, emp_id, error_code, type(e).__name__, e, exc_info=True)
+        # 把错误提示写入 checkpoint：刷新/回看历史时错误可见，而不是凭空消失。
+        try:
+            await agent.aupdate_state(
+                config, {"messages": [AIMessage(content=f"⚠ {user_message}")]})
+        except Exception:
+            logger.warning("错误提示写入 checkpoint 失败 conv=%s", conv_id, exc_info=True)
         yield sse({"type": "error", "error_code": error_code, "message": user_message})
