@@ -1,10 +1,10 @@
 """对话 / 消息 / 追踪 / 审批 路由。"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
-from app import auth, runtime, approvals, conversations, catalog, traces
+from app import attachments, auth, runtime, approvals, conversations, catalog, traces
 from app.models import MessageIn, DecisionIn
 from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
 
@@ -83,6 +83,20 @@ async def get_conv(conv_id: str, user: dict = Depends(auth.get_current_user_or_f
     }
 
 
+@router.post("/conversations/{conv_id}/attachments")
+async def upload_attachment(conv_id: str, file: UploadFile = File(...),
+                            user: dict = Depends(auth.get_current_user_or_fallback)):
+    """上传对话附件：落盘到 /data/uploads/{uid}/{conv_id}/，返回 agent 可读的虚拟路径。"""
+    uid = user["id"]
+    meta = conversations.get(conv_id)
+    owner = conv_owner_map.get(conv_id) or (meta or {}).get("user_id")
+    if not meta and conv_id not in conv_emp_map:
+        raise HTTPException(404, "会话不存在")
+    if owner and owner != uid and owner != "default":
+        raise HTTPException(403, "无权操作该会话")
+    return await attachments.save_attachment(conv_id, uid, file)
+
+
 @router.post("/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, body: MessageIn,
                        user: dict = Depends(auth.get_current_user_or_fallback)):
@@ -94,15 +108,25 @@ async def send_message(conv_id: str, body: MessageIn,
     if owner and owner != uid and owner != "default":
         raise HTTPException(403, "无权操作该会话")
     emp = employee_of(conv_id)
+    # 附件只接受本用户上传目录内的路径，防止伪造 /data/ 任意路径
+    atts = [a.model_dump() for a in body.attachments
+            if attachments.validate_attachment_path(uid, a.path)]
+    if len(atts) > attachments.MAX_ATTACHMENTS_PER_MESSAGE:
+        raise HTTPException(400, f"单条消息最多 {attachments.MAX_ATTACHMENTS_PER_MESSAGE} 个附件")
     text = body.message.strip()
+    if not text and not atts:
+        raise HTTPException(400, "消息内容为空")
+    title = text[:40] or f"附件：{atts[0]['name']}"[:40]
+    preview = text[:60] or f"[附件] {atts[0]['name']}"
     if not meta:
-        conversations.create(conv_id, emp, title=text[:40], preview=text[:60],
+        conversations.create(conv_id, emp, title=title, preview=preview,
                              count=1, user_id=uid)
     else:
         if meta.get("user_id") == "default":
             conversations.claim(conv_id, uid)
-        conversations.touch(conv_id, title=text[:40], preview=text[:60], bump=1)
-    input_ = {"messages": [{"role": "user", "content": body.message}]}
+        conversations.touch(conv_id, title=title, preview=preview, bump=1)
+    content = attachments.compose_user_content(body.message, atts)
+    input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
         _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user")),
         media_type="text/event-stream")

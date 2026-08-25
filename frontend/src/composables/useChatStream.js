@@ -144,13 +144,15 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text) {
+  async function sendTo(endpoint, text, attachments = []) {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
-    if (!trimmed) return
+    if (!trimmed && !attachments.length) return
     const now = new Date()
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-    messages.value.push({ role: 'user', content: trimmed, time })
+    const userMsg = { role: 'user', content: trimmed, time }
+    if (attachments.length) userMsg.attachments = attachments
+    messages.value.push(userMsg)
     const botIdx = messages.value.length
     messages.value.push({ role: 'bot', content: '', html: '', _md: '', trace: [], time })
     sending.value = true
@@ -165,7 +167,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({ message: trimmed, attachments }),
         signal: controller.signal,
       })
       await readStream(resp, botIdx)

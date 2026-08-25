@@ -3,8 +3,17 @@
 from pydantic import BaseModel, Field
 
 
+class AttachmentIn(BaseModel):
+    """对话附件：name 原始文件名，path 为上传接口返回的 /data/ 虚拟路径。"""
+    name: str
+    path: str
+    size: int = 0
+    content_type: str = ""
+
+
 class MessageIn(BaseModel):
-    message: str
+    message: str = ""
+    attachments: list[AttachmentIn] = []
 
 
 class DecisionIn(BaseModel):
