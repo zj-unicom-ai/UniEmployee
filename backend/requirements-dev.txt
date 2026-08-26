@@ -1,3 +1,5 @@
 # 开发 / 测试 / 运维工具依赖（不参与生产运行）。
 pytest==9.1.1
 playwright==1.61.0
+# 测试夹具用临时 SQLite 库（conftest 强制 DB_BACKEND=sqlite），生产走 PostgreSQL
+langgraph-checkpoint-sqlite==3.1.0
