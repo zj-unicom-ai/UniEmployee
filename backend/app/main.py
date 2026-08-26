@@ -26,10 +26,8 @@ from app.logging_setup import setup_logging, request_id_var, get_logger
 from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.store.sqlite import AsyncSqliteStore
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.3.1")
+APP_VERSION = os.environ.get("APP_VERSION", "0.4.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -78,6 +76,8 @@ async def lifespan(app):
                 AsyncPostgresStore.from_conn_string(dblayer.pg_dsn("store")))
             await store.setup()
         else:
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+            from langgraph.store.sqlite import AsyncSqliteStore
             log.info("数据库后端：SQLite（%s）", db_path("catalog.db").parent)
             cp = await stack.enter_async_context(
                 AsyncSqliteSaver.from_conn_string(str(db_path("checkpoints.db"))))
