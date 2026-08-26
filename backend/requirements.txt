@@ -17,3 +17,4 @@ langchain-openai==1.4.1
 fastmcp==3.4.4
 httpx==0.28.1
 tzdata==2025.2
+python-docx==1.2.0

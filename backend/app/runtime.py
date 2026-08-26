@@ -2,17 +2,15 @@
 
 - 每个员工独立编译、独立缓存（_agents[emp_id]），各自的 MCP stdio
   会话由各自的 mcp_client 保活（_mcp_clients[emp_id]）。
-- thread_id = conversation_id，会话状态全在 AsyncSqliteSaver（checkpoints.db），
-  人工审批可跨请求 resume。
-- 长期记忆在 Store 的 /memories/ 路由，按 (user_id, emp_id) 命名空间隔离；
-  Store 用 AsyncSqliteStore（store.db），记忆重启不丢（生产可换 Postgres）。
-- 员工配置来自 catalog.db（页面可配置）；discover_employees / get_agent 改读目录库，
+- thread_id = conversation_id，会话状态全在 checkpointer（sqlite/postgres 由
+  DB_BACKEND 决定），人工审批可跨请求 resume。
+- 长期记忆在 Store 的 /memories/ 路由，按 (user_id, emp_id) 命名空间隔离，
+  记忆重启不丢。
+- 员工配置来自 catalog 库（页面可配置）；discover_employees / get_agent 改读目录库，
   employees/*.yaml 仅作种子来源。
 """
 import asyncio
 from pathlib import Path
-
-from langgraph.store.sqlite import AsyncSqliteStore
 
 from app import catalog
 from app.spec import EmployeeSpec
@@ -21,8 +19,8 @@ from app.paths import WORKSPACE_DATA
 
 ROOT = Path(__file__).resolve().parent.parent
 
-_store = None          # 生命周期启动时由 lifespan 注入 AsyncSqliteStore(store.db)
-_checkpointer = None  # 生命周期启动时由 lifespan 注入 AsyncSqliteSaver(checkpoints.db)
+_store = None          # 生命周期启动时由 lifespan 注入（AsyncSqliteStore / AsyncPostgresStore）
+_checkpointer = None  # 生命周期启动时由 lifespan 注入（AsyncSqliteSaver / AsyncPostgresSaver）
 _agents = {}          # emp_id -> (agent, stage_meta)
 _mcp_clients = {}     # emp_id -> mcp_client | None
 _lock = asyncio.Lock()
