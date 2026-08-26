@@ -1,9 +1,7 @@
 """回归：新建对话（点“新会话”/切换员工）不应立即落库产生空历史记录；
 真正写入发生在首条消息。依赖服务在 8787 运行。"""
 import json
-import sqlite3
 import socket
-from pathlib import Path
 
 import pytest
 import urllib.error
@@ -11,7 +9,6 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:8787"
-DB = str(Path(__file__).resolve().parent.parent / "data" / "db" / "conversations.db")
 
 
 def _port_open(port=8787):
@@ -42,45 +39,42 @@ def _login_token(u, p):
     return json.loads(b).get("token")
 
 
-def _db_count():
-    c = sqlite3.connect(DB)
-    n = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
-    c.close()
-    return n
+def _list_conv_ids(tok):
+    """会话清单走 API（后端无关：sqlite 直查文件的方式在 postgres 后端下失效）。"""
+    s, b = _req("/api/conversations", token=tok)
+    assert s == 200, b
+    return {c["conv_id"] for c in json.loads(b)}
 
 
 def test_new_conversation_does_not_persist_empty_record():
     """点“新会话”只生成 conv_id，不应在 conversations 表写入任何行；
     只有发出首条消息才落库。"""
     tok = _login_token("admin", "admin123")
-    before = _db_count()
+    before = _list_conv_ids(tok)
 
     # 1) 模拟前端 selectEmployee：开新会话（此时还没说话）
     st, body = _req("/api/employees/xiaosu/conversations", "POST", token=tok)
     assert st == 200, body
     conv_id = json.loads(body)["conversation_id"]
-    after_new = _db_count()
+    after_new = _list_conv_ids(tok)
     assert after_new == before, "开会话不应立即落库（产生了空历史记录）"
-    # 且库里不应存在该 conv_id
-    c = sqlite3.connect(DB)
-    exists = c.execute("SELECT 1 FROM conversations WHERE conv_id=?", (conv_id,)).fetchone()
-    c.close()
-    assert exists is None, "空会话竟已写入 conversations 表"
+    # 且清单里不应存在该 conv_id
+    assert conv_id not in after_new, "空会话竟已写入 conversations 表"
 
     # 2) 发首条消息 → 此时才落库，且标题/归属正确
     st2, _ = _req(f"/api/conversations/{conv_id}/messages", "POST", token=tok,
                      body={"message": "记住我姓张，回复要简短"})
     # SSE 流式返回 200
     assert st2 == 200, "发送首条消息失败"
-    after_msg = _db_count()
-    assert after_msg == before + 1, "首条消息后应恰好新增 1 条历史记录"
+    after_msg = _list_conv_ids(tok)
+    assert len(after_msg) == len(before) + 1, "首条消息后应恰好新增 1 条历史记录"
+    assert conv_id in after_msg
 
-    c = sqlite3.connect(DB); c.row_factory = sqlite3.Row
-    row = c.execute("SELECT * FROM conversations WHERE conv_id=?", (conv_id,)).fetchone()
-    c.close()
-    assert row is not None
-    assert row["employee_id"] == "xiaosu"
-    assert "张" in (row["title"] or ""), "标题应由首句/模型提炼，含用户关键信息"
+    st3, detail = _req(f"/api/conversations/{conv_id}", token=tok)
+    assert st3 == 200, detail
+    d = json.loads(detail)
+    assert d.get("employee_id") == "xiaosu"
+    assert "张" in (d.get("title") or ""), "标题应由首句/模型提炼，含用户关键信息"
 
 
 def test_browser_new_conv_no_sidebar_entry_until_message():

@@ -9,10 +9,9 @@
 
 import datetime
 import os
-import sqlite3
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import dotenv
@@ -21,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import auth, catalog, conversations, ontology, runtime
+from app import db as dblayer
 from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
 from app.errors import register_exception_handlers
@@ -40,7 +40,13 @@ _PASSWORD_CHANGE_ALLOWED = {"/api/auth/login", "/api/auth/change-password", "/ap
 async def lifespan(app):
     dotenv.load_dotenv(PROJECT_ROOT / ".env")
     setup_logging()
-    log.info("启动 UniEmployee v%s | 数据目录=%s", APP_VERSION, db_path("catalog.db").parent)
+    if dblayer.is_pg():
+        log.info("启动 UniEmployee v%s | 数据库=PostgreSQL（%s:%s）", APP_VERSION,
+                 os.environ.get("POSTGRES_HOST", "127.0.0.1"),
+                 os.environ.get("POSTGRES_PORT", "5432"))
+    else:
+        log.info("启动 UniEmployee v%s | 数据库=SQLite（%s）", APP_VERSION,
+                 db_path("catalog.db").parent)
     catalog.init()
     catalog.seed_if_empty()
     catalog.backfill_connectors()
@@ -57,17 +63,37 @@ async def lifespan(app):
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )
-    async with AsyncSqliteSaver.from_conn_string(str(db_path("checkpoints.db"))) as cp:
-        await cp.setup()  # 全新环境懒建表，先建好避免 recover_conversations 直查失败
+    # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
+    # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
+    # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）
+    async with AsyncExitStack() as stack:
+        if dblayer.is_pg():
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from langgraph.store.postgres import AsyncPostgresStore
+            log.info("数据库后端：PostgreSQL（DSN 见 POSTGRES_* 环境变量）")
+            cp = await stack.enter_async_context(
+                AsyncPostgresSaver.from_conn_string(dblayer.pg_dsn("checkpoints")))
+            await cp.setup()
+            store = await stack.enter_async_context(
+                AsyncPostgresStore.from_conn_string(dblayer.pg_dsn("store")))
+            await store.setup()
+        else:
+            log.info("数据库后端：SQLite（%s）", db_path("catalog.db").parent)
+            cp = await stack.enter_async_context(
+                AsyncSqliteSaver.from_conn_string(str(db_path("checkpoints.db"))))
+            await cp.setup()  # 全新环境懒建表，先建好避免 recover_conversations 直查失败
+            store = await stack.enter_async_context(
+                AsyncSqliteStore.from_conn_string(str(db_path("store.db"))))
         runtime.set_checkpointer(cp)
-        async with AsyncSqliteStore.from_conn_string(str(db_path("store.db"))) as store:
-            runtime.set_store(store)
-            await runtime.warmup_all()
-            await recover_conversations()
-            log.info("启动完成，开始接收请求")
-            yield
-            await runtime.shutdown_mcp()
-            log.info("服务关闭")
+        runtime.set_store(store)
+        await runtime.warmup_all()
+        await recover_conversations()
+        log.info("启动完成，开始接收请求")
+        yield
+        await runtime.shutdown_mcp()
+        if dblayer.is_pg():
+            dblayer.close_all_pools()
+        log.info("服务关闭")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -112,9 +138,7 @@ async def health():
     dbs: dict[str, str] = {}
     for name in DB_FILES:
         try:
-            con = sqlite3.connect(str(db_path(name)))
-            con.execute("SELECT 1")
-            con.close()
+            dblayer.ping(name)
             dbs[name] = "ok"
         except Exception as e:
             dbs[name] = f"error: {e}"

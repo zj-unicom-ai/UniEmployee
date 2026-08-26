@@ -11,6 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from app import db as dblayer
 from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent.parent  # backend/
@@ -18,6 +19,8 @@ DB = db_path("ontology.db")
 
 
 def _conn():
+    if dblayer.is_pg():
+        return dblayer.connect("ontology")
     con = sqlite3.connect(str(DB), timeout=10)
     con.execute("PRAGMA busy_timeout=5000")
     con.row_factory = sqlite3.Row
@@ -249,11 +252,11 @@ def seed_demo_if_empty():
     ids: dict[tuple, int] = {}
 
     def add(type_, name, props):
-        cur = con.execute(
+        ids[(type_, name)] = dblayer.insert_returning_id(
+            con,
             "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?)",
             (type_, name, json.dumps(props, ensure_ascii=False), "default", now, now))
-        ids[(type_, name)] = cur.lastrowid
 
     def link(frm, to, rel):
         con.execute(
@@ -370,12 +373,13 @@ def create_entity_type(tenant_id: str, data: dict) -> int:
     now = _now()
     con = _conn()
     try:
-        cur = con.execute(
+        rid = dblayer.insert_returning_id(
+            con,
             "INSERT INTO entity_types(code,name,description,icon,attrs,tenant_id,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (code, name, data.get("description"), data.get("icon"), attrs, tenant_id, now, now))
         con.commit()
-        return cur.lastrowid
+        return rid
     finally:
         con.close()
 
@@ -417,13 +421,14 @@ def create_relation_type(tenant_id: str, data: dict) -> int:
     now = _now()
     con = _conn()
     try:
-        cur = con.execute(
+        rid = dblayer.insert_returning_id(
+            con,
             "INSERT INTO relation_types(code,name,from_type,to_type,cardinality,description,tenant_id,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?,?,?,?)",
             (code, name, data.get("from_type"), data.get("to_type"), data.get("cardinality") or "m:n",
              data.get("description"), tenant_id, now, now))
         con.commit()
-        return cur.lastrowid
+        return rid
     finally:
         con.close()
 
@@ -505,12 +510,13 @@ def create_entity(tenant_id: str, data: dict) -> int:
         con.close()
         raise ValueError(f"实体类型 {type_} 不存在")
     try:
-        cur = con.execute(
+        rid = dblayer.insert_returning_id(
+            con,
             "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?)",
             (type_, name, props, tenant_id, now, now))
         con.commit()
-        return cur.lastrowid
+        return rid
     finally:
         con.close()
 
@@ -582,13 +588,14 @@ def create_relation(tenant_id: str, data: dict) -> int:
     now = _now()
     con = _conn()
     try:
-        cur = con.execute(
+        rid = dblayer.insert_returning_id(
+            con,
             "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,created_at,updated_at)"
             " VALUES(?,?,?,?,?,?,?)",
             (from_id, to_id, rel, json.dumps(data.get("props") or {}, ensure_ascii=False),
              tenant_id, now, now))
         con.commit()
-        return cur.lastrowid
+        return rid
     finally:
         con.close()
 

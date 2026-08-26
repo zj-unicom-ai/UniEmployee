@@ -1,4 +1,4 @@
-"""catalog.db 数据库连接、建表、迁移、通用工具。"""
+"""catalog 数据库连接、建表、迁移、通用工具（SQLite / PostgreSQL 双后端）。"""
 
 import json
 import os
@@ -7,6 +7,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from app import db as dblayer
 from app.paths import db_path
 
 # 全局默认工具名列表（与 compiler.py GLOBAL_TOOL_NAMES 保持一致）
@@ -33,6 +34,13 @@ _LINK_TABLES = {
 
 
 def _conn():
+    """按 DB_BACKEND 返回 sqlite3.Connection 或 PG 池化连接（见 app/db.py）。
+
+    注意 sqlite 路径仍读取模块级 DB（测试夹具会 monkeypatch 它），
+    postgres 路径按库名路由，不受 DB 影响。
+    """
+    if dblayer.is_pg():
+        return dblayer.connect("catalog")
     con = sqlite3.connect(str(DB))
     con.row_factory = sqlite3.Row
     return con
@@ -87,37 +95,30 @@ def init():
 def _migrate_soft_delete(con):
     """给实体表补 deleted_at 列（NULL=未删除）。幂等。"""
     for t in _SOFT_DELETE_TABLES:
-        cols = [r[1] for r in con.execute(f"PRAGMA table_info({t})")]
-        if "deleted_at" not in cols:
+        if "deleted_at" not in dblayer.table_columns(con, t):
             con.execute(f"ALTER TABLE {t} ADD COLUMN deleted_at TEXT")
     con.commit()
 
 
 def _migrate_must_change_password(con):
     """users 表补 must_change_password 列（1=首登必须改密）。幂等。"""
-    cols = [r[1] for r in con.execute("PRAGMA table_info(users)")]
-    if "must_change_password" not in cols:
+    if "must_change_password" not in dblayer.table_columns(con, "users"):
         con.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0")
     con.commit()
 
 
 def _migrate_ragflow_datasets(con):
     """knowledge_bases 补 ragflow_dataset_id（映射到 RAGFlow 中的 dataset id）。"""
-    cols = [r[1] for r in con.execute("PRAGMA table_info(knowledge_bases)")]
-    if "ragflow_dataset_id" not in cols:
+    if "ragflow_dataset_id" not in dblayer.table_columns(con, "knowledge_bases"):
         con.execute("ALTER TABLE knowledge_bases ADD COLUMN ragflow_dataset_id TEXT")
     con.commit()
 
 
 def _migrate_retire_kb_entries(con):
     """旧本地知识条目表若存在则软退役；运行时知识统一来自 RAGFlow。"""
-    exists = con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kb_entries'"
-    ).fetchone()
-    if not exists:
+    if not dblayer.table_exists(con, "kb_entries"):
         return
-    cols = [r[1] for r in con.execute("PRAGMA table_info(kb_entries)")]
-    if "deleted_at" not in cols:
+    if "deleted_at" not in dblayer.table_columns(con, "kb_entries"):
         con.execute("ALTER TABLE kb_entries ADD COLUMN deleted_at TEXT")
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     con.execute("UPDATE kb_entries SET deleted_at=? WHERE deleted_at IS NULL", (now,))
@@ -145,7 +146,7 @@ def _migrate_remove_refund_gate(con):
 
 def _migrate_subagents(con):
     """employees 表补 subagents / subagent_policy 列。幂等。"""
-    cols = [r[1] for r in con.execute("PRAGMA table_info(employees)")]
+    cols = dblayer.table_columns(con, "employees")
     if "subagents" not in cols:
         con.execute("ALTER TABLE employees ADD COLUMN subagents TEXT")
     if "subagent_policy" not in cols:

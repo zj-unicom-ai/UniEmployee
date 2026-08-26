@@ -86,6 +86,7 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 ### 环境要求
 
 - macOS / Linux / Windows，Python **3.12+**
+- Docker（起 PostgreSQL 数据库；已有 PG 实例可不装，见「数据存储」）
 - Node.js **18+**（前端开发模式需要）
 - 任意 OpenAI Chat Completions 兼容的模型接口与 API Key（如 DeepSeek、OpenAI）
 - 应用本身不需要 GPU，硬件要求取决于你选择的模型服务
@@ -122,10 +123,14 @@ python3 -m venv .venv
 python3 scripts/generate_biz_data.py   # 生成 sales_detail.csv 等 4 个演示数据集
 ```
 
-### 4. 启动服务
+### 4. 启动数据库与服务
 
 ```bash
-# 单进程即可全功能（内置前端静态文件）
+# 起 PostgreSQL（首次启动自动建 7 个业务库；表结构由应用启动时自动创建）
+docker compose up -d db
+# 已有 PG 实例可改用幂等建库脚本：./scripts/init_postgres.sh
+
+# 启动服务（单进程即可全功能，内置前端静态文件）
 PYTHONPATH=backend .venv/bin/uvicorn app.main:app --reload --port 8787
 ```
 
@@ -214,28 +219,33 @@ UniEmployee/
 │   │   ├── workflows/        # StateGraph 状态机工作流
 │   │   ├── connectors/       # MCP 连接器（CRM stdio、RAGFlow）
 │   │   ├── approvals.py      # HITL 审批单（持久化 + 超时拒绝）
-│   │   ├── traces.py         # 执行追踪（traces.db）
+│   │   ├── traces.py         # 执行追踪（traces 库）
 │   │   ├── auth.py           # bcrypt + JWT 鉴权
-│   │   └── paths.py          # 统一数据目录（APP_DATA_DIR）
-│   ├── employees/*.yaml      # 员工种子定义（首次启动写入 catalog.db）
+│   │   └── db.py             # 数据库访问层（PG 连接池 + SQL 方言翻译）
+│   ├── employees/*.yaml      # 员工种子定义（首次启动写入 catalog 库）
 │   └── skills/               # 内置技能（SKILL.md + frontmatter）
 ├── frontend/                 # Vue 3 + Vite + Naive UI + Pinia 管理后台
-├── tests/                    # pytest（夹具自动替换临时 SQLite 库）
-└── scripts/backup.sh         # 数据库备份
+├── tests/                    # pytest（夹具强制 sqlite 临时库，不碰真实数据）
+├── scripts/init_postgres.sql # 建库 SQL（docker 首次启动自动执行）
+├── scripts/init_postgres.sh  # 幂等建库脚本（已有 PG 实例用）
+└── scripts/backup.sh         # 数据库备份（pg_dump）
 ```
 
 ## 数据存储
 
-所有数据存 SQLite（默认项目根，`APP_DATA_DIR` 可重定向；容器挂载卷持久化）：
+所有数据存 PostgreSQL（`DB_BACKEND=postgres`，连接参数见 `.env` 的 `POSTGRES_*`）。
+本地快速起库：`docker compose up -d db`（首次启动自动建 7 个业务库，表结构由应用启动时自动创建）；
+已有 PG 实例用 `./scripts/init_postgres.sh` 幂等建库：
 
-| 文件 | 作用 |
+| database | 作用 |
 |------|------|
-| `catalog.db` | 员工 / 技能 / 工具 / 知识库 / SOP / 连接器 / 用户 目录 |
-| `conversations.db` | 会话元数据（标题、归属、预览、计数） |
-| `checkpoints.db` | 对话状态 / 消息历史（checkpointer） |
-| `store.db` | 长期记忆（按 user + 员工隔离） |
-| `traces.db` | 执行过程追踪（runs + events） |
-| `approvals.db` | HITL 审批单（持久化，带过期自动拒绝） |
+| `catalog` | 员工 / 技能 / 工具 / 知识库 / SOP / 连接器 / 用户 目录 |
+| `conversations` | 会话元数据（标题、归属、预览、计数） |
+| `checkpoints` | 对话状态 / 消息历史（checkpointer） |
+| `store` | 长期记忆（按 user + 员工隔离） |
+| `traces` | 执行过程追踪（runs + events） |
+| `approvals` | HITL 审批单（持久化，带过期自动拒绝） |
+| `ontology` | 企业业务本体（schema + data 两层，按租户隔离） |
 
 ## 配置与安全
 
@@ -247,7 +257,7 @@ UniEmployee/
 | `JWT_SECRET` | `change-me-in-prod`（告警） | JWT 签名密钥，**必须改成长随机串** |
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
-| `APP_DATA_DIR` | 项目根 | SQLite 库与运行时数据目录 |
+| `DB_BACKEND` / `POSTGRES_*` | `postgres` | 数据库后端与连接参数（host/port/user/password/db 前缀） |
 | `APP_VERSION` | `0.3.1` | 打印在 /health 与日志 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
@@ -293,7 +303,7 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
 
 **数据存在哪里？**
 
-全部本地 SQLite 落盘（可配置 `APP_DATA_DIR` 或挂载卷），密钥仅存 `.env` 不进仓库；模型 API Key 只用于出站请求，不暴露给对话。
+全部存 PostgreSQL（`docker compose up -d db` 一键起库，或 `./scripts/init_postgres.sh` 连已有实例）；密钥仅存 `.env` 不进仓库；模型 API Key 只用于出站请求，不暴露给对话。
 
 **没有 newsnow 容器，MCP 连接器会报错吗？**
 

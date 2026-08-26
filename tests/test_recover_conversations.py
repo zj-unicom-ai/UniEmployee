@@ -36,7 +36,8 @@ def test_recover_conversations_respects_limit(tmp_path, monkeypatch):
     con.close()
 
     created = []
-    monkeypatch.setattr(streaming, "db_path", lambda name: dbfile)
+    monkeypatch.setattr(streaming.dblayer, "connect",
+                        lambda name: sqlite3.connect(dbfile))
     monkeypatch.setattr(runtime, "discover_employees",
                         lambda: [{"id": "xiaosu", "skills": []}])
     monkeypatch.setattr(runtime, "get_agent", _fake_agent())
@@ -65,7 +66,8 @@ def test_recover_uses_metadata_employee_then_trace_fallback(tmp_path, monkeypatc
     con.close()
 
     created = {}
-    monkeypatch.setattr(streaming, "db_path", lambda name: dbfile)
+    monkeypatch.setattr(streaming.dblayer, "connect",
+                        lambda name: sqlite3.connect(dbfile))
     monkeypatch.setattr(runtime, "discover_employees",
                         lambda: [{"id": "xiaosu", "skills": []}, {"id": "hrbp", "skills": []}])
     monkeypatch.setattr(runtime, "get_agent", _fake_agent())

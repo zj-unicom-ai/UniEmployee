@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 from .db import _conn, _soft_delete_row
 
 
@@ -11,7 +12,8 @@ from .db import _conn, _soft_delete_row
 
 def create_user(username: str, password_hash: str, role: str = "user",
                 tenant_id: str = "default", user_id: str | None = None) -> str:
-    uid = user_id or ("u_" + time.strftime("%Y%m%d%H%M%S"))
+    # 秒级时间戳同秒会撞主键（批量建用户/测试夹具），追加随机段保证唯一
+    uid = user_id or ("u_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     con = _conn()
     old = con.execute(
@@ -124,9 +126,14 @@ def assign_employee(user_id: str, emp_id: str, overrides: dict | None = None,
                     granted_by: str | None = None) -> bool:
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     con = _conn()
+    # INSERT OR REPLACE 在 PostgreSQL 无对应写法；ON CONFLICT DO UPDATE 双方言通用，
+    # 且避免了 REPLACE 的删+插语义（自增/外键副作用）。
     con.execute(
-        "INSERT OR REPLACE INTO user_employee_assignments"
-        "(user_id,employee_id,granted_by,overrides,created_at) VALUES(?,?,?,?,?)",
+        "INSERT INTO user_employee_assignments"
+        "(user_id,employee_id,granted_by,overrides,created_at) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(user_id,employee_id) DO UPDATE SET "
+        "granted_by=excluded.granted_by, overrides=excluded.overrides, "
+        "created_at=excluded.created_at",
         (user_id, emp_id, granted_by,
          json.dumps(overrides or {}, ensure_ascii=False), now))
     con.commit()

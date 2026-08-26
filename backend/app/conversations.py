@@ -12,54 +12,64 @@ import sqlite3
 import time
 from pathlib import Path
 
+from app import db as dblayer
 from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = db_path("conversations.db")
 
+_DDL = """
+CREATE TABLE IF NOT EXISTS conversations (
+    conv_id      TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    user_id      TEXT DEFAULT 'default',
+    channel_id   TEXT,
+    title        TEXT DEFAULT '',
+    preview      TEXT DEFAULT '',
+    message_count INTEGER DEFAULT 0,
+    created_at   TEXT,
+    updated_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    kind TEXT DEFAULT 'web',
+    provider TEXT DEFAULT 'web',
+    config TEXT DEFAULT '{}',
+    enabled INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
+    created_by TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS channel_members (
+    channel_id TEXT NOT NULL,
+    employee_id TEXT NOT NULL,
+    is_default INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    PRIMARY KEY(channel_id, employee_id)
+);
+"""
+
 
 def _conn():
+    if dblayer.is_pg():
+        con = dblayer.connect("conversations")
+        con.executescript(_DDL)
+        _migrate(con)
+        return con
     con = sqlite3.connect(str(DB))
     con.row_factory = sqlite3.Row
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS conversations (
-            conv_id      TEXT PRIMARY KEY,
-            employee_id TEXT NOT NULL,
-            user_id      TEXT DEFAULT 'default',
-            channel_id   TEXT,
-            title        TEXT DEFAULT '',
-            preview      TEXT DEFAULT '',
-            message_count INTEGER DEFAULT 0,
-            created_at   TEXT,
-            updated_at   TEXT
-        )"""
-    )
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS channels (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            kind TEXT DEFAULT 'web',
-            provider TEXT DEFAULT 'web',
-            config TEXT DEFAULT '{}',
-            enabled INTEGER DEFAULT 1,
-            status TEXT DEFAULT 'active',
-            created_by TEXT,
-            created_at TEXT,
-            updated_at TEXT
-        )"""
-    )
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS channel_members (
-            channel_id TEXT NOT NULL,
-            employee_id TEXT NOT NULL,
-            is_default INTEGER DEFAULT 0,
-            sort_order INTEGER DEFAULT 0,
-            PRIMARY KEY(channel_id, employee_id)
-        )"""
-    )
+    con.executescript(_DDL)
+    _migrate(con)
+    return con
+
+
+def _migrate(con):
+    """老库迁移：补列（幂等，双方言）。"""
     # 老库迁移：补 user_id 列
-    cols = [r[1] for r in con.execute("PRAGMA table_info(conversations)")]
+    cols = dblayer.table_columns(con, "conversations")
     if "user_id" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT 'default'")
     if "channel_id" not in cols:
@@ -68,14 +78,14 @@ def _conn():
     if "deleted_at" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN deleted_at TEXT")
     # IM 频道配置迁移：provider / config / enabled
-    ch_cols = [r[1] for r in con.execute("PRAGMA table_info(channels)")]
+    ch_cols = dblayer.table_columns(con, "channels")
     if "provider" not in ch_cols:
         con.execute("ALTER TABLE channels ADD COLUMN provider TEXT DEFAULT 'web'")
     if "config" not in ch_cols:
         con.execute("ALTER TABLE channels ADD COLUMN config TEXT DEFAULT '{}'")
     if "enabled" not in ch_cols:
         con.execute("ALTER TABLE channels ADD COLUMN enabled INTEGER DEFAULT 1")
-    return con
+    con.commit()
 
 
 def _channel_row(row) -> dict:

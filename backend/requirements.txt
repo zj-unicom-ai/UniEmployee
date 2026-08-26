@@ -9,7 +9,9 @@ bcrypt==5.0.0
 deepagents==0.7.5
 langchain-deepseek==1.1.0
 langgraph==1.2.9
-langgraph-checkpoint-sqlite==3.1.0
+# PostgreSQL 后端（checkpointer + store + 连接；DB_BACKEND=postgres 时必需）
+langgraph-checkpoint-postgres==3.1.2
+psycopg[binary,pool]==3.3.4
 langchain-mcp-adapters==0.3.0
 langchain-openai==1.4.1
 fastmcp==3.4.4
