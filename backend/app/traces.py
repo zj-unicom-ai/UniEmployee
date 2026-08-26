@@ -21,6 +21,7 @@ from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackHandler
 
+from app import db as dblayer
 from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,8 +33,11 @@ _PREVIEW = 2000  # 输入/输出留存的最大字符数
 
 
 def _conn():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
+    if dblayer.is_pg():
+        con = dblayer.connect("traces")
+    else:
+        con = sqlite3.connect(DB)
+        con.row_factory = sqlite3.Row
     con.execute("""CREATE TABLE IF NOT EXISTS runs(
         run_id      TEXT PRIMARY KEY,
         conv_id     TEXT,
@@ -299,7 +303,7 @@ class TraceHandler(AsyncCallbackHandler):
 
 def _ensure_evaluations_table():
     """首次写入时自动建表，避免每次读库都执行 DDL。"""
-    con = sqlite3.connect(DB)
+    con = _conn()
     con.execute("""CREATE TABLE IF NOT EXISTS evaluations(
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id       TEXT,
@@ -322,7 +326,7 @@ def insert_evaluation(run_id, message_id, employee_id, conversation_id,
     """记录一条用户反馈评价。"""
     try:
         _ensure_evaluations_table()
-        con = sqlite3.connect(DB)
+        con = _conn()
         con.execute(
             "INSERT INTO evaluations(run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at)"
             " VALUES(?,?,?,?,?,?,?,?)",
@@ -340,8 +344,7 @@ def get_evaluation_stats(employee_id=None, period="30d"):
     _ensure_evaluations_table()
     days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
     since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
+    con = _conn()
 
     # runs 聚合
     where = "WHERE r.started_at >= ?"
@@ -427,8 +430,7 @@ def get_feedback_list(employee_id=None, rating=None, limit=50, offset=0):
     if rating is not None:
         where += " AND rating = ?"
         params.append(rating)
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
+    con = _conn()
     rows = con.execute(f"""
         SELECT id,run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at
         FROM evaluations {where} ORDER BY created_at DESC LIMIT ? OFFSET ?

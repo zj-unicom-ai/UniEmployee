@@ -1,4 +1,10 @@
 """测试夹具：每个测试用独立的临时数据库，互不污染、不碰真实 catalog.db/conversations.db。"""
+import os
+
+# 测试一律跑 sqlite 后端：即使 .env 配了 DB_BACKEND=postgres，
+# 也在 import app 之前强制回 sqlite（app.db 惰性读环境变量）。
+os.environ["DB_BACKEND"] = "sqlite"
+
 import pytest
 
 from app import approvals, catalog, conversations, ontology

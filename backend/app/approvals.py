@@ -7,14 +7,18 @@ import os
 import time
 import sqlite3
 
+from app import db as dblayer
 from app.paths import db_path
 
 DB = db_path("approvals.db")
 
 
 def _conn():
-    con = sqlite3.connect(str(DB))
-    con.row_factory = sqlite3.Row
+    if dblayer.is_pg():
+        con = dblayer.connect("approvals")
+    else:
+        con = sqlite3.connect(str(DB))
+        con.row_factory = sqlite3.Row
     con.execute("""
         CREATE TABLE IF NOT EXISTS approvals (
             approval_id     TEXT PRIMARY KEY,

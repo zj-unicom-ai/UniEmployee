@@ -14,8 +14,8 @@ import time
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations
+from app import db as dblayer
 from app.compiler import _init_model
-from app.paths import db_path
 
 logger = logging.getLogger("app.streaming")
 
@@ -129,7 +129,9 @@ async def recover_conversations(limit: int | None = None):
         except ValueError:
             limit = 2000
     limit = max(0, limit)
-    con = sqlite3.connect(str(db_path("checkpoints.db")))
+    # 方言差异：sqlite checkpointer 用 rowid 排序、metadata 为 msgpack blob；
+    # postgres checkpointer 用 checkpoint_id 排序、metadata 为 JSONB（直接是 dict）。
+    con = dblayer.connect("checkpoints")
     threads = [r[0] for r in con.execute(
         "SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id LIKE 'c_%' LIMIT ?",
         (limit,)).fetchall()]
@@ -147,23 +149,33 @@ async def recover_conversations(limit: int | None = None):
         if tid in known:
             continue
         emp = ""
-        con = sqlite3.connect(str(db_path("checkpoints.db")))
-        try:
+        con = dblayer.connect("checkpoints")
+        if dblayer.is_pg():
             row = con.execute(
-                "SELECT checkpoint, metadata FROM checkpoints WHERE thread_id=? ORDER BY rowid DESC LIMIT 1",
+                "SELECT checkpoint, metadata FROM checkpoints "
+                "WHERE thread_id=? ORDER BY checkpoint_id DESC LIMIT 1",
                 (tid,)).fetchone()
-        except sqlite3.OperationalError:
-            row = con.execute(
-                "SELECT checkpoint, NULL FROM checkpoints WHERE thread_id=? ORDER BY rowid DESC LIMIT 1",
-                (tid,)).fetchone()
+        else:
+            try:
+                row = con.execute(
+                    "SELECT checkpoint, metadata FROM checkpoints WHERE thread_id=? ORDER BY rowid DESC LIMIT 1",
+                    (tid,)).fetchone()
+            except sqlite3.OperationalError:
+                row = con.execute(
+                    "SELECT checkpoint, NULL FROM checkpoints WHERE thread_id=? ORDER BY rowid DESC LIMIT 1",
+                    (tid,)).fetchone()
         con.close()
 
         # 优先读线程元数据：_stream_run 现在会把 employee_id 写进 configurable，
         # 这是最可靠的员工归属来源，不再从序列化 blob 里猜。
         if row and row[1]:
             try:
-                meta_bytes = row[1] if isinstance(row[1], bytes) else str(row[1]).encode("utf-8", "replace")
-                meta_emp = json.loads(meta_bytes.decode("utf-8", "replace")).get("employee_id")
+                if isinstance(row[1], dict):
+                    # PostgreSQL checkpointer：metadata 为 JSONB
+                    meta_emp = row[1].get("employee_id")
+                else:
+                    meta_bytes = row[1] if isinstance(row[1], bytes) else str(row[1]).encode("utf-8", "replace")
+                    meta_emp = json.loads(meta_bytes.decode("utf-8", "replace")).get("employee_id")
                 if meta_emp:
                     emp = meta_emp
             except Exception:

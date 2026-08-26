@@ -1,4 +1,26 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: uniemployee-pg
+    ports:
+      - "5432:5432"
+    environment:
+      # 与 .env 的 POSTGRES_USER / POSTGRES_PASSWORD 保持一致；
+      # 首次启动（数据目录为空）时自动执行 init_postgres.sql 建 7 个业务库。
+      - POSTGRES_USER=${POSTGRES_USER:-uniemployee}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-uniemployee_dev}
+    volumes:
+      # PG 数据持久化
+      - pgdata:/var/lib/postgresql/data
+      # 首次启动自动建库
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init_postgres.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-uniemployee}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   uniemployee:
     build:
       context: .
@@ -9,16 +31,15 @@ services:
       - "8787:8787"
     environment:
       # 仅放非密钥的运行参数；密钥（OPENAI_API_KEY / JWT_SECRET 等）全部来自下方 env_file: .env
-      - APP_DATA_DIR=/app/data
       - PORT=8787
       - LOG_LEVEL=INFO
+      # 容器网络内连 db 服务（数据库统一走 PostgreSQL，不再使用 SQLite）
+      - POSTGRES_HOST=db
     env_file:
       # .env 里已含 OPENAI_API_KEY / OPENAI_BASE_URL / MODEL_NAME / JWT_SECRET，
       # 由 env_file 注入容器（.env 不进镜像、不提交仓库）。
       - .env
     volumes:
-      # SQLite 库持久化
-      - ./data/db:/app/data
       # 后端技能目录
       - ./backend/skills:/app/backend/skills
       # 用户上传的自定义技能持久化
@@ -26,9 +47,15 @@ services:
       # 数据分析看板持久化
       - ./workspace:/app/workspace
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 25s
+
+volumes:
+  pgdata:

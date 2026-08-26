@@ -1,19 +1,18 @@
 # 数字员工平台（UniEmployee）运行镜像
 # 构建上下文是项目根目录（docker-compose.yml 里 context: .）。
 # 布局约定：后端代码 /app/backend，前端构建产物 /app/frontend/dist，
-# 数据目录 /app/data（挂载卷），工作区 /app/workspace（挂载卷）。
+# 数据库统一走 PostgreSQL（docker-compose 的 db 服务），工作区 /app/workspace（挂载卷）。
 FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    APP_DATA_DIR=/app/data \
     PORT=8787 \
     LOG_LEVEL=INFO
 
 WORKDIR /app/backend
 
-# 系统依赖：编译 bcrypt/cryptography 等可能用到（纯 SQLite 运行不一定需要，但装上更稳）
+# 系统依赖：编译 bcrypt/cryptography 等可能用到，装上更稳
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl \
     && rm -rf /var/lib/apt/lists/*
@@ -27,8 +26,8 @@ RUN pip install --upgrade pip --retries 10 --timeout 60 \
 COPY backend/ /app/backend/
 COPY frontend/dist/ /app/frontend/dist/
 
-# 创建数据 / 自定义技能 / 工作区目录；.env（含密钥）不要 COPY，运行时用卷或 -e 注入
-RUN mkdir -p /app/data /app/backend/skills-custom /app/workspace/data
+# 创建自定义技能 / 工作区目录；.env（含密钥）不要 COPY，运行时用卷或 -e 注入
+RUN mkdir -p /app/backend/skills-custom /app/workspace/data
 
 EXPOSE 8787
 
