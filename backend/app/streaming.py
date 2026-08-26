@@ -62,13 +62,48 @@ def employee_of(conv_id: str) -> str:
     return emps[0]["id"] if emps else ""
 
 
+# 思考标签的成对块与未闭合开头（部分模型把思考过程内联在 content 里返回）。
+# 刻意不含反引号对：真实数据里 136 处反引号全是合法 markdown 行内代码/代码块，
+# 而标签型思考为 0 次——按无歧义标签集合过滤，避免误删正文代码。
+_THINK_CLOSED = [
+    r"<thinking\s*>.*?</thinking\s*>", r"<think\s*>.*?</think\s*>",
+    r"\[thinking\].*?\[/thinking\]", r"\[think\].*?\[/think\]",
+    r"\[思考\].*?\[/思考\]",
+]
+_THINK_OPEN_RE = re.compile(r"<thinking\s*>|<think\s*>|\[thinking\]|\[think\]|\[思考\]", re.IGNORECASE)
+
+
+def _strip_thinking(text: str) -> str:
+    """过滤 content 中内联的思考过程标签（标题生成/历史消息等场景）。
+
+    覆盖三类：
+    - 成对标签块：<thinking>...</thinking> / [think]...[/think] / [思考]...[/思考] 等
+    - 未闭合的开头标签：思考被截断时从标签起整段丢弃
+    - 连续 3+ 空行收敛为 1 空行
+
+    刻意不做的事（与 PR #1 的差异，避免误伤正文）：
+    - 不处理 ~~删除线~~（会误删合法 markdown 删除线）
+    - 不处理反引号对（会误删合法行内代码；本库无反引号型思考的实证）
+    """
+    if not text:
+        return ""
+    for pat in _THINK_CLOSED:
+        text = re.sub(pat, "", text, flags=re.DOTALL | re.IGNORECASE)
+    m = _THINK_OPEN_RE.search(text)
+    if m:
+        text = text[:m.start()]
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def text_of(msg) -> str:
     c = getattr(msg, "content", "")
     if isinstance(c, str):
-        return c
+        return _strip_thinking(c)
     if isinstance(c, list):
-        return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-    return str(c)
+        joined = "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+        return _strip_thinking(joined)
+    return _strip_thinking(str(c))
 
 
 def reconstruct(messages: list) -> list[dict]:
@@ -196,12 +231,16 @@ async def recover_conversations(limit: int | None = None):
 async def _gen_title(conv_id: str, user_text: str, bot_text: str):
     """用模型把首轮对话提炼成 ≤16 字标题。失败静默。"""
     try:
+        # 标题生成不看思考过程：过滤 content 里内联的思考标签
+        clean_bot = _strip_thinking(bot_text).strip() or bot_text
         m = _init_model(os.environ.get("MODEL_NAME", ""))
         prompt = ("请根据以下对话生成一个不超过16个字的中文标题，"
                   "直接输出标题文字，不要引号、不要解释、不要句号。\n"
-                  f"用户：{user_text[:200]}\n助手：{bot_text[:200]}")
+                  f"用户：{user_text[:200]}\n助手：{clean_bot[:200]}")
         r = await m.ainvoke([HumanMessage(content=prompt)])
-        title = r.content.strip().strip('"').strip("“”").strip("《》")[:24]
+        # 先滤思考标签再剥引号：否则滤掉的思考块会露出其后的引号
+        title = _strip_thinking(r.content)
+        title = title.strip().strip('"').strip("“”").strip("《》")[:24]
         if title:
             conversations.set_title(conv_id, title)
     except Exception:
