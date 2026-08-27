@@ -230,13 +230,19 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
         servers = {}
         for name, cfg in spec.mcp_servers.items():
             cfg = dict(cfg)
-            if cfg.get("transport") == "stdio":
+            transport = (cfg.get("transport") or "stdio").lower()
+            if transport == "stdio":
                 # ${PYTHON_BIN} 模板 = 本项目 Python 解释器，args 按仓库相对路径补 ROOT
                 # （保留旧的纯 Python 连接器兼容，如 crm）。其它 command（如 npx）原样透传，
                 # env/args 由配置直接给 MultiServerMCPClient，支持 node 型 MCP 连接器。
                 if cfg.get("command") == "${PYTHON_BIN}":
                     cfg["command"] = sys.executable
                     cfg["args"] = [str(ROOT / a) for a in cfg.get("args", [])]
+            elif transport in ("http", "streamable-http", "streamable_http"):
+                # HTTP 型 MCP server（Streamable HTTP）：连接器配置里 transport 写
+                # "http"/"streamable-http"/"streamable_http" 均可，统一归一化为
+                # langchain-mcp-adapters 要求的 "streamable_http"，url 原样透传。
+                cfg["transport"] = "streamable_http"
             servers[name] = cfg
         try:
             mcp_client = MultiServerMCPClient(servers)

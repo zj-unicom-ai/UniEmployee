@@ -1,5 +1,6 @@
-"""MCP 连接器 stdio 装配测试：验证 compiler 对 node/npx 型连接器透传 command/args/env，
-同时 ${PYTHON_BIN} 纯 Python 连接器保持旧行为（换成本项目解释器 + ROOT 相对路径）。"""
+"""MCP 连接器装配测试：验证 compiler 对 node/npx 型连接器透传 command/args/env，
+${PYTHON_BIN} 纯 Python 连接器保持旧行为（换成本项目解释器 + ROOT 相对路径），
+HTTP 型连接器（Streamable HTTP）归一化为 langchain-mcp-adapters 要求的 transport。"""
 import asyncio
 import sys
 
@@ -70,3 +71,29 @@ def test_python_bin_connector_backward_compat():
     c = servers["crm"]
     assert c["command"] == sys.executable
     assert c["args"] == [str(compiler.ROOT / "app/connectors/crm_server.py")]
+
+
+def test_http_connector_transport_normalized():
+    """HTTP 型连接器：transport "http" 归一化为 "streamable_http"，url 原样透传。"""
+    spec = EmployeeSpec(
+        id="emp_mcp3", name="测试", role="测试",
+        model="dummy-model", persona="人设",
+        mcp_servers={"scrapling": {
+            "url": "http://localhost:8000/mcp", "transport": "http"}},
+    )
+    servers = _run(spec)
+    s = servers["scrapling"]
+    assert s["transport"] == "streamable_http"
+    assert s["url"] == "http://localhost:8000/mcp"
+
+
+def test_streamable_http_alias_normalized():
+    """显式写 "streamable-http"/"streamable_http" 的配置同样归一化不报错。"""
+    for alias in ("streamable-http", "streamable_http"):
+        spec = EmployeeSpec(
+            id="emp_mcp4", name="测试", role="测试",
+            model="dummy-model", persona="人设",
+            mcp_servers={"svc": {"url": "http://x/mcp", "transport": alias}},
+        )
+        servers = _run(spec)
+        assert servers["svc"]["transport"] == "streamable_http"
