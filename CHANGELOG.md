@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 (2026-08-27)
+
+### 重磅变更：数据库迁移 PostgreSQL
+
+- **存储后端由 SQLite 整体切换为 PostgreSQL**（#3）：面向多用户并发与网络访问的企业共享部署场景，SQLite 单写锁不再适用
+- 新增 `app/db.py` 双方言数据访问层：psycopg 连接池 + SQL 方言翻译（`INSERT OR IGNORE→ON CONFLICT`、`AUTOINCREMENT→IDENTITY`、`?→%s`），业务代码保持统一写法；`DB_BACKEND=sqlite` 分支仅测试夹具使用
+- checkpointer / store 切换为官方 `langgraph-checkpoint-postgres`（`AsyncPostgresSaver` / `AsyncPostgresStore`），`streaming.py` 启动恢复兼容 PG 表结构
+- catalog / conversations / traces / approvals / ontology 全部接入访问层；修复 users 主键秒级时间戳碰撞问题
+- `docker-compose.yml` 新增 `db` 服务（postgres:16-alpine，首启自动建 7 个业务库）；新增 `scripts/init_postgres.sql` 与幂等建库脚本 `scripts/init_postgres.sh`（支持 `--host/--port/--prefix`）
+- `backup.sh` 改用 `pg_dump`（支持 `PGBIN` 指定路径）；requirements 增补 psycopg / checkpoint-postgres
+- **升级注意**：`DB_BACKEND=postgres` + `POSTGRES_*` 环境变量必填（见 `.env.example`），存量 SQLite 数据需自行迁入
+
+### 新增
+
+- 运行评估功能：每条回答 👍/👎 反馈（含点踩原因浮层），管理员评估仪表盘（指标卡片 + 日趋势 + Top 工具 + 反馈明细，`AdminEvaluation.vue`）；SSE 新增 `message_end` 事件携带反馈关联 ID
+- 对话附件上传：`/api/conversations/{id}/attachments`（单文件 20MB 限制），附件路径注入消息文本，前端输入栏支持附件选择与消息内附件标签
+- 运行 / 工具错误在对话页可见化，用户不再只看到静默失败
+- 前端聊天视图组件化：ChatView 拆分为 InputBar / ChatMessage / PipelineSidebar / ConversationSidebar / ReasonPopover
+- 开源就绪：CI（后端 pytest + 前端构建）、issue 模板、PR 模板、CODE_OF_CONDUCT / SECURITY / CONTRIBUTING 社区文件
+- 英文 README（`README.en.md`），中英双语切换；LICENSE 修复为标准 MIT 全文，GitHub 正确识别
+
+### 修复
+
+- 过滤 `content` 内联思考标签，防止污染会话标题生成与历史消息展示（#2）
+- 恢复消息评价按钮——聊天视图组件拆分时遗漏了 `message_end` 事件处理导致 `run_id` 为空
+- 可靠性修复：文档工具数据按用户隔离、trace 写入失败可观测（不再静默吞错）、退款审批双路径补充测试
+- 修复全新环境启动与退款审批路径的 bug（开源前回归）
+
+---
+
 ## 0.3.1 (2026-08-04)
 
 ### 新增
