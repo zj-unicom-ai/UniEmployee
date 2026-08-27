@@ -56,6 +56,17 @@
         <n-data-table :columns="relColumns" :data="relations" size="small" :pagination="relPagination" :row-key="r => r.id" />
       </n-tab-pane>
 
+      <!-- 关系图谱 -->
+      <n-tab-pane name="graph" tab="关系图谱">
+        <div class="onto-toolbar">
+          <span class="graph-hint">节点按实体类型着色，连线为关系（中文名）；拖拽节点调整布局，滚轮缩放，点击节点查看详情</span>
+          <div class="spacer" />
+          <n-button size="small" @click="relayoutGraph">重新布局</n-button>
+        </div>
+        <div v-show="relations.length" ref="graphRef" class="onto-graph"></div>
+        <n-empty v-if="!relations.length" description="暂无关系数据，先在「业务关系」中创建" size="large" style="padding:60px 0" />
+      </n-tab-pane>
+
       <!-- 类型定义 -->
       <n-tab-pane name="schema" tab="类型定义">
         <div class="onto-schema">
@@ -145,9 +156,9 @@
     </n-modal>
 
     <!-- 实体类型 新建 弹窗 -->
-    <n-modal v-model:show="typeModal" preset="card" title="新建实体类型" style="width:560px;max-width:92vw">
+    <n-modal v-model:show="typeModal" preset="card" :title="editingType ? '编辑实体类型' : '新建实体类型'" style="width:560px;max-width:92vw">
       <n-form label-placement="left" :label-width="90" size="small">
-        <n-form-item label="代码"><n-input v-model:value="typeForm.code" placeholder="唯一标识，如 customer" /></n-form-item>
+        <n-form-item label="代码"><n-input v-model:value="typeForm.code" :disabled="!!editingType" placeholder="唯一标识，如 customer" /></n-form-item>
         <n-form-item label="名称"><n-input v-model:value="typeForm.name" /></n-form-item>
         <n-form-item label="图标"><n-input v-model:value="typeForm.icon" placeholder="emoji，如 🤝" /></n-form-item>
         <n-form-item label="描述"><n-input v-model:value="typeForm.description" /></n-form-item>
@@ -164,9 +175,9 @@
     </n-modal>
 
     <!-- 关系类型 新建 弹窗 -->
-    <n-modal v-model:show="rtModal" preset="card" title="新建关系类型" style="width:560px;max-width:92vw">
+    <n-modal v-model:show="rtModal" preset="card" :title="editingRt ? '编辑关系类型' : '新建关系类型'" style="width:560px;max-width:92vw">
       <n-form label-placement="left" :label-width="90" size="small">
-        <n-form-item label="代码"><n-input v-model:value="rtForm.code" placeholder="唯一标识，如 follow_up" /></n-form-item>
+        <n-form-item label="代码"><n-input v-model:value="rtForm.code" :disabled="!!editingRt" placeholder="唯一标识，如 follow_up" /></n-form-item>
         <n-form-item label="名称"><n-input v-model:value="rtForm.name" /></n-form-item>
         <n-form-item label="来源类型">
           <n-select v-model:value="rtForm.from_type" :options="typeOptions" filterable />
@@ -188,10 +199,16 @@
 </template>
 
 <script setup>
-import { ref, computed, h, onMounted } from 'vue'
+import { ref, computed, h, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useMessage } from 'naive-ui'
+import * as echarts from 'echarts/core'
+import { GraphChart } from 'echarts/charts'
+import { TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { useAuthStore } from '../stores/auth.js'
 import api from '../api.js'
+
+echarts.use([GraphChart, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const msg = useMessage()
 const auth = useAuthStore()
@@ -254,8 +271,10 @@ const relationModal = ref(false)
 const relationForm = ref({ from_id: null, to_id: null, relation_type: null })
 const typeModal = ref(false)
 const typeForm = ref({})
+const editingType = ref(null)
 const rtModal = ref(false)
 const rtForm = ref({})
+const editingRt = ref(null)
 
 const entityById = id => entities.value.find(e => e.id === id)
 const relName = id => entityById(id)?.name || `#${id}`
@@ -350,6 +369,7 @@ async function delRelation(id) {
 }
 
 function openTypeModal(t) {
+  editingType.value = t || null
   typeForm.value = {
     code: t?.code || '', name: t?.name || '', icon: t?.icon || '',
     description: t?.description || '', attrs: JSON.stringify(t?.attrs || [], null, 1) || '[]',
@@ -359,7 +379,11 @@ function openTypeModal(t) {
 async function saveType() {
   try {
     const body = { ...typeForm.value, attrs: JSON.parse(typeForm.value.attrs || '[]') }
-    await api.post('/admin/ontology/entity-types', body)
+    if (editingType.value) {
+      await api.put(`/admin/ontology/entity-types/${editingType.value.id}`, body)
+    } else {
+      await api.post('/admin/ontology/entity-types', body)
+    }
     msg.success('已保存')
     typeModal.value = false
     reloadAll()
@@ -368,6 +392,7 @@ async function saveType() {
   }
 }
 function openRtModal(t) {
+  editingRt.value = t || null
   rtForm.value = {
     code: t?.code || '', name: t?.name || '', from_type: t?.from_type || null,
     to_type: t?.to_type || null, cardinality: t?.cardinality || 'm:n', description: t?.description || '',
@@ -376,7 +401,11 @@ function openRtModal(t) {
 }
 async function saveRt() {
   try {
-    await api.post('/admin/ontology/relation-types', rtForm.value)
+    if (editingRt.value) {
+      await api.put(`/admin/ontology/relation-types/${editingRt.value.id}`, rtForm.value)
+    } else {
+      await api.post('/admin/ontology/relation-types', rtForm.value)
+    }
     msg.success('已保存')
     rtModal.value = false
     reloadAll()
@@ -386,6 +415,99 @@ async function saveRt() {
 }
 
 onMounted(reloadAll)
+
+// ---------------- 关系图谱 ----------------
+const graphRef = ref(null)
+let chart = null
+let graphEntities = []
+let graphObserver = null
+
+function buildGraphOption() {
+  const ets = schema.value.entity_types || []
+  const categories = ets.map(t => ({ name: t.name }))
+  const catIdx = Object.fromEntries(ets.map((t, i) => [t.code, i]))
+  const degree = {}
+  relations.value.forEach(r => {
+    degree[r.from_id] = (degree[r.from_id] || 0) + 1
+    degree[r.to_id] = (degree[r.to_id] || 0) + 1
+  })
+  const nodes = graphEntities.map(e => ({
+    id: String(e.id),
+    name: e.name,
+    entityType: e.entity_type,
+    category: catIdx[e.entity_type],
+    symbolSize: Math.min(24 + (degree[e.id] || 0) * 4, 56),
+    value: degree[e.id] || 0,
+    itemStyle: catIdx[e.entity_type] === undefined ? { color: '#909399' } : undefined,
+  }))
+  const entMap = Object.fromEntries(graphEntities.map(e => [String(e.id), e]))
+  const links = relations.value.map(r => ({
+    source: String(r.from_id),
+    target: String(r.to_id),
+    value: relTypeName(r.relation_type),
+    lineStyle: { color: 'source', curveness: 0.15 },
+  }))
+  return {
+    tooltip: {
+      confine: true,
+      formatter: p => {
+        if (p.dataType === 'edge') {
+          const from = entMap[p.data.source]?.name || p.data.source
+          const to = entMap[p.data.target]?.name || p.data.target
+          return `${from} —${p.data.value}→ ${to}`
+        }
+        return `<b>${p.data.name}</b><br/>类型：${entityTypeName(p.data.entityType)}<br/>关联数：${p.data.value}`
+      },
+    },
+    legend: [{ data: categories.map(c => c.name), bottom: 0, type: 'scroll' }],
+    series: [{
+      type: 'graph',
+      layout: 'force',
+      roam: true,
+      draggable: true,
+      categories,
+      data: nodes,
+      links,
+      force: { repulsion: 320, edgeLength: [60, 130], gravity: 0.08 },
+      label: { show: true, position: 'right', fontSize: 12 },
+      labelLayout: { hideOverlap: true },
+      edgeLabel: { show: true, fontSize: 10, color: '#999', formatter: p => p.data.value },
+      emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
+      scaleLimit: { min: 0.3, max: 4 },
+    }],
+  }
+}
+
+async function refreshGraphData() {
+  graphEntities = (await api.get('/admin/ontology/entities')).data.items
+  if (chart) chart.setOption(buildGraphOption())
+}
+
+async function ensureGraph() {
+  await nextTick()
+  if (!graphRef.value || chart) return
+  chart = echarts.init(graphRef.value)
+  chart.on('click', p => { if (p.dataType === 'node') openEntityDetail(Number(p.data.id)) })
+  graphObserver = new ResizeObserver(() => chart && chart.resize())
+  graphObserver.observe(graphRef.value)
+  await refreshGraphData()
+}
+
+function relayoutGraph() {
+  if (!chart) return
+  chart.dispose()
+  chart = null
+  ensureGraph()
+}
+
+watch(activeTab, t => { if (t === 'graph') ensureGraph() })
+watch(relations, () => { if (chart) refreshGraphData() })
+
+onBeforeUnmount(() => {
+  graphObserver?.disconnect()
+  chart?.dispose()
+  chart = null
+})
 </script>
 
 <style scoped>
@@ -407,4 +529,6 @@ onMounted(reloadAll)
 .onto-detail-rel { margin-top: 16px; }
 .onto-rel-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .onto-rel-text { flex: 1; font-size: 13px; }
+.onto-graph { height: 560px; border: 1px solid #e0e0e6; border-radius: 8px; }
+.graph-hint { color: #888; font-size: 12px; }
 </style>
