@@ -231,10 +231,10 @@ const etColumns = [
   { title: '名称', key: 'name' },
   { title: '来源', key: 'tenant_id', render: r => h('span', {}, r.tenant_id === 'system' ? '预置' : '自定义') },
   { title: '属性', key: 'attrs', render: r => (r.attrs || []).map(a => a.key).join('、') || '—' },
-  { title: '操作', key: 'op', width: 120, render: r => {
-      if (r.tenant_id === 'system') return h('span', { style: 'color:#aaa' }, '只读')
-      return h('div', {}, [h('n-button', { size: 'tiny', quaternary: true, onClick: () => openTypeModal(r) }, { default: () => '编辑' })])
-    } },
+  { title: '操作', key: 'op', width: 130, render: r => h('div', {}, [
+      h('n-button', { size: 'tiny', quaternary: true, onClick: () => openTypeModal(r) }, { default: () => '编辑' }),
+      h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delType(r) }, { default: () => '删除' }),
+    ]) },
 ]
 const rtColumns = [
   { title: '代码', key: 'code' },
@@ -242,10 +242,10 @@ const rtColumns = [
   { title: '方向', key: 'from_type', render: r => h('span', {}, `${entityTypeName(r.from_type)} → ${entityTypeName(r.to_type)}`) },
   { title: '基数', key: 'cardinality' },
   { title: '来源', key: 'tenant_id', render: r => h('span', {}, r.tenant_id === 'system' ? '预置' : '自定义') },
-  { title: '操作', key: 'op', width: 120, render: r => {
-      if (r.tenant_id === 'system') return h('span', { style: 'color:#aaa' }, '只读')
-      return h('n-button', { size: 'tiny', quaternary: true, onClick: () => openRtModal(r) }, { default: () => '编辑' })
-    } },
+  { title: '操作', key: 'op', width: 130, render: r => h('div', {}, [
+      h('n-button', { size: 'tiny', quaternary: true, onClick: () => openRtModal(r) }, { default: () => '编辑' }),
+      h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRt(r) }, { default: () => '删除' }),
+    ]) },
 ]
 const relColumns = [
   { title: '来源', key: 'from', render: r => h('span', {}, `${relName(r.from_id)}` + (relEntityType(r.from_id) ? `（${entityTypeName(relEntityType(r.from_id))}）` : '')) },
@@ -412,6 +412,28 @@ async function saveRt() {
   } catch (e) {
     msg.error(e.response?.data?.detail || '保存失败')
   }
+}
+
+async function delType(t) {
+  const used = entities.value.filter(e => e.entity_type === t.code).length
+  const tip = used
+    ? `仍有 ${used} 个「${t.name}」实体，删除类型不会删除这些实体（其类型将显示为原始代码）。确定删除？`
+    : `确定删除实体类型「${t.name}（${t.code}）」？`
+  if (!confirm(tip)) return
+  await api.delete(`/admin/ontology/entity-types/${t.id}`)
+  msg.success('已删除')
+  reloadAll()
+}
+
+async function delRt(t) {
+  const used = relations.value.filter(r => r.relation_type === t.code).length
+  const tip = used
+    ? `仍有 ${used} 条「${t.name}」关系实例，删除类型不会删除这些关系（其类型将显示为原始代码）。确定删除？`
+    : `确定删除关系类型「${t.name}（${t.code}）」？`
+  if (!confirm(tip)) return
+  await api.delete(`/admin/ontology/relation-types/${t.id}`)
+  msg.success('已删除')
+  reloadAll()
 }
 
 onMounted(reloadAll)

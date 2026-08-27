@@ -354,11 +354,6 @@ def list_schema(tenant_id: str) -> dict:
     return {"entity_types": ets, "relation_types": rts}
 
 
-def _is_system(con, table, id_, tenant_id):
-    row = con.execute(f"SELECT tenant_id FROM {table} WHERE id=?", (id_,)).fetchone()
-    return row is None or row["tenant_id"] == "system" and tenant_id != "system"
-
-
 def create_entity_type(tenant_id: str, data: dict) -> int:
     code, name = (data.get("code") or "").strip(), (data.get("name") or "").strip()
     if not code or not name:
@@ -386,9 +381,6 @@ def create_entity_type(tenant_id: str, data: dict) -> int:
 
 def update_entity_type(tenant_id: str, id_: int, data: dict) -> None:
     con = _conn()
-    if _is_system(con, "entity_types", id_, tenant_id):
-        con.close()
-        raise ValueError("系统预置类型不可修改")
     attrs = json.dumps(data.get("attrs") or [], ensure_ascii=False)
     con.execute(
         "UPDATE entity_types SET name=?, description=?, icon=?, attrs=?, updated_at=? WHERE id=?",
@@ -399,9 +391,6 @@ def update_entity_type(tenant_id: str, id_: int, data: dict) -> None:
 
 def delete_entity_type(tenant_id: str, id_: int) -> None:
     con = _conn()
-    if _is_system(con, "entity_types", id_, tenant_id):
-        con.close()
-        raise ValueError("系统预置类型不可删除")
     con.execute("UPDATE entity_types SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
                 (_now(), id_))
     con.commit()
@@ -435,22 +424,18 @@ def create_relation_type(tenant_id: str, data: dict) -> int:
 
 def update_relation_type(tenant_id: str, id_: int, data: dict) -> None:
     con = _conn()
-    if _is_system(con, "relation_types", id_, tenant_id):
-        con.close()
-        raise ValueError("系统预置关系类型不可修改")
+    # from_type/to_type NOT NULL：未传时保留原值（COALESCE）
     con.execute(
-        "UPDATE relation_types SET name=?, from_type=?, to_type=?, cardinality=?, description=?, updated_at=? WHERE id=?",
+        "UPDATE relation_types SET name=?, from_type=COALESCE(?, from_type), to_type=COALESCE(?, to_type),"
+        " cardinality=COALESCE(?, cardinality), description=?, updated_at=? WHERE id=?",
         (data.get("name"), data.get("from_type"), data.get("to_type"),
-         data.get("cardinality") or "m:n", data.get("description"), _now(), id_))
+         data.get("cardinality"), data.get("description"), _now(), id_))
     con.commit()
     con.close()
 
 
 def delete_relation_type(tenant_id: str, id_: int) -> None:
     con = _conn()
-    if _is_system(con, "relation_types", id_, tenant_id):
-        con.close()
-        raise ValueError("系统预置关系类型不可删除")
     con.execute("UPDATE relation_types SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
                 (_now(), id_))
     con.commit()
