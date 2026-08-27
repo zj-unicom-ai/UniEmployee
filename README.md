@@ -1,5 +1,9 @@
 # UniEmployee 数字员工平台
 
+中文 | **[English](README.en.md)**
+
+UniEmployee is an enterprise platform for building and running AI digital employees — turn staff experience, business processes, and judgment into always-on, configurable, approval-gated, and fully observable AI employees.
+
 [![CI](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml/badge.svg)](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](backend/pyproject.toml)
