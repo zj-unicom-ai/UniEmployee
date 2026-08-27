@@ -2,8 +2,6 @@
 
 中文 | **[English](README.en.md)**
 
-UniEmployee is an enterprise platform for building and running AI digital employees — turn staff experience, business processes, and judgment into always-on, configurable, approval-gated, and fully observable AI employees.
-
 [![CI](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml/badge.svg)](https://github.com/zj-unicom-ai/UniEmployee/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](backend/pyproject.toml)
@@ -15,7 +13,7 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 
 ## 核心亮点
 
-- 🧑‍💼 **数字员工构建与管理**：人设、模型、技能、工具、知识库、SOP、连接器全部页面化配置，运行时以目录库为准；内置 5 个示例员工（客服 / 数据分析 / 销售顾问 / HR / 经营分析），支持软删除与恢复。
+- 🧑‍💼 **数字员工构建与管理**：人设、模型、技能、工具、知识库、SOP、连接器全部页面化配置，运行时以目录库为准；内置 6 个示例员工（客服 / 数据分析 / 销售顾问 / HR / 经营分析 / 网络运营），支持软删除与恢复。
 - 🧩 **流程型技能与 SOP**：技能以 `SKILL.md` 规程沉淀（含触发条件与执行步骤），播种进 Store 供模型按需查阅，不凭记忆跳过；关键业务流程可用 StateGraph 状态机固化（含人工审批节点），保证多步流程准确执行。
 - 📚 **企业知识本体**：知识按主题、规则、规程与来源组织为带业务语义的结构化资产，数字员工基于真实资料作答并标注来源；已接入 FAQ、产品 Wiki 与 RAGFlow 多源知识，概念类型化与检索调试持续建设中。
 - 🔌 **连接器与工具生态**：通过 MCP 标准接入 CRM、新闻等外部系统（stdio 与 npx 两种形态），内置工单、搜索、文档生成、数据分析等原子工具，业务系统可轻松扩展。
@@ -205,6 +203,7 @@ Employee ── 数字员工（人设 / 模型 / 技能 / 工具 / 知识库 / �
 | `xiaoxiao` | 销售顾问 | 企业销售、方案文档生成 | CRM |
 | `hrbp` | HR 合作伙伴 | HR 助手 | CRM |
 | `biz-analyzer` | 经营分析与决策顾问 | 经营全景、归因分析、决策分析、市场情报 | — |
+| `net-ops` | 网络运营专家 | 故障影响分析（基站退服场景打样本体多跳查询） | — |
 
 > 内置技能存于 `backend/skills/`（各含 `SKILL.md` 规程）。其中 `frontend-design` 技能基于 [Matt Pocock](https://github.com/mattpocock) 的开源技能库编写，按 [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt) 分发，其内独立附带原始许可证。
 

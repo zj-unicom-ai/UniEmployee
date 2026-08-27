@@ -13,7 +13,7 @@ Through its five-layer capability model — **Employee → Workflow/SOP → Skil
 
 ## Highlights
 
-- 🧑‍💼 **Digital Employee Building & Management** — Persona, model, skills, tools, knowledge bases, SOPs, and connectors are all configured through a web UI; the runtime reads everything from a catalog database. Five example employees ship out of the box (customer service / data analyst / sales advisor / HR / business analyst), with soft-delete and restore.
+- 🧑‍💼 **Digital Employee Building & Management** — Persona, model, skills, tools, knowledge bases, SOPs, and connectors are all configured through a web UI; the runtime reads everything from a catalog database. Six example employees ship out of the box (customer service / data analyst / sales advisor / HR / business analyst / network ops), with soft-delete and restore.
 - 🧩 **Process Skills & SOPs** — Skills are captured as `SKILL.md` playbooks (with trigger conditions and execution steps), seeded into the Store for the model to consult on demand — no more skipping steps from memory. Critical business flows can be hardened as StateGraph state machines (with human approval nodes) to guarantee multi-step accuracy.
 - 📚 **Enterprise Knowledge Ontology** — Knowledge is organized as structured assets with business semantics (topics, rules, playbooks, sources); digital employees answer from real material with cited sources. FAQ, markdown product wiki, and RAGFlow vector retrieval are already integrated.
 - 🔌 **Connector & Tool Ecosystem** — Connect external systems such as CRM and news via the MCP standard (stdio and npx). Built-in atomic tools for tickets, search, document generation, and data analysis make business-system extension easy.
@@ -186,6 +186,7 @@ The current release ships with a product FAQ knowledge base, markdown product wi
 | `xiaoxiao` | Sales advisor | Enterprise sales, solution doc generation | CRM |
 | `hrbp` | HR partner | HR assistant | CRM |
 | `biz-analyzer` | Business analysis & decision advisor | Business overview, root-cause analysis, decision analysis, market intelligence | — |
+| `net-ops` | Network operations expert | Fault impact analysis (base-station outage scenario showcasing multi-hop ontology queries) | — |
 
 > Built-in skills live in `backend/skills/` (each with a `SKILL.md` playbook). The `frontend-design` skill is based on [Matt Pocock](https://github.com/mattpocock)'s open-source skill library and distributed under [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt), with the original license attached therein.
 
