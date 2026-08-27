@@ -200,7 +200,7 @@
 
 <script setup>
 import { ref, computed, h, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useMessage, NButton, NTag, NSpace } from 'naive-ui'
 import * as echarts from 'echarts/core'
 import { GraphChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent } from 'echarts/components'
@@ -231,10 +231,10 @@ const etColumns = [
   { title: '名称', key: 'name' },
   { title: '来源', key: 'tenant_id', render: r => h('span', {}, r.tenant_id === 'system' ? '预置' : '自定义') },
   { title: '属性', key: 'attrs', render: r => (r.attrs || []).map(a => a.key).join('、') || '—' },
-  { title: '操作', key: 'op', width: 130, render: r => h('div', {}, [
-      h('n-button', { size: 'tiny', quaternary: true, onClick: () => openTypeModal(r) }, { default: () => '编辑' }),
-      h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delType(r) }, { default: () => '删除' }),
-    ]) },
+  { title: '操作', key: 'op', width: 150, render: r => h(NSpace, { size: 'small' }, { default: () => [
+      h(NButton, { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openTypeModal(r) }, { default: () => '编辑' }),
+      h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => delType(r) }, { default: () => '删除' }),
+    ] }) },
 ]
 const rtColumns = [
   { title: '代码', key: 'code' },
@@ -242,16 +242,16 @@ const rtColumns = [
   { title: '方向', key: 'from_type', render: r => h('span', {}, `${entityTypeName(r.from_type)} → ${entityTypeName(r.to_type)}`) },
   { title: '基数', key: 'cardinality' },
   { title: '来源', key: 'tenant_id', render: r => h('span', {}, r.tenant_id === 'system' ? '预置' : '自定义') },
-  { title: '操作', key: 'op', width: 130, render: r => h('div', {}, [
-      h('n-button', { size: 'tiny', quaternary: true, onClick: () => openRtModal(r) }, { default: () => '编辑' }),
-      h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRt(r) }, { default: () => '删除' }),
-    ]) },
+  { title: '操作', key: 'op', width: 150, render: r => h(NSpace, { size: 'small' }, { default: () => [
+      h(NButton, { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openRtModal(r) }, { default: () => '编辑' }),
+      h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRt(r) }, { default: () => '删除' }),
+    ] }) },
 ]
 const relColumns = [
   { title: '来源', key: 'from', render: r => h('span', {}, `${relName(r.from_id)}` + (relEntityType(r.from_id) ? `（${entityTypeName(relEntityType(r.from_id))}）` : '')) },
-  { title: '关系', key: 'relation_type', render: r => h('n-tag', { size: 'tiny', round: true, bordered: true, title: r.relation_type }, { default: () => relTypeName(r.relation_type) }) },
+  { title: '关系', key: 'relation_type', render: r => h(NTag, { size: 'tiny', round: true, bordered: true, title: r.relation_type }, { default: () => relTypeName(r.relation_type) }) },
   { title: '目标', key: 'to', render: r => h('span', {}, `${relName(r.to_id)}` + (relEntityType(r.to_id) ? `（${entityTypeName(relEntityType(r.to_id))}）` : '')) },
-  { title: '操作', key: 'op', width: 90, render: r => h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRelation(r.id) }, { default: () => '删除' }) },
+  { title: '操作', key: 'op', width: 90, render: r => h(NButton, { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRelation(r.id) }, { default: () => '删除' }) },
 ]
 const relPagination = { pageSize: 15 }
 
