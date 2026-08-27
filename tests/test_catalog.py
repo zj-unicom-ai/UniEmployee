@@ -44,6 +44,33 @@ def test_employee_crud_and_interrupt_derivation():
     assert catalog.get_employee_config(eid) is None
 
 
+def test_backfill_employees_if_missing_adds_netops():
+    """老库补种：net-ops 员工缺失时由 backfill 补回（含技能/工具/本体工具）。"""
+    catalog.init()
+    catalog.seed_if_empty()  # 新库播种已含 net-ops
+    assert catalog.get_employee_config("net-ops")["name"] == "小网"
+    assert "fault-impact-analysis" in catalog.get_employee_config("net-ops")["skills"]
+
+    # 模拟老库（无 net-ops）：硬删相关行后 backfill 应补回
+    con = sqlite3.connect(str(catalog.db.DB))
+    for tbl in ("employee_skills", "employee_tools", "employee_kbs",
+                "employee_sops", "employee_connectors"):
+        con.execute(f"DELETE FROM {tbl} WHERE employee_id='net-ops'")
+    con.execute("DELETE FROM user_employee_assignments WHERE employee_id='net-ops'")
+    con.execute("DELETE FROM employees WHERE id='net-ops'")
+    con.commit()
+    con.close()
+    assert catalog.get_employee_config("net-ops") is None
+
+    catalog.backfill_employees_if_missing()
+    cfg = catalog.get_employee_config("net-ops")
+    assert cfg is not None and cfg["name"] == "小网"
+    assert "ontology_find_entities" in cfg["tools"]
+    assert "fault-impact-analysis" in cfg["skills"]
+    # 幂等：再跑一次不重复
+    catalog.backfill_employees_if_missing()
+
+
 # ---- 知识库（RAGFlow 映射） ----
 
 def test_kb_crud_only_tracks_ragflow_dataset_mapping():
