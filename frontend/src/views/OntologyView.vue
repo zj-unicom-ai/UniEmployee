@@ -11,7 +11,7 @@
       <n-card size="small" class="stat-card grow">
         <div class="type-badges">
           <n-tag v-for="t in (stats.by_type || [])" :key="t.entity_type" size="small" round bordered>
-            {{ t.entity_type }} × {{ t.c }}
+            {{ entityTypeName(t.entity_type) }} × {{ t.c }}
           </n-tag>
         </div>
       </n-card>
@@ -31,11 +31,11 @@
           <div v-for="e in entities" :key="e.id" class="res-card onto-card" @click="openEntityDetail(e.id)">
             <div class="card-head">
               <span class="card-name">{{ e.name }}</span>
-              <n-tag size="tiny" round bordered>{{ e.entity_type }}</n-tag>
+              <n-tag size="tiny" round bordered>{{ entityTypeName(e.entity_type) }}</n-tag>
             </div>
             <div class="onto-props">
               <div v-for="(v, k) in propPreview(e)" :key="k" class="onto-prop">
-                <span class="onto-prop-key">{{ k }}</span>
+                <span class="onto-prop-key">{{ attrName(e.entity_type, k) }}</span>
                 <span class="onto-prop-val">{{ v }}</span>
               </div>
             </div>
@@ -81,8 +81,8 @@
     <n-drawer v-model:show="detailShow" :width="480">
       <n-drawer-content :title="detailEntity?.name" closable>
         <n-descriptions v-if="detailEntity" :column="1" label-placement="left" size="small">
-          <n-descriptions-item label="类型">{{ detailEntity.entity_type }}</n-descriptions-item>
-          <n-descriptions-item v-for="(v, k) in detailProps" :key="k" :label="k">{{ v }}</n-descriptions-item>
+          <n-descriptions-item label="类型">{{ entityTypeName(detailEntity.entity_type) }}</n-descriptions-item>
+          <n-descriptions-item v-for="(v, k) in detailProps" :key="k" :label="attrName(detailEntity.entity_type, k)">{{ v }}</n-descriptions-item>
         </n-descriptions>
         <div class="onto-detail-rel">
           <div class="res-title">关联关系（{{ detailEntity?.relations?.length || 0 }}）</div>
@@ -91,7 +91,7 @@
             <n-tag size="tiny" :type="r.from_id === detailEntity.id ? 'success' : 'warning'" round bordered>
               {{ r.from_id === detailEntity.id ? '发出' : '接收' }}
             </n-tag>
-            <span class="onto-rel-text">{{ r.relation_type }} → {{ relTargetName(r) }}</span>
+            <span class="onto-rel-text">{{ relTypeName(r.relation_type) }} → {{ relTargetName(r) }}</span>
             <n-button size="tiny" quaternary type="error" @click="delRelation(r.id)">删除</n-button>
           </div>
           <n-button size="small" type="primary" ghost style="margin-top:12px" @click="openRelationModal(detailEntity)">
@@ -206,7 +206,7 @@ const keyword = ref('')
 
 const typeOptions = computed(() => (schema.value.entity_types || []).map(t => ({ label: `${t.icon || ''} ${t.name}（${t.code}）`, value: t.code })))
 const relationTypeOptions = computed(() => (schema.value.relation_types || []).map(t => ({ label: `${t.name}（${t.code}）`, value: t.code })))
-const entityOptions = computed(() => entities.value.map(e => ({ label: `【${e.entity_type}】${e.name}`, value: e.id })))
+const entityOptions = computed(() => entities.value.map(e => ({ label: `【${entityTypeName(e.entity_type)}】${e.name}`, value: e.id })))
 const isAdmin = computed(() => auth.isAdmin)
 
 const etColumns = [
@@ -222,7 +222,7 @@ const etColumns = [
 const rtColumns = [
   { title: '代码', key: 'code' },
   { title: '名称', key: 'name' },
-  { title: '方向', key: 'from_type', render: r => h('span', {}, `${r.from_type} → ${r.to_type}`) },
+  { title: '方向', key: 'from_type', render: r => h('span', {}, `${entityTypeName(r.from_type)} → ${entityTypeName(r.to_type)}`) },
   { title: '基数', key: 'cardinality' },
   { title: '来源', key: 'tenant_id', render: r => h('span', {}, r.tenant_id === 'system' ? '预置' : '自定义') },
   { title: '操作', key: 'op', width: 120, render: r => {
@@ -231,9 +231,9 @@ const rtColumns = [
     } },
 ]
 const relColumns = [
-  { title: '来源', key: 'from', render: r => h('span', {}, `${relName(r.from_id)}` + (relEntityType(r.from_id) ? `（${relEntityType(r.from_id)}）` : '')) },
-  { title: '关系', key: 'relation_type', render: r => h('n-tag', { size: 'tiny', round: true, bordered: true }, { default: () => r.relation_type }) },
-  { title: '目标', key: 'to', render: r => h('span', {}, `${relName(r.to_id)}` + (relEntityType(r.to_id) ? `（${relEntityType(r.to_id)}）` : '')) },
+  { title: '来源', key: 'from', render: r => h('span', {}, `${relName(r.from_id)}` + (relEntityType(r.from_id) ? `（${entityTypeName(relEntityType(r.from_id))}）` : '')) },
+  { title: '关系', key: 'relation_type', render: r => h('n-tag', { size: 'tiny', round: true, bordered: true, title: r.relation_type }, { default: () => relTypeName(r.relation_type) }) },
+  { title: '目标', key: 'to', render: r => h('span', {}, `${relName(r.to_id)}` + (relEntityType(r.to_id) ? `（${entityTypeName(relEntityType(r.to_id))}）` : '')) },
   { title: '操作', key: 'op', width: 90, render: r => h('n-button', { size: 'tiny', quaternary: true, type: 'error', onClick: () => delRelation(r.id) }, { default: () => '删除' }) },
 ]
 const relPagination = { pageSize: 15 }
@@ -260,6 +260,11 @@ const rtForm = ref({})
 const entityById = id => entities.value.find(e => e.id === id)
 const relName = id => entityById(id)?.name || `#${id}`
 const relEntityType = id => entityById(id)?.entity_type || ''
+// code → 中文名映射（schema 未加载或自定义类型缺名时回退显示 code）
+const entityTypeName = code => (schema.value.entity_types || []).find(t => t.code === code)?.name || code
+const relTypeName = code => (schema.value.relation_types || []).find(t => t.code === code)?.name || code
+const attrName = (typeCode, key) =>
+  (schema.value.entity_types || []).find(t => t.code === typeCode)?.attrs?.find(a => a.key === key)?.name || key
 const propPreview = e => {
   const p = e.props || {}
   return Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== '').slice(0, 3))
