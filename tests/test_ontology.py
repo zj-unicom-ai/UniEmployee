@@ -122,22 +122,25 @@ def test_relation_constraint_validation():
     ontology.delete_relation("default", rid)
 
 
-def test_system_schema_is_readonly():
+def test_system_schema_is_editable():
     ontology.init()
     ontology.seed_schema_if_empty()
     sys_et = ontology.list_schema("default")["entity_types"][0]
     sys_rt = ontology.list_schema("default")["relation_types"][0]
 
-    try:
-        ontology.delete_entity_type("default", sys_et["id"])
-        assert False, "系统预置类型不可删除"
-    except ValueError:
-        pass
-    try:
-        ontology.update_relation_type("default", sys_rt["id"], {"name": "x"})
-        assert False, "系统预置关系类型不可修改"
-    except ValueError:
-        pass
+    # 系统预置类型可编辑（code 不可改，name/属性等可改）
+    ontology.update_entity_type("default", sys_et["id"], {"name": "改名", "description": "d", "icon": "🏷️", "attrs": []})
+    got = [t for t in ontology.list_schema("default")["entity_types"] if t["id"] == sys_et["id"]][0]
+    assert got["name"] == "改名"
+    ontology.update_relation_type("default", sys_rt["id"], {"name": "隶属于2", "description": "d"})
+    got_rt = [t for t in ontology.list_schema("default")["relation_types"] if t["id"] == sys_rt["id"]][0]
+    assert got_rt["name"] == "隶属于2"
+
+    # 系统预置类型可删除
+    ontology.delete_entity_type("default", sys_et["id"])
+    assert not any(t["id"] == sys_et["id"] for t in ontology.list_schema("default")["entity_types"])
+    ontology.delete_relation_type("default", sys_rt["id"])
+    assert not any(t["id"] == sys_rt["id"] for t in ontology.list_schema("default")["relation_types"])
 
     # 租户自定义类型可建可删
     cid = ontology.create_entity_type("default", {"code": "vendor", "name": "供应商", "attrs": []})
