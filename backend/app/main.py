@@ -52,12 +52,15 @@ async def lifespan(app):
     catalog.backfill_employee_kb_assignments()
     catalog.backfill_subagents_if_empty()
     catalog.backfill_ontology_tools()
+    catalog.backfill_employees_if_missing()
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()
     ontology.init()
     ontology.seed_schema_if_empty()
+    ontology.backfill_schema_types()
     ontology.seed_demo_if_empty()
+    ontology.seed_netops_demo_if_empty()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

@@ -44,7 +44,7 @@ def test_seed_admin_creates_when_empty(monkeypatch):
 def test_seed_if_empty_works_with_soft_delete_migration():
     """迁移后的表含 deleted_at，种子 INSERT 必须显式列名（容器首次启动会走这里）。"""
     catalog.seed_if_empty()
-    assert len(catalog.list_employees_meta()) == 5
+    assert len(catalog.list_employees_meta()) == 6
     assert catalog.get_skill("product-faq") is not None
 
 

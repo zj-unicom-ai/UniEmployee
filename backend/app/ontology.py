@@ -139,6 +139,17 @@ SCHEMA_ENTITY_TYPES = [
         {"key": "date", "name": "下单日期", "type": "text"},
         {"key": "detail", "name": "明细", "type": "textarea"},
     ]),
+    ("station", "基站", "网络运营的基站/接入网点", "📡", [
+        {"key": "code", "name": "基站编号", "type": "text"},
+        {"key": "address", "name": "站址", "type": "text"},
+        {"key": "status", "name": "运行状态", "type": "text"},
+        {"key": "tech", "name": "制式", "type": "text"},
+    ]),
+    ("area", "片区", "基站覆盖的业务片区", "🗺️", [
+        {"key": "households", "name": "覆盖户数", "type": "text"},
+        {"key": "priority", "name": "保障等级", "type": "text"},
+        {"key": "intro", "name": "简介", "type": "textarea"},
+    ]),
 ]
 
 # 模式层预置：9 个关系类型（system 租户，全局共享）
@@ -152,6 +163,9 @@ SCHEMA_RELATION_TYPES = [
     ("correspond_to", "对应", "project", "contract", "1:1", "项目对应某合同"),
     ("place_order", "下单", "customer", "order", "1:n", "客户下达订单"),
     ("include", "包含", "order", "product", "1:n", "订单包含产品"),
+    ("cover", "覆盖", "station", "area", "1:n", "基站覆盖某片区"),
+    ("maintain", "维护", "employee", "station", "n:n", "装维人员维护某基站"),
+    ("located_in", "居住于", "customer", "area", "n:1", "客户位于某片区"),
 ]
 
 # 数据层演示种子：虚拟企业「星云科技」（default 租户）
@@ -237,6 +251,26 @@ def seed_schema_if_empty():
     con.commit()
     con.close()
     print(f"[ontology] 已播种模式层：{len(SCHEMA_ENTITY_TYPES)} 实体类型 / {len(SCHEMA_RELATION_TYPES)} 关系类型")
+
+
+def backfill_schema_types():
+    """幂等补齐预置模式层类型（新库由 seed_schema_if_empty 写入；
+    老库新增类型靠这里 INSERT OR IGNORE 补缺，不覆盖管理员自定义）。"""
+    con = _conn()
+    cur = con.cursor()
+    now = _now()
+    for code, name, desc, icon, attrs in SCHEMA_ENTITY_TYPES:
+        cur.execute(
+            "INSERT OR IGNORE INTO entity_types(code,name,description,icon,attrs,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (code, name, desc, icon, json.dumps(attrs, ensure_ascii=False), "system", now, now))
+    for code, name, frm, to, card, desc in SCHEMA_RELATION_TYPES:
+        cur.execute(
+            "INSERT OR IGNORE INTO relation_types(code,name,from_type,to_type,cardinality,description,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (code, name, frm, to, card, desc, "system", now, now))
+    con.commit()
+    con.close()
 
 
 def seed_demo_if_empty():
@@ -326,6 +360,114 @@ def seed_demo_if_empty():
     con.commit()
     con.close()
     print("[ontology] 已播种演示数据：星云科技（5 部门 / 6 员工 / 4 客户 / 3 项目 / 3 合同 / 4 订单）")
+
+
+# 数据层演示种子：网络运营场景「星联通信」（default 租户，与星云科技并存）
+_NETOPS_EMPLOYEES = [
+    ("李建国", {"title": "网络监控值班长", "phone": "13800001001", "status": "在职"}),
+    ("王强", {"title": "装维工程师", "phone": "13800001002", "status": "在职"}),
+    ("赵敏", {"title": "装维工程师", "phone": "13800001003", "status": "在职"}),
+    ("陈涛", {"title": "装维工程师", "phone": "13800001004", "status": "在职"}),
+]
+_NETOPS_AREAS = [
+    ("城东片区", {"households": "1.2 万", "priority": "普通", "intro": "老城区以东，住宅为主"}),
+    ("高新区片区", {"households": "0.8 万", "priority": "重点保障", "intro": "高新技术企业园区，含政企客户"}),
+    ("老城片区", {"households": "0.6 万", "priority": "普通", "intro": "老城核心商圈"}),
+]
+_NETOPS_STATIONS = [
+    ("城东1号基站", {"code": "BS-001", "address": "城东街道88号", "status": "正常", "tech": "5G"}),
+    ("城东2号基站", {"code": "BS-002", "address": "城东路与纬三路交叉口", "status": "正常", "tech": "5G"}),
+    ("高新区1号基站", {"code": "BS-003", "address": "高新大道1号园区北门", "status": "退服", "tech": "5G"}),
+    ("老城1号基站", {"code": "BS-004", "address": "老城中路12号", "status": "升级中", "tech": "4G→5G"}),
+]
+_NETOPS_CUSTOMERS = [
+    ("张桂芳", {"grade": "VIP", "contact": "13911112222", "industry": "个人",
+                "intro": "城东片区个人VIP客户"}),
+    ("刘志远", {"grade": "普通", "contact": "13933334444", "industry": "个人",
+                "intro": "城东片区个人客户"}),
+    ("杭州智造科技", {"grade": "VIP", "contact": "0571-88990000", "industry": "智能制造",
+                       "intro": "高新区政企VIP客户，专线+组网业务"}),
+    ("王秀英", {"grade": "普通", "contact": "13955556666", "industry": "个人",
+                "intro": "高新区个人客户"}),
+    ("周明轩", {"grade": "VIP", "contact": "13977778888", "industry": "个人",
+                "intro": "老城片区个人VIP客户"}),
+]
+
+
+def seed_netops_demo_if_empty():
+    """网络运营演示种子：default 租户无基站实体时播种（幂等）。
+
+    场景主线：基站退服 → 覆盖片区 → 受影响客户（筛VIP）→ 装维负责人，
+    用于展示本体的多跳关系查询能力。
+    """
+    con = _conn()
+    has_station = con.execute(
+        "SELECT 1 FROM entities WHERE entity_type='station' AND tenant_id='default' AND deleted_at IS NULL"
+    ).fetchone()
+    if has_station:
+        con.close()
+        return
+    now = _now()
+    ids: dict[tuple, int] = {}
+
+    def add(type_, name, props):
+        ids[(type_, name)] = dblayer.insert_returning_id(
+            con,
+            "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (type_, name, json.dumps(props, ensure_ascii=False), "default", now, now))
+
+    def link(frm, to, rel):
+        con.execute(
+            "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,'{}',?,?,?)",
+            (frm, to, rel, "default", now, now))
+
+    add("org", "星联通信", {
+        "industry": "通信运营", "scale": "1000+ 人",
+        "address": "杭州市滨江区",
+        "intro": "演示用虚拟运营商，用于网络运营场景（基站/片区/装维/客户保障）展示。"})
+    add("department", "网络运营部", {"function": "网络运营与维护", "head": "李建国",
+                                    "intro": "负责基站运维、装维调度与客户网络保障"})
+    link(ids[("org", "星联通信")], ids[("department", "网络运营部")], "belong_to")
+
+    for name, props in _NETOPS_EMPLOYEES:
+        add("employee", name, props)
+        link(ids[("employee", name)], ids[("department", "网络运营部")], "belongs_to")
+    link(ids[("employee", "李建国")], ids[("department", "网络运营部")], "manage")
+
+    for name, props in _NETOPS_AREAS:
+        add("area", name, props)
+    for name, props in _NETOPS_STATIONS:
+        add("station", name, props)
+    for name, props in _NETOPS_CUSTOMERS:
+        add("customer", name, props)
+
+    # 基站-片区（覆盖）
+    for station, area in [
+        ("城东1号基站", "城东片区"), ("城东2号基站", "城东片区"),
+        ("高新区1号基站", "高新区片区"), ("老城1号基站", "老城片区"),
+    ]:
+        link(ids[("station", station)], ids[("area", area)], "cover")
+
+    # 装维人员-基站（维护）
+    for emp, station in [
+        ("王强", "城东1号基站"), ("王强", "城东2号基站"),
+        ("赵敏", "高新区1号基站"), ("陈涛", "老城1号基站"),
+    ]:
+        link(ids[("employee", emp)], ids[("station", station)], "maintain")
+
+    # 客户-片区（居住于）
+    for customer, area in [
+        ("张桂芳", "城东片区"), ("刘志远", "城东片区"),
+        ("杭州智造科技", "高新区片区"), ("王秀英", "高新区片区"),
+        ("周明轩", "老城片区"),
+    ]:
+        link(ids[("customer", customer)], ids[("area", area)], "located_in")
+
+    con.commit()
+    con.close()
+    print("[ontology] 已播种网络运营演示数据：星联通信（4 员工 / 4 基站 / 3 片区 / 5 客户）")
 
 
 # ---------------- Schema CRUD ----------------

@@ -46,6 +46,34 @@ def _tools_with_ontology(tools: list[str]) -> list[str]:
     return tools + list(ONTOLOGY_TOOLS)
 
 
+# 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
+EMPLOYEE_SEEDS = {
+    "xiaosu": dict(
+        skills=["product-faq", "complaint-handling"],
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "start_refund"]),
+        kbs=[], sops=["sop_refund", "sop_complaint"], cons=["crm"]),
+    "xiaoshu": dict(
+        skills=["data-analysis"], tools=_tools_with_ontology([]), kbs=[], sops=[]),
+    "xiaoxiao": dict(
+        skills=["enterprise-sales"],
+        tools=_tools_with_ontology(["kb_search", "bocha_search"]),
+        kbs=[]),
+    "hrbp": dict(
+        skills=["hr-assistant"],
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"]),
+        kbs=[]),
+    "biz-analyzer": dict(
+        skills=["business-overview", "root-cause-analysis",
+                "decision-analysis", "market-intelligence"],
+        tools=_tools_with_ontology(["run_python", "bocha_search", "get_current_time"]),
+        kbs=[], sops=[], cons=[]),
+    "net-ops": dict(
+        skills=["fault-impact-analysis"],
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
+        kbs=[], sops=[], cons=[]),
+}
+
+
 def seed_if_empty():
     """把现有员工 + 目录种子进库（仅当 employees 为空时）。"""
     con = _conn()
@@ -140,29 +168,7 @@ def seed_if_empty():
             (cid, cname, cdesc, json.dumps(ccfg, ensure_ascii=False)))
 
     # --- employees ---
-    seeds = {
-        "xiaosu": dict(
-            skills=["product-faq", "complaint-handling"],
-            tools=_tools_with_ontology(["kb_search", "create_ticket", "start_refund"]),
-            kbs=[],
-            sops=["sop_refund", "sop_complaint"], cons=["crm"]),
-        "xiaoshu": dict(
-            skills=["data-analysis"], tools=_tools_with_ontology([]), kbs=[], sops=[]),
-        "xiaoxiao": dict(
-            skills=["enterprise-sales"],
-            tools=_tools_with_ontology(["kb_search", "bocha_search"]),
-            kbs=[]),
-        "hrbp": dict(
-            skills=["hr-assistant"],
-            tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"]),
-            kbs=[]),
-        "biz-analyzer": dict(
-            skills=["business-overview", "root-cause-analysis",
-                    "decision-analysis", "market-intelligence"],
-            tools=_tools_with_ontology(["run_python", "bocha_search", "get_current_time"]),
-            kbs=[], sops=[], cons=[]),
-    }
-    for emp_id, sel in seeds.items():
+    for emp_id, sel in EMPLOYEE_SEEDS.items():
         spec = load_spec(str(ROOT / "employees" / f"{emp_id}.yaml"))
         model = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), m.group(0)),
                        spec.model)
@@ -229,13 +235,72 @@ def backfill_ontology_tools():
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
             "VALUES(?,?,?,?,?)",
             (tid, name, desc, "local", None))
-    for e in ("xiaosu", "xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer"):
+    for e in ("xiaosu", "xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops"):
         if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
     con.commit()
     con.close()
+
+
+def backfill_employees_if_missing():
+    """幂等补齐内置种子员工：新库由 seed_if_empty 全量写入；老库升级新增的
+    员工（如 net-ops）靠这里补种。已存在（含软删除）的员工不覆盖，
+    尊重管理员在资源中心的改动与删除。"""
+    con = _conn()
+    cur = con.cursor()
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # 老库可能缺新技能目录（如 fault-impact-analysis），扫描 skills/ 补登记
+    for sd in sorted((ROOT / "skills").glob("*/")):
+        cur.execute(
+            "INSERT OR IGNORE INTO skills(id,name,description,dir) VALUES(?,?,?,?)",
+            (sd.name, sd.name, _skill_desc(sd), f"skills/{sd.name}"))
+
+    added = []
+    for emp_id, sel in EMPLOYEE_SEEDS.items():
+        if cur.execute("SELECT 1 FROM employees WHERE id=?", (emp_id,)).fetchone():
+            continue  # 已存在（含软删除）：不覆盖
+        yaml_path = ROOT / "employees" / f"{emp_id}.yaml"
+        if not yaml_path.exists():
+            continue
+        spec = load_spec(str(yaml_path))
+        model = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), m.group(0)),
+                       spec.model)
+        cur.execute(
+            "INSERT INTO employees(id,name,role,model,persona,backend,mcp_servers,"
+            "interrupt_on,subagents,subagent_policy,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (emp_id, spec.name, spec.role, model, spec.persona, spec.backend,
+             json.dumps(spec.mcp_servers, ensure_ascii=False),
+             json.dumps(spec.interrupt_on, ensure_ascii=False),
+             json.dumps(spec.subagents, ensure_ascii=False),
+             spec.subagent_policy, now, now))
+        for s in sel.get("skills", []):
+            cur.execute("INSERT OR IGNORE INTO employee_skills VALUES(?,?)", (emp_id, s))
+        for t in sel.get("tools", []):
+            cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (emp_id, t))
+        for k in sel.get("kbs", []):
+            cur.execute("INSERT OR IGNORE INTO employee_kbs VALUES(?,?)", (emp_id, k))
+        for s in sel.get("sops", []):
+            cur.execute("INSERT OR IGNORE INTO employee_sops VALUES(?,?)", (emp_id, s))
+        for c in sel.get("cons", []):
+            cur.execute("INSERT OR IGNORE INTO employee_connectors VALUES(?,?)", (emp_id, c))
+        added.append(emp_id)
+
+    # 新补种的员工授予所有现有用户（管理员之后可在用户管理里回收）
+    if added:
+        for u in list_users():
+            for emp_id in added:
+                cur.execute(
+                    "INSERT OR IGNORE INTO user_employee_assignments"
+                    "(user_id,employee_id,granted_by,overrides,created_at) VALUES(?,?,?,?,?)",
+                    (u["id"], emp_id, "u_admin", "{}", now))
+    con.commit()
+    con.close()
+    if added:
+        print(f"[seed] 已为老库补种内置员工：{', '.join(added)}")
 
 
 def backfill_ragflow_knowledge_bases():

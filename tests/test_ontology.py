@@ -11,10 +11,11 @@ def test_seed_schema_and_demo_are_idempotent():
     ontology.seed_demo_if_empty()
 
     schema = ontology.list_schema("default")
-    assert len(schema["entity_types"]) == 9
-    assert len(schema["relation_types"]) == 9
+    assert len(schema["entity_types"]) == 11
+    assert len(schema["relation_types"]) == 12
     codes = {t["code"] for t in schema["entity_types"]}
-    assert {"org", "employee", "customer", "project", "contract", "order"} <= codes
+    assert {"org", "employee", "customer", "project", "contract", "order",
+            "station", "area"} <= codes
 
     stats = ontology.stats("default")
     assert stats["total_entities"] == 35
@@ -56,7 +57,7 @@ def test_tenant_isolation():
     assert ontology.stats("tenant-b")["total_entities"] == 0
     # system 预置 schema 对任何租户可见
     schema = ontology.list_schema("tenant-b")
-    assert len(schema["entity_types"]) == 9
+    assert len(schema["entity_types"]) == 11
 
 
 def test_entity_and_relation_crud():
@@ -166,3 +167,49 @@ def test_make_ontology_tools_bind_tenant():
     rels = _json.loads(tools["ontology_query_relations"].invoke(
         {"entity_id": out[0]["id"], "relation_type": "manage"}))
     assert rels[0]["target"]["name"] == "华芯智慧工厂"
+
+
+def test_netops_demo_seed_and_multihop_chain():
+    """网络运营演示种子 + 故障影响分析多跳链：基站→片区→客户 / 基站→装维。"""
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    # 幂等
+    ontology.seed_netops_demo_if_empty()
+
+    # 老库补新 schema 类型（station/area 实体类型已随 seed 播种，这里验证幂等）
+    ontology.backfill_schema_types()
+    schema = ontology.list_schema("default")
+    codes = {t["code"] for t in schema["entity_types"]}
+    assert {"station", "area"} <= codes
+    rcodes = {t["code"] for t in schema["relation_types"]}
+    assert {"cover", "maintain", "located_in"} <= rcodes
+
+    # 多跳链1：退服基站 BS-003 → 高新区片区 → 受影响客户（VIP：杭州智造科技）
+    st = ontology.find_entities("default", entity_type="station", keyword="BS-003")
+    assert len(st) == 1 and st[0]["status"] == "退服"
+    areas = ontology.query_relations("default", st[0]["id"], relation_type="cover")
+    assert [a["target"]["name"] for a in areas] == ["高新区片区"]
+    customers = ontology.query_relations(
+        "default", areas[0]["target"]["id"], relation_type="located_in", direction="in")
+    names = {c["target"]["name"] for c in customers}
+    assert names == {"杭州智造科技", "王秀英"}
+    vip = [c["target"] for c in customers if c["target"].get("grade") == "VIP"]
+    assert [v["name"] for v in vip] == ["杭州智造科技"]
+
+    # 多跳链2：基站 → 装维负责人（maintain 入边）
+    maintainers = ontology.query_relations(
+        "default", st[0]["id"], relation_type="maintain", direction="in")
+    assert [m["target"]["name"] for m in maintainers] == ["赵敏"]
+    assert maintainers[0]["target"]["phone"] == "13800001003"
+
+
+def test_netops_demo_seed_skips_when_station_exists():
+    """已有基站实体的库不重复播种（保护管理员手工录入的网络数据）。"""
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.create_entity("default", {"entity_type": "station", "name": "既有基站",
+                                        "props": {"code": "BS-999"}})
+    ontology.seed_netops_demo_if_empty()
+    assert ontology.find_entities("default", entity_type="customer", keyword="星联") == []
+    assert ontology.find_entities("default", entity_type="org", keyword="星联") == []
