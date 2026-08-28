@@ -34,11 +34,29 @@ class UserCreateIn(BaseModel):
     username: str
     password: str
     role: str = "user"
+    org_id: str | None = None
 
 
 class UserUpdateIn(BaseModel):
     role: str | None = None
     status: str | None = None
+    # 归属部门：仅在显式传字段时更新（None=移出部门，与「不改动」区分）
+    org_id: str | None = None
+    set_org: bool = False
+
+
+class OrgCreateIn(BaseModel):
+    name: str
+    parent_id: str | None = None
+    sort_order: int = 0
+
+
+class OrgUpdateIn(BaseModel):
+    name: str | None = None
+    parent_id: str | None = None
+    sort_order: int | None = None
+    # move=True 才会改动 parent_id（避免改名时误挂到顶级）
+    move: bool = False
 
 
 class PasswordIn(BaseModel):

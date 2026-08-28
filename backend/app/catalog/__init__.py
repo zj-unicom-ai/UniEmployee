@@ -1,9 +1,10 @@
 """
 catalog 子包 — 数字员工目录库（catalog.db）的全部操作。
 
-拆分说明（原 catalog.py 1051 行 → 6 文件）：
+拆分说明（原 catalog.py 1051 行 → 7 文件）：
   db.py         数据库连接、建表、迁移、通用工具
   users.py      用户 CRUD + 用户-员工分配
+  orgs.py       组织（部门树）CRUD
   employees.py  员工配置读取/写入
   resources.py  技能/工具/知识库/SOP/连接器 CRUD
   seeds.py      种子数据
@@ -13,6 +14,11 @@ catalog 子包 — 数字员工目录库（catalog.db）的全部操作。
 
 # db
 from .db import GLOBAL_TOOL_NAMES, ROOT, init, _conn, _unlink, _unlink_view
+
+# orgs
+from .orgs import (
+    create_org, get_org, list_orgs, descendant_ids, update_org, delete_org,
+)
 
 # users
 from .users import (
@@ -53,6 +59,8 @@ from .seeds import (
 __all__ = [
     # db
     "GLOBAL_TOOL_NAMES", "ROOT", "init", "_unlink", "_unlink_view",
+    # orgs
+    "create_org", "get_org", "list_orgs", "descendant_ids", "update_org", "delete_org",
     # users
     "create_user", "get_user", "get_user_by_username",
     "list_users", "list_users_paged", "update_user", "set_password",

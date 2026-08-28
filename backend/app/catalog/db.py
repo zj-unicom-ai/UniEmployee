@@ -21,7 +21,7 @@ DB = db_path("catalog.db")
 # tools 无删除入口，但通用列表查询会遍历它，补列以便统一 deleted_at 过滤。
 _SOFT_DELETE_TABLES = (
     "users", "employees", "skills", "tools", "knowledge_bases",
-    "sops", "connectors",
+    "sops", "connectors", "orgs",
 )
 
 _LINK_TABLES = {
@@ -69,11 +69,14 @@ def init():
     CREATE TABLE IF NOT EXISTS employee_kbs(employee_id TEXT, kb_id TEXT, PRIMARY KEY(employee_id, kb_id));
     CREATE TABLE IF NOT EXISTS employee_sops(employee_id TEXT, sop_id TEXT, PRIMARY KEY(employee_id, sop_id));
     CREATE TABLE IF NOT EXISTS employee_connectors(employee_id TEXT, connector_id TEXT, PRIMARY KEY(employee_id, connector_id));
+    CREATE TABLE IF NOT EXISTS orgs(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT,
+      sort_order INTEGER DEFAULT 0, created_at TEXT);
     CREATE TABLE IF NOT EXISTS users(
       id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL, role TEXT DEFAULT 'user',
       status TEXT DEFAULT 'active', tenant_id TEXT DEFAULT 'default',
-      created_at TEXT);
+      org_id TEXT, created_at TEXT);
     CREATE TABLE IF NOT EXISTS user_employee_assignments(
       user_id TEXT NOT NULL,
       employee_id TEXT NOT NULL,
@@ -89,7 +92,15 @@ def init():
     _migrate_subagents(con)
     _migrate_ragflow_datasets(con)
     _migrate_retire_kb_entries(con)
+    _migrate_user_org(con)
     con.close()
+
+
+def _migrate_user_org(con):
+    """users 表补 org_id 列（归属组织，NULL=未分配）。幂等。"""
+    if "org_id" not in dblayer.table_columns(con, "users"):
+        con.execute("ALTER TABLE users ADD COLUMN org_id TEXT")
+    con.commit()
 
 
 def _migrate_soft_delete(con):
