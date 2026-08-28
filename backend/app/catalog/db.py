@@ -97,6 +97,9 @@ def init():
     _migrate_ragflow_datasets(con)
     _migrate_retire_kb_entries(con)
     _migrate_user_org(con)
+    # 安全护栏表（guard 包）幂等建表，复用同一连接
+    from ..guard.db import init_tables as _guard_init
+    _guard_init(con)
     con.close()
 
 

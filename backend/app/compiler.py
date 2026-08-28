@@ -206,6 +206,25 @@ def _build_user_context(user_id: str | None) -> str:
     return "\n".join(lines)
 
 
+def _make_denied_tool(orig_tool):
+    """生成与原工具同名同描述的「拒绝执行」替身（安全护栏）。
+
+    场景：普通用户的员工声明了仅管理员可用的工具。替身保留原工具的
+    name/description/args_schema（模型仍按原语义尝试调用），执行时抛
+    PermissionError，LangGraph 会包装成 status='error' 的 ToolMessage
+    返回给模型与前端，真实逻辑不执行。
+    """
+    name = orig_tool.name
+    desc = (getattr(orig_tool, "description", "") or "") + \
+        "（该工具当前对您的账号无权限）"
+
+    @tool(name, description=desc, args_schema=getattr(orig_tool, "args_schema", None))
+    def _denied(**kwargs):
+        raise PermissionError(
+            f"工具 {name} 仅管理员授权账号可调用（安全护栏拦截）")
+    return _denied
+
+
 async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
                           user_id: str | None = None) -> tuple[list, object]:
     """按员工配置装配工具列表，返回 (tools, mcp_client)。
@@ -218,7 +237,17 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
          （即使 spec.tools=[] 也自动具备，去重避免重复）——
          目前含 get_current_time，让所有员工都能回答时间类问题；
       5. MCP 连接器工具（spec.mcp_servers 非空时拉起 stdio/sse 客户端）。
+
+    安全护栏：若调用方（user_id 对应角色）非 admin，白名单内的工具
+    被包装为「拒绝执行」版本（越权调用直接返回权限错误，不执行真实逻辑）。
     """
+    from app import guard as _guard
+    from app.catalog import users as _users
+    _role = "admin"
+    if user_id:
+        _u = _users.get_user(user_id)
+        _role = (_u or {}).get("role") or "user"
+
     tools = []
     for name in spec.tools:
         if name == "kb_search":
@@ -228,7 +257,11 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             # 退款工具需注入运行时 checkpointer（支持后续 Point2 内层图 interrupt）
             tools.append(make_start_refund(checkpointer))
         elif name in ALL_LOCAL_TOOLS:
-            tools.append(ALL_LOCAL_TOOLS[name])
+            t = ALL_LOCAL_TOOLS[name]
+            if _role != "admin" and not _guard.tool_allowed(name, _role):
+                tools.append(_make_denied_tool(t))
+            else:
+                tools.append(t)
 
     # --- 通用工具：即使员工 tools=[] 也自动具备（去重避免重复）---
     have = {t.name for t in tools}
