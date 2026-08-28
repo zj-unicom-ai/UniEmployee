@@ -28,6 +28,7 @@ from .users import (
     assign_employee, unassign_employee, get_assignment,
     list_assignments, set_assignment_overrides,
     assigned_employee_ids, list_user_ids_with_emp,
+    get_profile, upsert_profile, PROFILE_FIELDS,
 )
 
 # employees

@@ -19,6 +19,7 @@ from .ontology import router as ontology_router
 from .user import router as user_router, debug_router, dash_router
 from .public import router as public_router
 from .im import router as im_router
+from .guard import router as guard_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -30,3 +31,4 @@ router.include_router(debug_router)
 router.include_router(dash_router)
 router.include_router(public_router)
 router.include_router(im_router)
+router.include_router(guard_router)

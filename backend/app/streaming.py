@@ -13,7 +13,7 @@ import time
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
-from app import runtime, traces, catalog, approvals, conversations
+from app import runtime, traces, catalog, approvals, conversations, guard
 from app import db as dblayer
 from app.compiler import _init_model
 
@@ -274,6 +274,27 @@ def _extract_interrupt(payload) -> tuple[str, dict, str | None]:
     return "unknown", {"raw": str(value)[:300]}, None
 
 
+def kind_of(input_) -> str:
+    """输入类型：新消息 message / 审批 resume。"""
+    try:
+        if isinstance(input_, dict) and input_.get("messages"):
+            return "message"
+    except Exception:
+        pass
+    return "resume"
+
+
+def first_message_text(input_) -> str:
+    """取输入中首条用户消息文本（敏感词检测用）。"""
+    try:
+        m0 = input_["messages"][0]
+        if isinstance(m0, dict):
+            return m0.get("content", "") or ""
+        return str(getattr(m0, "content", "") or "")
+    except Exception:
+        return ""
+
+
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user"):
     """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。"""
     emp_id = employee_of(conv_id)
@@ -281,9 +302,23 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         yield sse({"type": "error", "error_code": "internal_error",
                    "message": "系统暂未配置数字员工，请管理员先配置员工"})
         return
+    # 敏感词输入硬拦截：命中直接拒绝进入模型，记录护栏日志
+    if guard.get_setting("sensitive_enabled", "1") == "1" and kind_of(input_) == "message":
+        user_text = first_message_text(input_)
+        hit = guard.check_text(user_text)
+        if hit:
+            guard.log("input_blocked",
+                      f"输入命中敏感词「{hit['word']}」已拦截",
+                      user_id=user_id, employee_id=emp_id, conversation_id=conv_id,
+                      extra={"word": hit["word"], "category": hit["category"],
+                             "preview": user_text[:200]})
+            yield sse({"type": "error", "error_code": "sensitive_word_blocked",
+                       "message": f"您的输入包含敏感词（{hit['category'] or '未分类'}），已被安全护栏拦截，请调整后重试"})
+            return
     await runtime.ensure_user_memory(user_id, emp_id)
     if role == "admin":
-        agent, stage_meta = await runtime.get_agent(emp_id)
+        # admin 无分配时 get_agent 内部回退纯模板；传 user_id 让个人画像同样注入
+        agent, stage_meta = await runtime.get_agent(emp_id, user_id)
     else:
         asg = catalog.get_assignment(user_id, emp_id)
         overrides = asg["overrides"] if asg else {}
@@ -378,6 +413,15 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
 
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
+        # 输出敏感词检测：记录日志供审计（不打断已完成回复）
+        if guard.get_setting("sensitive_enabled", "1") == "1" and bot_text:
+            hit = guard.check_text(bot_text)
+            if hit:
+                guard.log("output_flagged",
+                          f"回复命中敏感词「{hit['word']}」",
+                          user_id=user_id, employee_id=emp_id, conversation_id=conv_id,
+                          extra={"word": hit["word"], "category": hit["category"],
+                                 "preview": bot_text[:300]})
         yield sse({"type": "stage", "stage": "report", "status": "done"})
         yield sse({"type": "message_end", "message_id": trace_run_id,
                     "run_id": trace_run_id, "employee_id": emp_id,

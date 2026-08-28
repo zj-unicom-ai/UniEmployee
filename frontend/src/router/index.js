@@ -49,8 +49,19 @@ const routes = [
       { path: 'resources', name: 'resources', component: () => import('../views/ResourcesView.vue') },
       { path: 'ontology', name: 'ontology', component: () => import('../views/OntologyView.vue') },
       { path: 'evaluation', name: 'evaluation', component: () => import('../views/AdminEvaluation.vue') },
+      {
+        path: 'settings',
+        name: 'settings',
+        redirect: '/app/settings/guard/sensitive-words',
+        component: () => import('../views/guard/GuardView.vue'),
+        children: [
+          { path: 'guard/sensitive-words', name: 'guard-words', component: () => import('../views/guard/SensitiveWordsPage.vue') },
+          { path: 'guard/tool-calls', name: 'guard-tools', component: () => import('../views/guard/ToolCallsPage.vue') },
+        ],
+      },
       { path: 'im', name: 'im', component: () => import('../views/ImView.vue') },
       { path: 'change-password', name: 'change-password', component: () => import('../views/ChangePasswordView.vue') },
+      { path: 'profile', name: 'profile', component: () => import('../views/ProfileView.vue') },
     ],
   },
 ]

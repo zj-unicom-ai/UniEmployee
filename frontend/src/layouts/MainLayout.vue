@@ -112,18 +112,33 @@ const bottomNavOptions = [
   { label: '返回首页', key: 'landing', icon: iconEl('<path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
 ]
 
+// 系统设置（admin）：固定在侧边栏最下方的设置入口
+const settingsNavOptions = [
+  {
+    label: '系统设置', key: 'settings',
+    icon: iconEl('<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'),
+    children: [
+      { label: '安全护栏', key: 'guard-words' },
+    ],
+  },
+]
+
 const pageTitleMap = {
   home: '平台首页', chat: '对话工作台', history: '会话历史',
   trace: '执行过程', resources: '资源中心',
   admin: '员工管理', users: '用户管理', 'change-password': '修改密码',
   im: 'IM 频道', ontology: '业务本体', cases: '案例', 'case-detail': '案例详情',
-  evaluation: '运行评估',
+  evaluation: '运行评估', profile: '个人档案',
+  settings: '系统设置',
+  'guard-words': '系统设置 · 安全护栏', 'guard-tools': '系统设置 · 安全护栏',
 }
 const currentPageTitle = computed(() => pageTitleMap[route.name] || 'UniEmployee')
 
 const activeKey = computed(() => {
   const n = route.name
-  if (n === 'change-password') return undefined
+  if (n === 'change-password' || n === 'profile') return undefined
+  // 安全护栏两个 tab 都高亮侧边栏「系统设置 → 安全护栏」子项
+  if (n === 'guard-words' || n === 'guard-tools') return 'guard-words'
   return n
 })
 
@@ -132,6 +147,8 @@ const menuOptions = computed(() => {
   if (auth.isAdmin) {
     // 员工管理插在资源中心后面（index 3）
     items.splice(3, 0, ...adminOnlyNavOptions)
+    // 系统设置固定在最下方
+    items.push(...settingsNavOptions)
   }
   return items
 })
@@ -147,6 +164,7 @@ function onMenuSelect(key) {
 }
 
 const userMenuOptions = [
+  { label: '个人档案', key: 'profile' },
   { label: '修改密码', key: 'change-password' },
   { type: 'divider', key: 'd1' },
   { label: '退出登录', key: 'logout' },
@@ -158,6 +176,8 @@ function onUserMenuSelect(key) {
     router.push({ name: 'login' })
   } else if (key === 'change-password') {
     router.push({ name: 'change-password' })
+  } else if (key === 'profile') {
+    router.push({ name: 'profile' })
   }
 }
 </script>

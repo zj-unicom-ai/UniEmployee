@@ -84,6 +84,10 @@ def init():
       overrides TEXT,
       created_at TEXT,
       PRIMARY KEY(user_id, employee_id));
+    CREATE TABLE IF NOT EXISTS user_profiles(
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT, position TEXT, duties TEXT, preferences TEXT,
+      updated_at TEXT);
     """)
     con.commit()
     _migrate_soft_delete(con)
@@ -93,6 +97,9 @@ def init():
     _migrate_ragflow_datasets(con)
     _migrate_retire_kb_entries(con)
     _migrate_user_org(con)
+    # 安全护栏表（guard 包）幂等建表，复用同一连接
+    from ..guard.db import init_tables as _guard_init
+    _guard_init(con)
     con.close()
 
 

@@ -57,6 +57,46 @@ def get_user_by_username(username: str) -> dict | None:
     return dict(r) if r else None
 
 
+# ---- 个人画像（用户自述，员工运行时作为当前用户上下文加载） ----
+
+PROFILE_FIELDS = ("display_name", "position", "duties", "preferences")
+
+
+def get_profile(user_id: str) -> dict:
+    """返回用户画像（无记录时返回全空字段的默认结构）。"""
+    con = _conn()
+    r = con.execute("SELECT * FROM user_profiles WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    if not r:
+        return {k: "" for k in PROFILE_FIELDS}
+    return {k: (r[k] or "") for k in PROFILE_FIELDS}
+
+
+def upsert_profile(user_id: str, data: dict) -> bool:
+    """保存用户画像（部分字段更新，未出现的字段沿用现值）。"""
+    con = _conn()
+    cur = con.cursor()
+    if not cur.execute("SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL",
+                       (user_id,)).fetchone():
+        con.close()
+        return False
+    existing = get_profile(user_id)
+    merged = {k: (data.get(k) if data.get(k) is not None else existing[k])
+              for k in PROFILE_FIELDS}
+    cur.execute(
+        "INSERT INTO user_profiles(user_id,display_name,position,duties,preferences,updated_at) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+        "display_name=excluded.display_name, position=excluded.position, "
+        "duties=excluded.duties, preferences=excluded.preferences, "
+        "updated_at=excluded.updated_at",
+        (user_id, merged["display_name"], merged["position"],
+         merged["duties"], merged["preferences"],
+         time.strftime("%Y-%m-%d %H:%M:%S")))
+    con.commit()
+    con.close()
+    return True
+
+
 def _org_filter(org_id: str | None) -> tuple[str, list]:
     """按部门筛选（含全部子部门）的 WHERE 片段与参数。"""
     if not org_id:
