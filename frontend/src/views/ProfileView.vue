@@ -1,10 +1,10 @@
-<!-- 个人中心：用户自述画像（称呼/职位/职责/偏好），保存后所有数字员工
-     对话时默认加载该内容作为「当前用户信息」上下文。 -->
+<!-- 个人档案：用户自述画像（称呼/职位/职责/偏好），保存后所有数字员工
+     对话时默认加载该内容作为「当前用户信息」上下文。入口在右上角用户菜单。 -->
 <template>
   <div class="profile-page">
     <div class="page-head">
       <div>
-        <div class="page-title">个人中心</div>
+        <div class="page-title">个人档案</div>
         <div class="page-sub">填写的信息会在与所有数字员工对话时自动加载，让员工更了解你</div>
       </div>
     </div>
