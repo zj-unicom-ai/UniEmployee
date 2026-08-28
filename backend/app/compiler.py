@@ -183,6 +183,29 @@ def _build_subagent_routing(subagents: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _build_user_context(user_id: str | None) -> str:
+    """把当前用户的个人画像拼进 system_prompt。
+
+    用户在「个人中心」自述的称呼/职位/职责/偏好，让员工从第一轮对话起
+    就了解对方，替代冷启动。仅普通用户路径（user_id 给定）注入。
+    """
+    if not user_id:
+        return ""
+    from app import catalog
+    profile = catalog.get_profile(user_id)
+    if not any(profile.get(k) for k in catalog.PROFILE_FIELDS):
+        return ""
+    labels = {"display_name": "称呼", "position": "职位",
+              "duties": "职责背景", "preferences": "偏好与沟通风格"}
+    lines = ["", "## 当前用户信息", "以下是你正在服务的用户的自述画像，回复时自然参考（称呼、详略程度、专业假设）：", ""]
+    for k, label in labels.items():
+        v = (profile.get(k) or "").strip()
+        if v:
+            lines.append(f"- {label}：{v}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
                           user_id: str | None = None) -> tuple[list, object]:
     """按员工配置装配工具列表，返回 (tools, mcp_client)。
@@ -389,6 +412,7 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     subagents = await _assemble_subagents(spec, checkpointer)
 
     system_prompt = spec.persona
+    system_prompt += _build_user_context(user_id)
     system_prompt += _build_skill_routing(skill_summaries)
     system_prompt += _build_sop_routing(sop_summaries)
     if any(n in ("ontology_find_entities", "ontology_query_relations") for n in spec.tools):

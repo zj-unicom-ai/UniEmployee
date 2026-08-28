@@ -104,6 +104,15 @@ def invalidate_user(employee_id: str, user_id: str):
     _mcp_clients.pop(key, None)
 
 
+def invalidate_user_agents(user_id: str):
+    """丢弃某用户的全部 agent 变体（个人画像等用户级上下文变更后调用）。"""
+    suffix = f"|{user_id}"
+    for k in list(_agents.keys()):
+        if k.endswith(suffix):
+            _agents.pop(k, None)
+            _mcp_clients.pop(k, None)
+
+
 async def _close_mcp_client(client) -> None:
     if client is None:
         return

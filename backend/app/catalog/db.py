@@ -84,6 +84,10 @@ def init():
       overrides TEXT,
       created_at TEXT,
       PRIMARY KEY(user_id, employee_id));
+    CREATE TABLE IF NOT EXISTS user_profiles(
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT, position TEXT, duties TEXT, preferences TEXT,
+      updated_at TEXT);
     """)
     con.commit()
     _migrate_soft_delete(con)

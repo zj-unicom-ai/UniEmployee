@@ -99,6 +99,7 @@ const mainNavOptions = [
   { label: 'IM 频道', key: 'im', icon: iconEl('<path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '会话历史', key: 'history', icon: iconEl('<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '资源中心', key: 'resources', icon: iconEl('<path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
+  { label: '个人中心', key: 'profile', icon: iconEl('<path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
 ]
 
 const adminOnlyNavOptions = [
@@ -117,7 +118,7 @@ const pageTitleMap = {
   trace: '执行过程', resources: '资源中心',
   admin: '员工管理', users: '用户管理', 'change-password': '修改密码',
   im: 'IM 频道', ontology: '业务本体', cases: '案例', 'case-detail': '案例详情',
-  evaluation: '运行评估',
+  evaluation: '运行评估', profile: '个人中心',
 }
 const currentPageTitle = computed(() => pageTitleMap[route.name] || 'UniEmployee')
 
@@ -147,6 +148,7 @@ function onMenuSelect(key) {
 }
 
 const userMenuOptions = [
+  { label: '个人中心', key: 'profile' },
   { label: '修改密码', key: 'change-password' },
   { type: 'divider', key: 'd1' },
   { label: '退出登录', key: 'logout' },
@@ -158,6 +160,8 @@ function onUserMenuSelect(key) {
     router.push({ name: 'login' })
   } else if (key === 'change-password') {
     router.push({ name: 'change-password' })
+  } else if (key === 'profile') {
+    router.push({ name: 'profile' })
   }
 }
 </script>

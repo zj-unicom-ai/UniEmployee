@@ -9,6 +9,30 @@ from app.paths import WORKSPACE_DATA
 router = APIRouter(prefix="/api/me")
 
 
+@router.get("/profile")
+async def my_profile(user: dict = Depends(auth.get_current_user)):
+    """个人画像：用户自述信息（员工运行时默认加载作为当前用户上下文）。"""
+    org_name = None
+    if user.get("org_id"):
+        org = catalog.get_org(user["org_id"])
+        org_name = org["name"] if org else None
+    return {
+        "username": user["username"],
+        "org_name": org_name,
+        "profile": catalog.get_profile(user["id"]),
+    }
+
+
+@router.put("/profile")
+async def save_my_profile(body: dict, user: dict = Depends(auth.get_current_user)):
+    ok = catalog.upsert_profile(user["id"], body)
+    if not ok:
+        return {"error": "用户不存在"}
+    # 画像变了，失效该用户已编译的 agent 缓存，下次对话注入新画像
+    runtime.invalidate_user_agents(user["id"])
+    return {"ok": True}
+
+
 @router.get("/employees")
 async def my_employees(user: dict = Depends(auth.get_current_user)):
     out = []

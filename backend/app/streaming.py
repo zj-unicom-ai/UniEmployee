@@ -283,7 +283,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         return
     await runtime.ensure_user_memory(user_id, emp_id)
     if role == "admin":
-        agent, stage_meta = await runtime.get_agent(emp_id)
+        # admin 无分配时 get_agent 内部回退纯模板；传 user_id 让个人画像同样注入
+        agent, stage_meta = await runtime.get_agent(emp_id, user_id)
     else:
         asg = catalog.get_assignment(user_id, emp_id)
         overrides = asg["overrides"] if asg else {}

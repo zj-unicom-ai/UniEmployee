@@ -51,6 +51,7 @@ const routes = [
       { path: 'evaluation', name: 'evaluation', component: () => import('../views/AdminEvaluation.vue') },
       { path: 'im', name: 'im', component: () => import('../views/ImView.vue') },
       { path: 'change-password', name: 'change-password', component: () => import('../views/ChangePasswordView.vue') },
+      { path: 'profile', name: 'profile', component: () => import('../views/ProfileView.vue') },
     ],
   },
 ]
