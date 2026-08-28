@@ -1,32 +1,42 @@
-<!-- 员工管理：左侧员工列表 + 右侧编辑表单（名称/模型/后端/人设/技能/工具/SOP/连接器） -->
+<!-- 员工管理：员工列表入口（卡片网格 + 新建弹窗）。基础信息与技能/工具/知识库/SOP/连接器
+     的配置在员工详情页的各独立子页中完成，本页只做总览与跳转。 -->
 <template>
-  <div class="admin-layout">
-    <!-- 左侧：员工列表 -->
-    <div class="emp-list-panel">
-      <div class="list-head">
-        <span class="list-title">员工</span>
-        <n-button size="tiny" type="primary" @click="newEmp">+ 新建</n-button>
+  <div class="emp-list-page">
+    <div class="page-head">
+      <div>
+        <div class="page-title">员工管理</div>
+        <div class="page-sub">配置数字员工的基础信息与技能 / 工具 / 知识库 / SOP / 连接器</div>
       </div>
-      <div class="list-body">
-        <div v-if="!employees.length" class="list-empty">暂无员工，点击「+ 新建」</div>
-        <div
-          v-for="e in employees" :key="e.id"
-          class="emp-item"
-          :class="{ active: current?.id === e.id }"
-          @click="loadEmp(e.id)"
-        >
-          <div class="emp-name">{{ e.name }}</div>
-          <div class="emp-role">{{ e.role || '' }} · {{ e.backend }}</div>
+      <n-button type="primary" @click="openNew">+ 新建员工</n-button>
+    </div>
+
+    <div v-if="loading" class="page-empty">加载中…</div>
+    <div v-else-if="!employees.length" class="page-empty">暂无员工，点击右上角「新建员工」创建</div>
+    <div v-else class="cards">
+      <div v-for="e in employees" :key="e.id" class="emp-card" @click="goDetail(e.id)">
+        <div class="card-top">
+          <div class="avatar">{{ (e.name || '?').slice(0, 1) }}</div>
+          <div class="card-title">
+            <div class="name">{{ e.name }}</div>
+            <div class="role">{{ e.role || '未设置角色' }}</div>
+          </div>
+          <span class="backend-tag">{{ e.backend || 'state' }}</span>
         </div>
+        <div class="model">{{ e.model || '未设置模型' }}</div>
+        <div class="stats">
+          <span>技能 {{ (e.skills || []).length }}</span>
+          <span>工具 {{ (e.tools || []).length }}</span>
+          <span>知识库 {{ (e.kbs || []).length }}</span>
+          <span>SOP {{ (e.sops || []).length }}</span>
+          <span>连接器 {{ (e.connectors || []).length }}</span>
+        </div>
+        <div class="card-enter">配置详情 →</div>
       </div>
     </div>
 
-    <!-- 右侧：表单 -->
-    <div class="form-panel">
-      <n-form label-placement="left" :label-width="100" size="small">
-        <n-form-item label="员工 ID">
-          <n-input :value="current?.id || ''" placeholder="保存后自动生成" readonly />
-        </n-form-item>
+    <!-- 新建弹窗：只填基础信息，创建后跳详情页继续配置资源 -->
+    <n-modal v-model:show="showNew" preset="card" title="新建员工" style="width: 560px">
+      <n-form label-placement="left" :label-width="90" size="small">
         <n-form-item label="名称 *" required>
           <n-input v-model:value="form.name" placeholder="如：小苏" />
         </n-form-item>
@@ -40,203 +50,106 @@
           <n-select v-model:value="form.backend" :options="backendOptions" />
         </n-form-item>
         <n-form-item label="人设">
-          <n-input v-model:value="form.persona" type="textarea" :rows="6" placeholder="描述该员工的身份、语气与工作原则…" />
+          <n-input v-model:value="form.persona" type="textarea" :rows="4" placeholder="描述该员工的身份、语气与工作原则…" />
         </n-form-item>
       </n-form>
-
-      <!-- 多选组 -->
-      <div class="groups">
-        <div v-for="g in groupDefs" :key="g.key" class="group">
-          <div class="group-title">{{ g.label }}</div>
-          <div class="chips">
-            <span v-if="!groupItems(g).length" class="hint-text">（暂无可选项）</span>
-            <label
-              v-for="it in groupItems(g)" :key="it.id"
-              class="chip"
-              :class="{ on: selected[g.key].has(it.id) }"
-            >
-              <input type="checkbox" :checked="selected[g.key].has(it.id)" @change="toggleChip(g.key, it.id, $event)" />
-              <span>{{ it.name }}</span>
-              <span v-if="it.description || g.key === 'knowledge_bases'" class="chip-desc">
-                <template v-if="g.key === 'knowledge_bases'">{{ it.ragflow_dataset_id || it.id }}{{ it.document_count != null ? ' · ' + it.document_count + ' 文档' : '' }}</template>
-                <template v-else>{{ it.description }}</template>
-              </span>
-            </label>
-          </div>
+      <template #footer>
+        <div class="modal-footer">
+          <n-button @click="showNew = false">取消</n-button>
+          <n-button type="primary" :loading="creating" @click="createEmp">创建并配置</n-button>
         </div>
-        <div class="hint-text">提示：勾选「start_refund」工具会自动启用人工审批；知识库直接绑定 RAGFlow 数据集，勾选后该员工的 kb_search 只检索所选数据集，不勾选时按 RAGFLOW_DATASET_IDS（或全部数据集）检索。</div>
-      </div>
-
-      <div class="actions">
-        <n-button type="primary" @click="saveEmp">保存</n-button>
-        <n-button v-if="current" type="error" ghost @click="delEmp">删除该员工</n-button>
-      </div>
-    </div>
+      </template>
+    </n-modal>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useDialog, useMessage } from 'naive-ui'
+import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useMessage } from 'naive-ui'
 import api from '../api.js'
 
 defineOptions({ name: 'AdminView' })
 
-const dialog = useDialog()
+const router = useRouter()
 const message = useMessage()
 
 const backendOptions = [
   { label: 'state（默认，标准工具后端）', value: 'state' },
   { label: 'local_shell（数据分析沙箱）', value: 'local_shell' },
 ]
-const groupDefs = [
-  { key: 'skills', label: '技能 Skills' },
-  { key: 'tools', label: '工具 Tools' },
-  { key: 'knowledge_bases', label: '知识库 RAGFlow Datasets' },
-  { key: 'sops', label: 'SOP 流程文档' },
-  { key: 'connectors', label: '连接器 Connectors（MCP）' },
-]
 
-const catalog = ref({})
-const ragflowDatasets = ref([])
 const employees = ref([])
-const current = ref(null)
-const form = reactive({ name: '', role: '', model: 'openai:deepseek-v4-flash', backend: 'state', persona: '' })
-const selected = reactive({
-  skills: new Set(), tools: new Set(), knowledge_bases: new Set(),
-  sops: new Set(), connectors: new Set(),
-})
+const loading = ref(false)
+const showNew = ref(false)
+const creating = ref(false)
+const form = reactive({ name: '', role: '', model: '', backend: 'state', persona: '' })
 
-function toggleChip(key, id, e) {
-  if (e.target.checked) selected[key].add(id)
-  else selected[key].delete(id)
-}
-
-const kbOptions = computed(() => {
-  const datasets = ragflowDatasets.value || []
-  if (datasets.length) {
-    return datasets.map(d => ({
-      id: d.id,
-      name: d.name || d.id,
-      description: d.description || '',
-      ragflow_dataset_id: d.id,
-      document_count: d.document_count,
-    }))
-  }
-  return (catalog.value.knowledge_bases || []).filter(kb => kb.ragflow_dataset_id)
-})
-
-function groupItems(g) {
-  return g.key === 'knowledge_bases' ? kbOptions.value : (catalog.value[g.key] || [])
-}
-
-function clearForm() {
-  current.value = null
-  form.name = ''; form.role = ''; form.model = 'openai:deepseek-v4-flash'; form.backend = 'state'; form.persona = ''
-  Object.keys(selected).forEach(k => selected[k].clear())
-}
-
-function loadEmp(id) {
-  const e = employees.value.find(x => x.id === id)
-  if (!e) return
-  current.value = e
-  form.name = e.name || ''; form.role = e.role || ''; form.model = e.model || ''
-  form.backend = e.backend || 'state'; form.persona = e.persona || ''
-  selected.skills = new Set(e.skills || [])
-  selected.tools = new Set(e.tools || [])
-  const kbIds = new Set(kbOptions.value.map(k => k.id))
-  selected.knowledge_bases = new Set((e.kbs || []).filter(id => kbIds.has(id)))
-  selected.sops = new Set(e.sops || [])
-  selected.connectors = new Set(e.connectors || [])
-}
-
-function newEmp() { clearForm() }
-
-async function saveEmp() {
-  if (!form.name) { message.warning('请填写名称'); return }
-  const data = {
-    name: form.name.trim(), role: form.role.trim(), model: form.model.trim(),
-    backend: form.backend, persona: form.persona,
-    skills: [...selected.skills], tools: [...selected.tools], kbs: [...selected.knowledge_bases],
-    sops: [...selected.sops], connectors: [...selected.connectors],
-  }
-  try {
-    if (current.value) {
-      const { data: d } = await api.put(`/admin/employees/${current.value.id}`, data)
-      if (d.error) { message.error('保存失败：' + d.error); return }
-      message.success('已更新')
-    } else {
-      const { data: d } = await api.post('/admin/employees', data)
-      if (d.error) { message.error('保存失败：' + d.error); return }
-      message.success('已创建：' + d.id)
-    }
-    await reload()
-    if (!current.value && employees.value.length) loadEmp(employees.value[employees.value.length - 1].id)
-  } catch (e) { message.error('保存出错：' + e.message) }
-}
-
-function delEmp() {
-  if (!current.value) return
-  dialog.warning({
-    title: '删除员工',
-    content: `确认删除员工「${current.value.name}」？该操作不可恢复。`,
-    positiveText: '删除', negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.delete(`/admin/employees/${current.value.id}`)
-        message.success('已删除')
-        await reload()
-        clearForm()
-      } catch (e) { message.error('删除出错：' + e.message) }
-    },
-  })
+function openNew() {
+  Object.assign(form, { name: '', role: '', model: '', backend: 'state', persona: '' })
+  showNew.value = true
 }
 
 async function reload() {
+  loading.value = true
   try {
-    const [catRes, empRes, rfRes] = await Promise.all([
-      api.get('/admin/catalog'),
+    const [empRes, defRes] = await Promise.all([
       api.get('/admin/employees'),
-      api.get('/admin/ragflow/datasets').catch(() => ({ data: { datasets: [] } })),
+      api.get('/admin/defaults').catch(() => ({ data: {} })),
     ])
-    catalog.value = catRes.data
-    ragflowDatasets.value = rfRes.data?.datasets || []
     employees.value = (empRes.data || []).filter(x => x && !x.error)
-    if (current.value) {
-      const found = employees.value.find(x => x.id === current.value.id)
-      if (found) loadEmp(found.id)
-    }
-  } catch {}
+    if (!form.model && defRes.data?.model) form.model = defRes.data.model
+  } catch (e) {
+    message.error('加载员工列表失败：' + e.message)
+  } finally {
+    loading.value = false
+  }
 }
 
-onMounted(async () => {
-  await reload()
-  if (!current.value && employees.value.length) loadEmp(employees.value[0].id)
-})
+function goDetail(id) {
+  router.push(`/app/admin/employee/${id}`)
+}
+
+async function createEmp() {
+  if (!form.name.trim()) { message.warning('请填写名称'); return }
+  creating.value = true
+  try {
+    const { data } = await api.post('/admin/employees', {
+      name: form.name.trim(), role: form.role.trim(), model: form.model.trim(),
+      backend: form.backend, persona: form.persona,
+    })
+    if (data.error) { message.error('创建失败：' + data.error); return }
+    message.success('已创建：' + data.id)
+    showNew.value = false
+    goDetail(data.id)
+  } catch (e) {
+    message.error('创建出错：' + e.message)
+  } finally {
+    creating.value = false
+  }
+}
+
+onMounted(reload)
 </script>
 
 <style scoped>
-.admin-layout { display: flex; height: 100%; }
-.emp-list-panel { width: 248px; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; background: #fff; }
-.list-head { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #f1f5f9; }
-.list-title { font-size: 13px; font-weight: 600; color: #334155; }
-.list-body { flex: 1; overflow-y: auto; padding: 8px; }
-.list-empty { font-size: 12px; color: #94a3b8; padding: 18px 10px; text-align: center; }
-.emp-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; transition: background 0.15s; }
-.emp-item:hover { background: #f1f5f9; }
-.emp-item.active { background: #eff6ff; border-color: #3b82f6; }
-.emp-name { font-size: 14px; font-weight: 500; color: #0f172a; }
-.emp-role { font-size: 11px; color: #64748b; margin-top: 2px; }
-
-.form-panel { flex: 1; overflow-y: auto; padding: 24px 28px; }
-.groups { margin-top: 20px; border-top: 1px solid #e2e8f0; padding-top: 18px; max-width: 860px; }
-.group { margin-bottom: 18px; }
-.group-title { font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 10px; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 20px; background: #fff; cursor: pointer; user-select: none; transition: all 0.15s; }
-.chip input { display: none; }
-.chip.on { background: #eff6ff; border-color: #3b82f6; color: #2563eb; }
-.chip-desc { color: #94a3b8; font-size: 11px; }
-.hint-text { font-size: 12px; color: #94a3b8; margin-top: 8px; line-height: 1.6; }
-.actions { margin-top: 24px; display: flex; gap: 10px; max-width: 860px; }
+.emp-list-page { height: 100%; overflow-y: auto; padding: 24px 28px; }
+.page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.page-title { font-size: 18px; font-weight: 600; color: #0f172a; }
+.page-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+.page-empty { color: #94a3b8; font-size: 13px; padding: 60px 0; text-align: center; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.emp-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.15s; }
+.emp-card:hover { border-color: #3b82f6; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1); }
+.card-top { display: flex; align-items: center; gap: 10px; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 600; flex-shrink: 0; }
+.card-title { flex: 1; min-width: 0; }
+.name { font-size: 15px; font-weight: 600; color: #0f172a; }
+.role { font-size: 12px; color: #64748b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.backend-tag { font-size: 11px; color: #7c3aed; background: #f5f3ff; border-radius: 10px; padding: 2px 8px; flex-shrink: 0; }
+.model { font-size: 12px; color: #64748b; margin-top: 10px; font-family: ui-monospace, monospace; }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; font-size: 12px; color: #94a3b8; }
+.card-enter { font-size: 12px; color: #3b82f6; margin-top: 12px; opacity: 0; transition: opacity 0.15s; }
+.emp-card:hover .card-enter { opacity: 1; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 10px; }
 </style>

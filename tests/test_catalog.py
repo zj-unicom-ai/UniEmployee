@@ -44,6 +44,33 @@ def test_employee_crud_and_interrupt_derivation():
     assert catalog.get_employee_config(eid) is None
 
 
+def test_employee_partial_update_keeps_other_fields():
+    """部分更新：只传某一资源类型/字段时，其余配置沿用现值不丢。"""
+    _seed_tool("kb_search")
+    eid = catalog.create_employee({
+        "name": "局部更新员", "role": "客服", "model": "openai:m", "backend": "state",
+        "persona": "原人设", "tools": ["kb_search"], "skills": [], "kbs": [],
+        "sops": [], "connectors": [],
+    })
+
+    # 只改连接器：名称/人设/工具等应保持不变
+    assert catalog.update_employee(eid, {"connectors": ["crm"]})
+    cfg = catalog.get_employee_config(eid)
+    assert cfg["connectors"] == ["crm"]
+    assert cfg["name"] == "局部更新员"
+    assert cfg["persona"] == "原人设"
+    assert cfg["tools"] == ["kb_search"]
+
+    # 只改名称：资源关联保持不变
+    assert catalog.update_employee(eid, {"name": "局部更新员2"})
+    cfg2 = catalog.get_employee_config(eid)
+    assert cfg2["name"] == "局部更新员2"
+    assert cfg2["connectors"] == ["crm"]
+    assert cfg2["tools"] == ["kb_search"]
+
+    catalog.delete_employee(eid)
+
+
 def test_backfill_employees_if_missing_adds_netops():
     """老库补种：net-ops 员工缺失时由 backfill 补回（含技能/工具/本体工具）。"""
     catalog.init()

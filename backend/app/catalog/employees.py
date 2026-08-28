@@ -238,30 +238,49 @@ def create_employee(data: dict) -> str:
 
 
 def update_employee(emp_id: str, data: dict) -> bool:
+    """更新员工配置。支持部分更新：payload 未出现的字段/资源类型沿用现值。
+
+    例如只传 {"connectors": [...]} 时，名称/人设/技能等其余配置保持不变，
+    各配置页可独立保存互不覆盖。
+    """
     con = _conn()
     cur = con.cursor()
-    interrupt_on = _build_interrupt_on(data.get("tools", []))
+    row = cur.execute("SELECT * FROM employees WHERE id=? AND deleted_at IS NULL",
+                      (emp_id,)).fetchone()
+    if not row:
+        con.close()
+        return False
+    # 现有关联（payload 未提供的资源类型沿用）
+    def _links(col, table):
+        return [x[0] for x in cur.execute(
+            f"SELECT {col} FROM {table} WHERE employee_id=?", (emp_id,))]
+    existing = {
+        "skills": _links("skill_id", "employee_skills"),
+        "tools": _links("tool_id", "employee_tools"),
+        "kbs": _links("kb_id", "employee_kbs"),
+        "sops": _links("sop_id", "employee_sops"),
+        "connectors": _links("connector_id", "employee_connectors"),
+    }
+    tools = data.get("tools", existing["tools"])
+    interrupt_on = _build_interrupt_on(tools)
     subagents = data.get("subagents")
     if subagents is None:
-        row = cur.execute("SELECT subagents FROM employees WHERE id=?", (emp_id,)).fetchone()
-        subagents = json.loads(row["subagents"]) if row and row["subagents"] else []
+        subagents = json.loads(row["subagents"]) if row["subagents"] else []
     subagent_policy = data.get("subagent_policy")
     if subagent_policy is None:
-        row = cur.execute("SELECT subagent_policy FROM employees WHERE id=?", (emp_id,)).fetchone()
-        subagent_policy = row["subagent_policy"] or "" if row else ""
+        subagent_policy = row["subagent_policy"] or ""
     cur.execute(
         "UPDATE employees SET name=?,role=?,model=?,persona=?,backend=?,"
         "interrupt_on=?,subagents=?,subagent_policy=?,updated_at=? WHERE id=?",
-        (data.get("name", emp_id), data.get("role", ""), data.get("model", ""),
-         data.get("persona", ""), data.get("backend", "state"),
+        (data.get("name", row["name"]), data.get("role", row["role"] or ""),
+         data.get("model", row["model"] or ""), data.get("persona", row["persona"] or ""),
+         data.get("backend", row["backend"] or "state"),
          json.dumps(interrupt_on, ensure_ascii=False),
          json.dumps(subagents, ensure_ascii=False),
          subagent_policy,
          time.strftime("%Y-%m-%d %H:%M:%S"), emp_id))
-    if cur.rowcount == 0:
-        con.close()
-        return False
-    _set_links(cur, emp_id, data)
+    merged = {key: data.get(key, existing[key]) for key in existing}
+    _set_links(cur, emp_id, merged)
     con.commit()
     con.close()
     return True

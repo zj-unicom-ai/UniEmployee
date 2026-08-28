@@ -33,6 +33,18 @@ const routes = [
       { path: 'history', name: 'history', component: () => import('../views/HistoryView.vue') },
       { path: 'trace', name: 'trace', component: () => import('../views/TraceView.vue') },
       { path: 'admin', name: 'admin', component: () => import('../views/AdminView.vue') },
+      {
+        path: 'admin/employee/:id',
+        component: () => import('../views/employee/EmployeeDetailView.vue'),
+        children: [
+          { path: '', name: 'employee-basic', component: () => import('../views/employee/BasicInfoPage.vue') },
+          { path: 'skills', name: 'employee-skills', component: () => import('../views/employee/SkillsPage.vue') },
+          { path: 'tools', name: 'employee-tools', component: () => import('../views/employee/ToolsPage.vue') },
+          { path: 'knowledge-bases', name: 'employee-kbs', component: () => import('../views/employee/KnowledgeBasesPage.vue') },
+          { path: 'sops', name: 'employee-sops', component: () => import('../views/employee/SopsPage.vue') },
+          { path: 'connectors', name: 'employee-connectors', component: () => import('../views/employee/ConnectorsPage.vue') },
+        ],
+      },
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue') },
       { path: 'resources', name: 'resources', component: () => import('../views/ResourcesView.vue') },
       { path: 'ontology', name: 'ontology', component: () => import('../views/OntologyView.vue') },
