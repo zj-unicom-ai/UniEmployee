@@ -1,4 +1,4 @@
-"""管理后台路由：员工/技能/工具/知识库/SOP/连接器/用户 CRUD + 分配管理。"""
+"""管理后台路由：员工/技能/工具/知识库/SOP/连接器/用户/组织 CRUD + 分配管理。"""
 
 import io
 import json
@@ -12,7 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app import auth, catalog, runtime, traces
-from app.models import UserCreateIn, UserUpdateIn, PasswordIn
+from app.models import (UserCreateIn, UserUpdateIn, PasswordIn,
+                        OrgCreateIn, OrgUpdateIn)
 from app.paths import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
@@ -292,13 +293,58 @@ async def del_connector(conn_id: str):
     return {"ok": True, "invalidated": affected}
 
 
+# ---- 组织管理 ----
+
+_ORG_ERRORS = {
+    "not_found": "部门不存在",
+    "cycle": "不能把部门移动到自身或其子部门下",
+    "bad_parent": "父部门不存在",
+    "has_children": "请先删除该部门的子部门",
+    "has_members": "该部门下仍有用户，请先移出",
+}
+
+
+@router.get("/orgs")
+async def list_orgs_api():
+    return catalog.list_orgs()
+
+
+@router.post("/orgs")
+async def create_org_api(body: OrgCreateIn):
+    if not body.name.strip():
+        return {"error": "部门名称不能为空"}
+    oid = catalog.create_org(body.name.strip(), body.parent_id, body.sort_order)
+    if not oid:
+        return {"error": "父部门不存在"}
+    return {"id": oid, "name": body.name.strip()}
+
+
+@router.put("/orgs/{oid}")
+async def update_org_api(oid: str, body: OrgUpdateIn):
+    err = catalog.update_org(oid, name=body.name.strip() if body.name else None,
+                             parent_id=body.parent_id, sort_order=body.sort_order,
+                             move=body.move)
+    if err:
+        return {"error": _ORG_ERRORS.get(err, err)}
+    return {"ok": True}
+
+
+@router.delete("/orgs/{oid}")
+async def delete_org_api(oid: str):
+    err = catalog.delete_org(oid)
+    if err:
+        return {"error": _ORG_ERRORS.get(err, err)}
+    return {"ok": True}
+
+
 # ---- 用户管理 ----
 
 @router.get("/users")
-async def list_users_api(page: int | None = None, page_size: int = 10):
+async def list_users_api(page: int | None = None, page_size: int = 10,
+                         org_id: str | None = None):
     if page:
-        return catalog.list_users_paged(page, page_size)
-    return catalog.list_users()
+        return catalog.list_users_paged(page, page_size, org_id=org_id)
+    return catalog.list_users(org_id=org_id)
 
 
 @router.post("/users")
@@ -307,7 +353,10 @@ async def create_user_api(body: UserCreateIn):
         return {"error": "用户名已存在"}
     if body.role not in ("admin", "user"):
         return {"error": "role 必须是 admin 或 user"}
-    uid = catalog.create_user(body.username, auth.hash_password(body.password), role=body.role)
+    if body.org_id and not catalog.get_org(body.org_id):
+        return {"error": "归属部门不存在"}
+    uid = catalog.create_user(body.username, auth.hash_password(body.password),
+                              role=body.role, org_id=body.org_id)
     return {"id": uid, "username": body.username, "role": body.role}
 
 
@@ -315,7 +364,10 @@ async def create_user_api(body: UserCreateIn):
 async def update_user_api(uid: str, body: UserUpdateIn, admin: dict = Depends(auth.require_admin)):
     if uid == admin["id"] and body.status == "disabled":
         return {"error": "不能禁用当前登录的管理员"}
-    ok = catalog.update_user(uid, role=body.role, status=body.status)
+    if body.set_org and body.org_id and not catalog.get_org(body.org_id):
+        return {"error": "归属部门不存在"}
+    ok = catalog.update_user(uid, role=body.role, status=body.status,
+                             org_id=body.org_id, set_org=body.set_org)
     return {"ok": ok}
 
 

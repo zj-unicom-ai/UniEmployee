@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from . import orgs as orgs_mod
 from .db import _conn, _soft_delete_row
 
 
@@ -10,8 +11,13 @@ from .db import _conn, _soft_delete_row
 # 用户管理
 # ---------------------------------------------------------------------------
 
+_USER_LIST_COLS = ("u.id, u.username, u.role, u.status, u.tenant_id, u.org_id, "
+                   "u.created_at, o.name AS org_name")
+
+
 def create_user(username: str, password_hash: str, role: str = "user",
-                tenant_id: str = "default", user_id: str | None = None) -> str:
+                tenant_id: str = "default", user_id: str | None = None,
+                org_id: str | None = None) -> str:
     # 秒级时间戳同秒会撞主键（批量建用户/测试夹具），追加随机段保证唯一
     uid = user_id or ("u_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -21,16 +27,16 @@ def create_user(username: str, password_hash: str, role: str = "user",
         (username,)).fetchone()
     if old:
         con.execute(
-            "UPDATE users SET password_hash=?, role=?, status='active', tenant_id=?, deleted_at=NULL "
-            "WHERE username=?",
-            (password_hash, role, tenant_id, username))
+            "UPDATE users SET password_hash=?, role=?, status='active', tenant_id=?, "
+            "org_id=?, deleted_at=NULL WHERE username=?",
+            (password_hash, role, tenant_id, org_id, username))
         con.commit()
         con.close()
         return old["id"]
     con.execute(
-        "INSERT OR IGNORE INTO users(id,username,password_hash,role,status,tenant_id,created_at) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (uid, username, password_hash, role, "active", tenant_id, now))
+        "INSERT OR IGNORE INTO users(id,username,password_hash,role,status,tenant_id,org_id,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (uid, username, password_hash, role, "active", tenant_id, org_id, now))
     con.commit()
     con.close()
     return uid
@@ -51,24 +57,40 @@ def get_user_by_username(username: str) -> dict | None:
     return dict(r) if r else None
 
 
-def list_users() -> list[dict]:
+def _org_filter(org_id: str | None) -> tuple[str, list]:
+    """按部门筛选（含全部子部门）的 WHERE 片段与参数。"""
+    if not org_id:
+        return "", []
+    ids = orgs_mod.descendant_ids(org_id)
+    marks = ",".join("?" for _ in ids)
+    return f" AND u.org_id IN ({marks})", list(ids)
+
+
+def list_users(org_id: str | None = None) -> list[dict]:
+    where, args = _org_filter(org_id)
     con = _conn()
     rows = con.execute(
-        "SELECT id,username,role,status,tenant_id,created_at FROM users "
-        "WHERE deleted_at IS NULL ORDER BY created_at").fetchall()
+        f"SELECT {_USER_LIST_COLS} FROM users u "
+        f"LEFT JOIN orgs o ON o.id=u.org_id AND o.deleted_at IS NULL "
+        f"WHERE u.deleted_at IS NULL{where} ORDER BY u.created_at", args).fetchall()
     con.close()
     return [dict(r) for r in rows]
 
 
-def list_users_paged(page: int = 1, page_size: int = 10) -> dict:
+def list_users_paged(page: int = 1, page_size: int = 10,
+                     org_id: str | None = None) -> dict:
     page = max(1, page)
+    where, args = _org_filter(org_id)
     con = _conn()
-    total = con.execute("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL").fetchone()[0]
+    total = con.execute(
+        f"SELECT COUNT(*) FROM users u WHERE u.deleted_at IS NULL{where}", args).fetchone()[0]
     offset = (page - 1) * page_size
     rows = con.execute(
-        "SELECT id,username,role,status,tenant_id,created_at FROM users "
-        "WHERE deleted_at IS NULL ORDER BY created_at LIMIT ? OFFSET ?",
-        (page_size, offset)).fetchall()
+        f"SELECT {_USER_LIST_COLS} FROM users u "
+        f"LEFT JOIN orgs o ON o.id=u.org_id AND o.deleted_at IS NULL "
+        f"WHERE u.deleted_at IS NULL{where} "
+        f"ORDER BY u.created_at LIMIT ? OFFSET ?",
+        args + [page_size, offset]).fetchall()
     con.close()
     return {
         "items": [dict(r) for r in rows],
@@ -79,13 +101,17 @@ def list_users_paged(page: int = 1, page_size: int = 10) -> dict:
     }
 
 
-def update_user(user_id: str, role: str | None = None, status: str | None = None) -> bool:
+def update_user(user_id: str, role: str | None = None, status: str | None = None,
+                org_id: str | None = None, set_org: bool = False) -> bool:
+    """set_org=True 才会改动归属部门（org_id=None 表示移出部门）。"""
     con = _conn()
     cur = con.cursor()
     if role is not None:
         cur.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
     if status is not None:
         cur.execute("UPDATE users SET status=? WHERE id=?", (status, user_id))
+    if set_org:
+        cur.execute("UPDATE users SET org_id=? WHERE id=?", (org_id, user_id))
     ok = cur.rowcount > 0
     con.commit()
     con.close()
