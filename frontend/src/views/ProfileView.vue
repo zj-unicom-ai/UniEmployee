@@ -89,11 +89,11 @@ onMounted(load)
 </script>
 
 <style scoped>
-.profile-page { max-width: 720px; margin: 0 auto; padding: 24px 28px; overflow-y: auto; height: 100%; box-sizing: border-box; }
+.profile-page { padding: 24px 28px; overflow-y: auto; height: 100%; box-sizing: border-box; }
 .page-head { margin-bottom: 20px; }
 .page-title { font-size: 18px; font-weight: 600; color: #0f172a; }
 .page-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
-.profile-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+.profile-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; max-width: 860px; }
 .section-title { font-size: 14px; font-weight: 600; color: #334155; }
 .section-hint { font-size: 12px; color: #94a3b8; margin: 4px 0 14px; }
 .account-row { display: flex; gap: 40px; margin-top: 12px; flex-wrap: wrap; }
