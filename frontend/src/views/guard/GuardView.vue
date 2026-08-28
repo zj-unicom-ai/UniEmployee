@@ -21,11 +21,11 @@ defineOptions({ name: 'GuardView' })
 const route = useRoute()
 const router = useRouter()
 const activeTab = computed(() => {
-  const m = route.path.match(/\/app\/guard\/([^/]+)/)
+  const m = route.path.match(/\/app\/settings\/guard\/([^/]+)/)
   return m ? m[1] : 'sensitive-words'
 })
 function go(key) {
-  router.push(`/app/guard/${key}`)
+  router.push(`/app/settings/guard/${key}`)
 }
 </script>
 
