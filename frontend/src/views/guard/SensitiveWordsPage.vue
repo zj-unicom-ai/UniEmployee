@@ -119,7 +119,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.words-page { max-width: 900px; }
+.words-page { width: 100%; }
 .switch-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin-bottom: 16px; }
 .switch-title { font-size: 14px; font-weight: 600; color: #334155; }
 .switch-sub { font-size: 12px; color: #94a3b8; margin-top: 3px; }

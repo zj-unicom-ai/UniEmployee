@@ -115,7 +115,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.tools-page { max-width: 900px; display: flex; flex-direction: column; gap: 16px; }
+.tools-page { width: 100%; display: flex; flex-direction: column; gap: 16px; }
 .intro-card, .editor-card, .catalog-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 18px; }
 .intro-title, .editor-title { font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 6px; }
 .intro-sub { font-size: 12px; color: #64748b; line-height: 1.7; }
