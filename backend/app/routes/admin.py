@@ -21,6 +21,13 @@ router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin
 SKILLS_CUSTOM_DIR = PROJECT_ROOT / "backend" / "skills-custom"
 
 
+def _user_snap(user: dict | None) -> dict | None:
+    """审计快照用的用户信息：剔除 password_hash，避免敏感字段入审计表。"""
+    if not user:
+        return user
+    return {k: v for k, v in user.items() if k != "password_hash"}
+
+
 # ---- 目录 + 默认值 ----
 
 @router.get("/catalog")
@@ -55,7 +62,9 @@ async def admin_create_employee(body: dict, request: Request,
         catalog.backfill_ragflow_knowledge_bases()
     emp_id = catalog.create_employee(body)
     runtime.invalidate(emp_id)
-    audit.log("create", "employee", emp_id, admin, request, after=body)
+    # after 取落库后的完整配置（而非请求体），保证与 before 同口径可对比
+    audit.log("create", "employee", emp_id, admin, request,
+              after=catalog.get_full_employee(emp_id))
     return {"id": emp_id}
 
 
@@ -70,7 +79,7 @@ async def admin_update_employee(emp_id: str, body: dict, request: Request,
         return {"error": "员工不存在"}
     runtime.invalidate(emp_id)
     audit.log("update", "employee", emp_id, admin, request,
-              before=before, after=body)
+              before=before, after=catalog.get_full_employee(emp_id))
     return {"id": emp_id}
 
 
@@ -152,8 +161,7 @@ async def upload_skill(file: UploadFile = File(...), request: Request = None,
     affected = catalog.employees_using_skill(skill_id)
     await runtime.refresh_skills_for_employees(affected)
     audit.log("create", "skill", skill_id, admin, request,
-              after={"name": name or skill_id, "description": description,
-                     "dir": f"skills-custom/{skill_id}", "affected_employees": affected})
+              after={**catalog.get_skill(skill_id), "affected_employees": affected})
     return {"id": skill_id, "name": name or skill_id, "description": description}
 
 
@@ -174,7 +182,7 @@ async def update_skill_content(skill_id: str, body: dict, request: Request,
     affected = catalog.employees_using_skill(skill_id)
     await runtime.refresh_skills_for_employees(affected)
     audit.log("update", "skill", skill_id, admin, request,
-              before={"content": before}, after={"content": content})
+              before={"content": before}, after={"content": catalog.get_skill_content(skill_id)})
     return {"ok": True, "invalidated": False, "refreshed_employees": affected}
 
 
@@ -209,14 +217,16 @@ async def skill_content(skill_id: str):
 @router.put("/tools/{tool_id}")
 async def edit_tool(tool_id: str, body: dict, request: Request,
                     admin: dict = Depends(auth.require_admin)):
-    before = next((t for t in catalog.catalog()["tools"] if t["id"] == tool_id), None)
+    def _tool_row():
+        return next((t for t in catalog.catalog()["tools"] if t["id"] == tool_id), None)
+    before = _tool_row()
     ok = catalog.update_tool(tool_id, body.get("description", ""), body.get("needs_approval"))
     if not ok:
         return {"error": "工具不存在"}
     for e in catalog.employees_using_tool(tool_id):
         runtime.invalidate(e)
     audit.log("update", "tool", tool_id, admin, request,
-              before=before, after=body)
+              before=before, after=_tool_row())
     return {"ok": True}
 
 
@@ -226,7 +236,7 @@ async def create_kb(body: dict, request: Request,
     kid = body.get("id") or ("kb_" + time.strftime("%Y%m%d%H%M%S"))
     catalog.create_kb(kid, body.get("name", kid), body.get("description", ""),
                       body.get("ragflow_dataset_id", ""))
-    audit.log("create", "kb", kid, admin, request, after=body)
+    audit.log("create", "kb", kid, admin, request, after=catalog.get_kb(kid))
     return {"id": kid}
 
 
@@ -251,7 +261,8 @@ async def edit_kb(kb_id: str, body: dict, request: Request,
     if ok:
         for e in catalog.employees_using_kb(kb_id):
             runtime.invalidate(e)
-    audit.log("update", "kb", kb_id, admin, request, before=before, after=body)
+    audit.log("update", "kb", kb_id, admin, request,
+              before=before, after=catalog.get_kb(kb_id) if ok else None)
     return {"ok": ok}
 
 
@@ -272,7 +283,7 @@ async def create_sop(body: dict, request: Request,
     sid = body.get("id") or ("sop_" + time.strftime("%Y%m%d%H%M%S"))
     catalog.create_sop(sid, body.get("name", sid), body.get("description", ""),
                        body.get("content", ""))
-    audit.log("create", "sop", sid, admin, request, after=body)
+    audit.log("create", "sop", sid, admin, request, after=catalog.get_sop(sid))
     return {"id": sid}
 
 
@@ -285,7 +296,8 @@ async def edit_sop(sop_id: str, body: dict, request: Request,
     if ok:
         affected = catalog.employees_using_sop(sop_id)
         await runtime.refresh_sops_for_employees(affected)
-    audit.log("update", "sop", sop_id, admin, request, before=before, after=body)
+    audit.log("update", "sop", sop_id, admin, request,
+              before=before, after=catalog.get_sop(sop_id) if ok else None)
     return {"ok": ok}
 
 
@@ -306,7 +318,8 @@ async def create_connector(body: dict, request: Request,
     cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S"))
     catalog.create_connector(cid, body.get("name", cid), body.get("description", ""),
                              body.get("config", {}))
-    audit.log("create", "connector", cid, admin, request, after=body)
+    audit.log("create", "connector", cid, admin, request,
+              after=catalog.get_connector(cid))
     return {"cid": cid}
 
 
@@ -327,7 +340,7 @@ async def edit_connector(conn_id: str, body: dict, request: Request,
     for e in catalog._unlink_view("connector", conn_id):
         runtime.invalidate(e)
     audit.log("update", "connector", conn_id, admin, request,
-              before=before, after=body)
+              before=before, after=catalog.get_connector(conn_id) if ok else None)
     return {"ok": ok}
 
 
@@ -366,8 +379,7 @@ async def create_org_api(body: OrgCreateIn, request: Request,
     oid = catalog.create_org(body.name.strip(), body.parent_id, body.sort_order)
     if not oid:
         return {"error": "父部门不存在"}
-    audit.log("create", "org", oid, admin, request,
-              after={"name": body.name.strip(), "parent_id": body.parent_id})
+    audit.log("create", "org", oid, admin, request, after=catalog.get_org(oid))
     return {"id": oid, "name": body.name.strip()}
 
 
@@ -380,9 +392,8 @@ async def update_org_api(oid: str, body: OrgUpdateIn, request: Request,
                              move=body.move)
     if err:
         return {"error": _ORG_ERRORS.get(err, err)}
-    audit.log("update", "org", oid, admin, request, before=before,
-              after={"name": body.name, "parent_id": body.parent_id,
-                     "sort_order": body.sort_order, "move": body.move})
+    audit.log("update", "org", oid, admin, request,
+              before=before, after=catalog.get_org(oid))
     return {"ok": True}
 
 
@@ -418,9 +429,7 @@ async def create_user_api(body: UserCreateIn, request: Request,
         return {"error": "归属部门不存在"}
     uid = catalog.create_user(body.username, auth.hash_password(body.password),
                               role=body.role, org_id=body.org_id)
-    audit.log("create", "user", uid, admin, request,
-              after={"username": body.username, "role": body.role,
-                     "org_id": body.org_id})
+    audit.log("create", "user", uid, admin, request, after=_user_snap(catalog.get_user(uid)))
     return {"id": uid, "username": body.username, "role": body.role}
 
 
@@ -431,13 +440,11 @@ async def update_user_api(uid: str, body: UserUpdateIn, request: Request,
         return {"error": "不能禁用当前登录的管理员"}
     if body.set_org and body.org_id and not catalog.get_org(body.org_id):
         return {"error": "归属部门不存在"}
-    before = catalog.get_user(uid)
+    before = _user_snap(catalog.get_user(uid))
     ok = catalog.update_user(uid, role=body.role, status=body.status,
                              org_id=body.org_id, set_org=body.set_org)
     audit.log("update", "user", uid, admin, request,
-              before={k: v for k, v in (before or {}).items() if k != "password_hash"},
-              after={"role": body.role, "status": body.status,
-                     "org_id": body.org_id, "set_org": body.set_org})
+              before=before, after=_user_snap(catalog.get_user(uid)))
     return {"ok": ok}
 
 
@@ -461,7 +468,7 @@ async def delete_user_api(uid: str, request: Request,
     if target and target["role"] == "admin" and len(admins) <= 1:
         return {"error": "至少保留一个管理员"}
     audit.log("delete", "user", uid, admin, request,
-              before={k: v for k, v in (target or {}).items() if k != "password_hash"})
+              before=_user_snap(target))
     return {"ok": catalog.delete_user(uid)}
 
 
@@ -493,8 +500,7 @@ async def admin_assign_employee(uid: str, body: dict, request: Request,
     catalog.assign_employee(uid, emp_id, body.get("overrides"), granted_by=admin["id"])
     runtime.invalidate(emp_id)
     audit.log("create", "assignment", f"{uid}:{emp_id}", admin, request,
-              after={"user_id": uid, "employee_id": emp_id,
-                     "overrides": body.get("overrides")})
+              after=catalog.get_assignment(uid, emp_id))
     return {"ok": True, "employee_id": emp_id}
 
 
@@ -507,7 +513,7 @@ async def admin_update_assignment(uid: str, emp_id: str, body: dict, request: Re
     catalog.set_assignment_overrides(uid, emp_id, body.get("overrides", {}))
     runtime.invalidate(emp_id)
     audit.log("update", "assignment", f"{uid}:{emp_id}", admin, request,
-              before=before, after={"overrides": body.get("overrides", {})})
+              before=before, after=catalog.get_assignment(uid, emp_id))
     return {"ok": True}
 
 

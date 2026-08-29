@@ -98,6 +98,30 @@ def test_admin_endpoints_write_audit(monkeypatch):
     assert any(l["obj_id"] == "emp_audit" for l in logs)
 
 
+def test_audit_after_is_full_state_snapshot(monkeypatch):
+    """部分字段更新（如配置页只上送 connectors）时，after 仍为完整配置快照，
+    与 before 同口径，避免「变更后只剩请求片段」的歧义。"""
+    client = _client(monkeypatch)
+    client.post("/api/admin/employees", json={
+        "id": "emp_snap", "name": "快照测试", "model": "openai:m",
+        "backend": "state", "persona": "p", "kbs": [],
+        "skills": [], "tools": [], "sops": [], "connectors": [],
+    })
+    r = client.put("/api/admin/employees/emp_snap",
+                   json={"connectors": ["crm", "newsnow"]})
+    assert r.status_code == 200
+    logs, _ = audit.list_logs(obj_type="employee")
+    upd = next(l for l in logs
+               if l["obj_id"] == "emp_snap" and l["action"] == "update")
+    before = json.loads(upd["before"])
+    after = json.loads(upd["after"])
+    assert after["connectors"] == ["crm", "newsnow"]
+    # after 是完整状态：未改动字段保留现值，且与 before 字段集一致
+    assert after["model"] == before["model"] == "openai:m"
+    assert after["persona"] == before["persona"] == "p"
+    assert set(before.keys()) == set(after.keys())
+
+
 def test_audit_user_snapshot_excludes_password_hash(monkeypatch):
     """用户变更的审计快照不得包含 password_hash。"""
     from app import auth as auth_mod
