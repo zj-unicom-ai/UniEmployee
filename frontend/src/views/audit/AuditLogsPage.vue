@@ -73,13 +73,17 @@ const objOptions = [
   { label: '员工分配', value: 'assignment' },
   { label: '护栏配置', value: 'guard_settings' },
   { label: '敏感词', value: 'sensitive_word' },
+  { label: '登录/认证', value: 'auth' },
 ]
 const actionOptions = [
   { label: '新增', value: 'create' },
   { label: '修改', value: 'update' },
   { label: '删除', value: 'delete' },
+  { label: '登录成功', value: 'login' },
+  { label: '登录失败', value: 'login_failed' },
 ]
-const actionLabel = { create: '新增', update: '修改', delete: '删除' }
+const actionLabel = { create: '新增', update: '修改', delete: '删除',
+                      login: '登录成功', login_failed: '登录失败' }
 const objNameMap = Object.fromEntries(objOptions.map(o => [o.value, o.label]))
 
 function objLabel(l) {
