@@ -1,10 +1,11 @@
-<!-- 安全护栏模块：二级导航容器（敏感词过滤 / 工具调用护栏 / 后续扩展…）。
+<!-- 系统设置模块：二级导航容器（安全护栏：敏感词过滤 / 工具调用护栏；管理端审计日志）。
      顶栏标题随子路由切换。 -->
 <template>
   <div class="guard-view">
     <n-tabs :value="activeTab" type="line" size="small" @update:value="go">
       <n-tab name="sensitive-words" tab="敏感词过滤" />
       <n-tab name="tool-calls" tab="工具调用护栏" />
+      <n-tab name="audit" tab="审计日志" />
     </n-tabs>
     <div class="guard-body">
       <router-view />
@@ -21,11 +22,11 @@ defineOptions({ name: 'GuardView' })
 const route = useRoute()
 const router = useRouter()
 const activeTab = computed(() => {
-  const m = route.path.match(/\/app\/settings\/guard\/([^/]+)/)
+  const m = route.path.match(/\/app\/settings\/(?:guard\/)?([^/]+)/)
   return m ? m[1] : 'sensitive-words'
 })
 function go(key) {
-  router.push(`/app/settings/guard/${key}`)
+  router.push(key === 'audit' ? '/app/settings/audit' : `/app/settings/guard/${key}`)
 }
 </script>
 

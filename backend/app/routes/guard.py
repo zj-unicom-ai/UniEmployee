@@ -1,6 +1,7 @@
 """安全护栏管理端点：配置读写、敏感词 CRUD、拦截日志查询（仅 admin）。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app import audit
 from app import guard
 from app import auth
 
@@ -19,10 +20,14 @@ async def get_settings(_=Depends(_admin)):
 
 
 @router.put("/settings")
-async def save_settings(body: dict, _=Depends(_admin)):
+async def save_settings(body: dict, request: Request,
+                        admin: dict = Depends(_admin)):
+    before = guard.get_settings()
     for key in ("sensitive_enabled", "admin_only_tools"):
         if key in body:
             guard.set_setting(key, str(body[key]))
+    audit.log("update", "guard_settings", "", admin, request,
+              before=before, after=guard.get_settings())
     return {"ok": True, "settings": guard.get_settings()}
 
 
@@ -32,16 +37,21 @@ async def list_words(_=Depends(_admin)):
 
 
 @router.post("/words")
-async def add_word(body: dict, _=Depends(_admin)):
+async def add_word(body: dict, request: Request, admin: dict = Depends(_admin)):
     word = (body.get("word") or "").strip()
     if not word:
         return {"error": "敏感词不能为空"}
     row = guard.add_word(word, body.get("category", ""), body.get("level", "block"))
+    audit.log("create", "sensitive_word", str(row["id"]), admin, request,
+              after={"word": word, "category": body.get("category", "")})
     return {"ok": True, "word": row}
 
 
 @router.delete("/words/{word_id}")
-async def delete_word(word_id: int, _=Depends(_admin)):
+async def delete_word(word_id: int, request: Request,
+                      admin: dict = Depends(_admin)):
+    audit.log("delete", "sensitive_word", str(word_id), admin, request,
+              after={"word_id": word_id})
     guard.delete_word(word_id)
     return {"ok": True}
 

@@ -57,6 +57,7 @@ const routes = [
         children: [
           { path: 'guard/sensitive-words', name: 'guard-words', component: () => import('../views/guard/SensitiveWordsPage.vue') },
           { path: 'guard/tool-calls', name: 'guard-tools', component: () => import('../views/guard/ToolCallsPage.vue') },
+          { path: 'audit', name: 'audit-logs', component: () => import('../views/audit/AuditLogsPage.vue') },
         ],
       },
       { path: 'im', name: 'im', component: () => import('../views/ImView.vue') },

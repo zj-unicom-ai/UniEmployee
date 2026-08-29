@@ -100,6 +100,9 @@ def init():
     # 安全护栏表（guard 包）幂等建表，复用同一连接
     from ..guard.db import init_tables as _guard_init
     _guard_init(con)
+    # 管理端审计日志表（audit 包）幂等建表，复用同一连接
+    from ..audit.db import init_tables as _audit_init
+    _audit_init(con)
     con.close()
 
 
