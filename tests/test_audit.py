@@ -122,6 +122,60 @@ def test_audit_after_is_full_state_snapshot(monkeypatch):
     assert set(before.keys()) == set(after.keys())
 
 
+def test_login_events_audited(monkeypatch):
+    """登录成功/失败、自助改密均落审计；限流拒绝不写审计。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app import auth as auth_mod
+    from app.routes.auth import router as auth_router
+
+    catalog.create_user("login_t", auth_mod.hash_password("secret123"),
+                        role="user", user_id="u_login_t")
+    app = FastAPI()
+    app.include_router(auth_router)
+    client = TestClient(app)
+
+    # 密码错误 → login_failed：obj_id/actor 为尝试的用户名，after 含原因
+    r = client.post("/api/auth/login",
+                    json={"username": "login_t", "password": "wrong-pass"})
+    assert r.status_code == 401
+    logs, _ = audit.list_logs(action="login_failed")
+    f = logs[0]
+    assert f["obj_id"] == "login_t" and f["actor_name"] == "login_t"
+    assert json.loads(f["after"])["reason"] == "用户名或密码错误"
+
+    # 登录成功 → login：actor 为真实用户
+    r = client.post("/api/auth/login",
+                    json={"username": "login_t", "password": "secret123"})
+    assert r.status_code == 200
+    ok = next(l for l in audit.list_logs(action="login")[0]
+              if l["obj_id"] == "u_login_t")
+    assert ok["actor_id"] == "u_login_t" and ok["ip"]
+
+    # 自助改密 → user_password 审计，不记密码内容
+    tok = r.json()["token"]
+    r = client.post("/api/auth/change-password",
+                    json={"old_password": "secret123", "new_password": "newpass456"},
+                    headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    pw_logs = [l for l in audit.list_logs(obj_type="user_password")[0]
+               if l["actor_id"] == "u_login_t"]
+    assert pw_logs
+    assert "newpass456" not in (pw_logs[0]["after"] or "")
+    assert "newpass456" not in (pw_logs[0]["before"] or "")
+
+    # 限流拒绝（5 次失败后）→ 不再新增审计写入，防爆破流量放大
+    from app.routes import auth as auth_routes
+    key = "testclient|login_t"
+    auth_routes._LOGIN_FAILS[key] = [__import__("time").time()] * 5
+    before_count = audit.list_logs(action="login_failed")[1]
+    r = client.post("/api/auth/login",
+                    json={"username": "login_t", "password": "x"})
+    assert r.status_code == 429
+    assert audit.list_logs(action="login_failed")[1] == before_count
+
+
 def test_audit_user_snapshot_excludes_password_hash(monkeypatch):
     """用户变更的审计快照不得包含 password_hash。"""
     from app import auth as auth_mod
