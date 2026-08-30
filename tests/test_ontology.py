@@ -11,8 +11,8 @@ def test_seed_schema_and_demo_are_idempotent():
     ontology.seed_demo_if_empty()
 
     schema = ontology.list_schema("default")
-    assert len(schema["entity_types"]) == 11
-    assert len(schema["relation_types"]) == 12
+    assert len(schema["entity_types"]) == 14
+    assert len(schema["relation_types"]) == 14
     codes = {t["code"] for t in schema["entity_types"]}
     assert {"org", "employee", "customer", "project", "contract", "order",
             "station", "area"} <= codes
@@ -57,7 +57,7 @@ def test_tenant_isolation():
     assert ontology.stats("tenant-b")["total_entities"] == 0
     # system 预置 schema 对任何租户可见
     schema = ontology.list_schema("tenant-b")
-    assert len(schema["entity_types"]) == 11
+    assert len(schema["entity_types"]) == 14
 
 
 def test_entity_and_relation_crud():

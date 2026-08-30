@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.7.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.8.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -53,6 +53,7 @@ async def lifespan(app):
     catalog.backfill_subagents_if_empty()
     catalog.backfill_ontology_tools()
     catalog.backfill_employees_if_missing()
+    catalog.backfill_netops_upgrade()
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()
@@ -61,6 +62,7 @@ async def lifespan(app):
     ontology.backfill_schema_types()
     ontology.seed_demo_if_empty()
     ontology.seed_netops_demo_if_empty()
+    ontology.seed_netops_resources_if_empty()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0 (2026-08-30)
+
+### 重磅变更：net-ops 从「单技能」升级为「算网运营专家」四能力架构
+
+- **net-ops 人设与能力完整升级**：角色改为「算网运营专家」，backend=local_shell，4 项核心技能 + 3 条算网专用 SOP 绑定；内置员工保持 6 个，但小网已从 1 个技能 → 4 技能满配
+  - **故障影响分析**：告警关联（netops_alerts.csv 按基站/时间窗/严重度统计）+ 本体多跳（基站 → cover 片区 → 客户 → 筛 VIP → 装维责任人 → 联系方式）
+  - **运营指标分析**：趋势/环比/同比 + SLA 达标判定 + 异常日定位与告警归因（联动网元表定位具体故障场景）
+  - **资源容量分析**：算力 / 网络 / IDC 三类台账跑数 + 80% 预警/90% 紧急扩容阈值 + 目标 70% 扩容缺口公式 + 本体 deploy_in/backhaul 归属查询
+  - **SOP 路由与执行**：按场景路由到 cutover/emergency/escalation → 刚性步骤逐条执行 → create_ticket 登记工单 → /memories/ 沉淀处置经验
+
+### 新增
+
+- **三条算网 SOP 制度（catalog seeds + Store 接入）**：
+  - sop_netops_emergency 算网应急预案启动（5 步：影响面判定 → 分级 → 通知链 → VIP 保障 → 工单登记）
+  - sop_netops_cutover 网络割接操作规范（6 步：申请 → 影响评估 → 00:00-06:00 时间窗刚性 → 超 90 分钟强制回退 → 执行监控 → 完工）
+  - sop_netops_escalation 重大故障升级上报（5 步：P1 判定 → 15 分钟到值班长、30 分钟首次升级 → 升级链路 → 工单 → 跟进）
+- **老库幂等升级 backfill_netops_upgrade()**：三路径互不干扰——SOP 按 slug 幂等补缺；员工-技能/员工-SOP 绑定按 emp_id+skill_id(sop_id) 幂等补缺；persona/description 仅在"管理员未改动"的情况下才覆盖升级，保护自定义修改
+- **本体扩展：算网资源域**：新增实体类型 机房(datacenter)/算力节点(compute_node)/传输链路(link)，关系类型 部署于(deploy_in)/回传链路(backhaul)；种子播种 2 机房、4 算力节点、3 传输链路 + 4 条 deploy_in + 4 条 backhaul 关系，与本体已有基站/片区可直接组合多跳查询；函数 `seed_netops_resources_if_empty()` 幂等
+- **三份算网演示数据集 + 生成脚本**（scripts/generate_netops_data.py，固定随机种子可复现）：
+  - netops_alerts.csv：378 条告警（90 天），P1-P4 四档，埋三条故事线：城东 8/8-8/10 连续 P1 板卡故障、高新 2 号站近 30 天 P2 传输故障频发、周末突发故障
+  - netops_kpi.csv：181 天 × 3 片区的接通率/掉线率/SLA/满意度，KPI 与城东大障日同步跌落
+  - netops_resources.csv：12 条三类资源台账，GPU 训练节点 92.2% + 高新-下沙光缆 87.0% 命中预警
+- **专项回归测试 tests/test_netops_expert.py（10 条全通过）**：覆盖数据结构/故事线/yaml/触发条件/SOP 播种/backfill 双路径（空库/老库）/本体幂等；pytest 夹具 `tmp_db` 保证 SQLite 不碰真实数据
+- **E2E 手动验证脚本 scripts/verify_netops_e2e.py**：4 个典型问题 HTTP API 直跑（登录→改密→会话→SSE 流），自动核对工具调用与回答要点，便于改动后的冒烟
+
+### 优化
+
+- README 与 .env.example 中 APP_VERSION 示例值从历史遗留的 0.4.0/0.6.0 统一追平到 0.8.0
+
+---
+
 ## 0.5.0 (2026-08-27)
 
 ### 新增

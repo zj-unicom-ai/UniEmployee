@@ -53,7 +53,7 @@ from .seeds import (
     seed_if_empty, backfill_connectors, backfill_subagents_if_empty,
     backfill_ragflow_knowledge_bases,
     backfill_employee_kb_assignments, backfill_ontology_tools,
-    backfill_employees_if_missing,
+    backfill_employees_if_missing, backfill_netops_upgrade,
     seed_assignments_if_empty, seed_admin_if_empty, flag_default_admin_password,
 )
 
@@ -84,6 +84,6 @@ __all__ = [
     "seed_if_empty", "backfill_connectors", "backfill_subagents_if_empty",
     "backfill_ragflow_knowledge_bases",
     "backfill_employee_kb_assignments", "backfill_ontology_tools",
-    "backfill_employees_if_missing",
+    "backfill_employees_if_missing", "backfill_netops_upgrade",
     "seed_assignments_if_empty", "seed_admin_if_empty", "flag_default_admin_password",
 ]

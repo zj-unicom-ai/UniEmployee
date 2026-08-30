@@ -244,7 +244,7 @@ Quick local start: `docker compose up -d db` (7 databases are created automatica
 | `JWT_EXPIRE_HOURS` | `24` | Token lifetime (hours) |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / empty | Log level / file path |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | Database backend and connection params (host/port/user/password/db prefix) |
-| `APP_VERSION` | `0.4.0` | Printed at /health and in logs |
+| `APP_VERSION` | `0.8.0` | Printed at /health and in logs |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | Markdown product-KB directory for the sales skill |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow integration (optional) |
 
