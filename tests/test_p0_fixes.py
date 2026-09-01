@@ -45,7 +45,7 @@ def test_seed_if_empty_works_with_soft_delete_migration():
     """迁移后的表含 deleted_at，种子 INSERT 必须显式列名（容器首次启动会走这里）。"""
     catalog.seed_if_empty()
     assert len(catalog.list_employees_meta()) == 6
-    assert catalog.get_skill("product-faq") is not None
+    assert catalog.get_skill("unicom-presale-faq") is not None
 
 
 def test_approval_tracks_owner_and_inner_thread():
@@ -66,7 +66,7 @@ def test_public_employees_endpoints_anonymous():
     catalog.create_employee({
         "id": "pub1", "name": "案例员工", "role": "顾问",
         "model": "openai:x", "persona": "内部人设不应暴露",
-        "skills": ["product-faq"], "tools": ["kb_search"],
+        "skills": ["unicom-presale-faq"], "tools": ["kb_search"],
     })
     app = FastAPI()
     app.include_router(public_router)

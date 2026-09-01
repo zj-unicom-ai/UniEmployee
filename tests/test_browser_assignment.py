@@ -67,8 +67,8 @@ def test_regular_user_chat_shows_assigned_and_can_tune():
     admin = _login_token("admin", "admin123")
     zhang = _login_token("zhang", "z123")
     zid = _user_id(admin, "zhang")
-    # 确保 zhang 已分配 xiaosu（种子应已分配；保险起见重新分配）
-    _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "xiaosu"})
+    # 确保 zhang 已分配 unicom-presale（保险起见重新分配）
+    _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "unicom-presale"})
 
     with sync_playwright() as p:
         br = p.chromium.launch(headless=True); pg = br.new_page()
@@ -77,12 +77,12 @@ def test_regular_user_chat_shows_assigned_and_can_tune():
         _browser_login(pg, zhang, me)
         pg.goto(BASE + "/chat.html"); pg.wait_for_timeout(2500)
 
-        # 选择器应含 xiaosu（option value 为员工 id），且"我的调整"可见（普通用户）
+        # 选择器应含 unicom-presale（option value 为员工 id），且"我的调整"可见（普通用户）
         vals = pg.locator("#empselect option").evaluate_all("els => els.map(e => e.value)")
-        assert "xiaosu" in vals, "未显示已分配的 xiaosu"
+        assert "unicom-presale" in vals, "未显示已分配的 unicom-presale"
         assert pg.locator("#tuneBtn").is_visible(), "普通用户应看到'我的调整'"
-        # 显式选中小苏，避免"我的调整"作用到默认的第一个员工
-        pg.select_option("#empselect", "xiaosu"); pg.wait_for_timeout(1500)
+        # 显式选中，避免"我的调整"作用到默认的第一个员工
+        pg.select_option("#empselect", "unicom-presale"); pg.wait_for_timeout(1500)
 
         # 打开"我的调整"，勾选 data-analysis 并保存
         pg.locator("#tuneBtn").click(); pg.wait_for_timeout(500)
@@ -93,7 +93,7 @@ def test_regular_user_chat_shows_assigned_and_can_tune():
         pg.locator("#tuneSave").click(); pg.wait_for_timeout(600)
 
         # 验证覆盖已生效（仅 zhang 自己）
-        eff = json.loads(_req(f"/api/me/employees/xiaosu", token=zhang)[1])["effective"]
+        eff = json.loads(_req(f"/api/me/employees/unicom-presale", token=zhang)[1])["effective"]
         assert "data-analysis" in eff["skills"], "附加技能未生效"
         br.close()
 
@@ -102,7 +102,7 @@ def test_admin_assignment_ui_grants_and_revokes():
     admin = _login_token("admin", "admin123")
     zhang = _login_token("zhang", "z123")
     zid = _user_id(admin, "zhang")
-    _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "xiaosu"})
+    _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "unicom-presale"})
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(headless=True); pg = br.new_page()
@@ -115,14 +115,14 @@ def test_admin_assignment_ui_grants_and_revokes():
             row.locator("button", has_text="分配").click()
             pg.wait_for_timeout(500)
             assert pg.locator("#modal").is_visible(), "分配弹窗未打开"
-            # 取消勾选 xiaosu 并保存
-            pg.locator('.asg-chk[data-emp="xiaosu"]').uncheck()
+            # 取消勾选 unicom-presale 并保存
+            pg.locator('.asg-chk[data-emp="unicom-presale"]').uncheck()
             pg.locator("#mSave").click(); pg.wait_for_timeout(700)
 
-            # zhang 不再分配 xiaosu
+            # zhang 不再分配 unicom-presale
             emps = [e["id"] for e in json.loads(_req("/api/employees", token=zhang)[1])]
-            assert "xiaosu" not in emps, "取消分配未生效"
+            assert "unicom-presale" not in emps, "取消分配未生效"
             br.close()
     finally:
         # 还原 zhang 的分配，保持 demo 状态
-        _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "xiaosu"})
+        _req(f"/api/admin/users/{zid}/employees", "POST", token=admin, body={"employee_id": "unicom-presale"})

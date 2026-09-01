@@ -99,7 +99,7 @@ debug_router = APIRouter(prefix="/api", dependencies=[Depends(auth.require_admin
 
 
 @debug_router.get("/debug/memory")
-async def debug_memory(employee_id: str = "xiaosu",
+async def debug_memory(employee_id: str = "unicom-presale",
                        user: dict = Depends(auth.require_admin)):
     return {"namespace": [employee_id], "items": await runtime.dump_store(employee_id)}
 

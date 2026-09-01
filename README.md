@@ -261,7 +261,7 @@ UniEmployee/
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | 数据库后端与连接参数（host/port/user/password/db 前缀） |
-| `APP_VERSION` | `0.8.0` | 打印在 /health 与日志 |
+| `APP_VERSION` | `0.9.0` | 打印在 /health 与日志 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
 

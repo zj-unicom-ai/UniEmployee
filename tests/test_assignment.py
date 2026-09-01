@@ -71,7 +71,7 @@ def env():
                      "DELETE", token=admin)
     return {"admin": admin, "ids": ids,
             "a": toks["ast_a"], "b": toks["ast_b"], "c": toks["ast_c"],
-            "emp": "xiaosu"}
+            "emp": "unicom-presale"}
 
 
 def _assign(env, username, emp):
@@ -99,7 +99,7 @@ def test_user_cannot_assign(env):
 
 
 def test_user_sees_only_assigned(env):
-    # ast_a 已分配 xiaosu；ast_c 未分配 → 空
+    # ast_a 已分配 unicom-presale；ast_c 未分配 → 空
     s, b = _req("/api/employees", token=env["a"])
     assert env["emp"] in [e["id"] for e in json.loads(b)]
     s, b = _req("/api/employees", token=env["c"])
@@ -117,22 +117,22 @@ def test_override_merge_and_isolation(env):
     _assign(env, "ast_b", emp)
     # 基础能力
     base = json.loads(_req(f"/api/me/employees/{emp}", token=a)[1])["base"]
-    assert "product-faq" in base["skills"]
-    assert "data-analysis" not in base["skills"]  # xiaosu 模板无此技能
-    # A 附加 data-analysis，移除 product-faq
-    ov = {"add": {"skills": ["data-analysis"]}, "remove": {"skills": ["product-faq"]}}
+    assert "unicom-presale-faq" in base["skills"]
+    assert "data-analysis" not in base["skills"]  # unicom-presale 模板无此技能
+    # A 附加 data-analysis，移除 unicom-presale-faq
+    ov = {"add": {"skills": ["data-analysis"]}, "remove": {"skills": ["unicom-presale-faq"]}}
     s, body = _req(f"/api/me/employees/{emp}/overrides", "PUT", token=a, body={"overrides": ov})
     assert json.loads(body).get("ok") is True
     eff_a = json.loads(_req(f"/api/me/employees/{emp}", token=a)[1])["effective"]
     assert "data-analysis" in eff_a["skills"]
-    assert "product-faq" not in eff_a["skills"]
+    assert "unicom-presale-faq" not in eff_a["skills"]
     # 基础能力恒定不变
     base2 = json.loads(_req(f"/api/me/employees/{emp}", token=a)[1])["base"]
-    assert "product-faq" in base2["skills"]
+    assert "unicom-presale-faq" in base2["skills"]
     # 隔离：B 不应受 A 影响
     eff_b = json.loads(_req(f"/api/me/employees/{emp}", token=b)[1])["effective"]
     assert "data-analysis" not in eff_b["skills"], "A 的覆盖不应影响 B"
-    assert "product-faq" in eff_b["skills"], "B 仍保留模板基础"
+    assert "unicom-presale-faq" in eff_b["skills"], "B 仍保留模板基础"
 
 
 def test_admin_uses_pure_template(env):

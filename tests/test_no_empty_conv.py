@@ -53,7 +53,7 @@ def test_new_conversation_does_not_persist_empty_record():
     before = _list_conv_ids(tok)
 
     # 1) 模拟前端 selectEmployee：开新会话（此时还没说话）
-    st, body = _req("/api/employees/xiaosu/conversations", "POST", token=tok)
+    st, body = _req("/api/employees/unicom-presale/conversations", "POST", token=tok)
     assert st == 200, body
     conv_id = json.loads(body)["conversation_id"]
     after_new = _list_conv_ids(tok)
@@ -73,7 +73,7 @@ def test_new_conversation_does_not_persist_empty_record():
     st3, detail = _req(f"/api/conversations/{conv_id}", token=tok)
     assert st3 == 200, detail
     d = json.loads(detail)
-    assert d.get("employee_id") == "xiaosu"
+    assert d.get("employee_id") == "unicom-presale"
     assert "张" in (d.get("title") or ""), "标题应由首句/模型提炼，含用户关键信息"
 
 
