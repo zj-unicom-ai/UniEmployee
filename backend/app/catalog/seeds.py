@@ -46,6 +46,73 @@ def _tools_with_ontology(tools: list[str]) -> list[str]:
     return tools + list(ONTOLOGY_TOOLS)
 
 
+# 算网运营 SOP 种子（seed_if_empty 全量播种 / backfill_netops_upgrade 老库补缺共用）
+NETOPS_SOPS = [
+    ("sop_netops_emergency", "算网应急预案启动（刚性）",
+     "基站退服/大面积断网/机房级故障时按本预案启动应急响应",
+     "## 算网应急预案启动（刚性）\n"
+     "适用场景：基站退服（P1/P2 告警）、大面积断网（≥1 个片区）、机房级故障。\n\n"
+     "### 执行步骤（按顺序，不可跳过）\n\n"
+     "#### 步骤 1：确认影响面\n"
+     "- 查本体确认故障基站 → cover → 片区 → located_in → 受影响客户\n"
+     "- 单独统计 VIP/政企客户（优先保障对象）\n\n"
+     "#### 步骤 2：响应分级\n"
+     "- P1 或机房级故障：15 分钟内上报值班长，启动重大故障升级流程\n"
+     "  （见 sop_netops_escalation）\n"
+     "- P2：30 分钟内通知片区装维工程师处置\n\n"
+     "#### 步骤 3：通知责任人\n"
+     "- 装维：查本体 maintain(入边) 关系，电话通知并确认接单\n\n"
+     "#### 步骤 4：VIP 客户保障\n"
+     "- 对受影响 VIP/政企客户主动告知故障与预计恢复时间\n\n"
+     "#### 步骤 5：工单留痕\n"
+     "- 预案启动后立即 create_ticket 登记应急工单（无论处置是否完成）\n\n"
+     "### 注意事项\n"
+     "- 应急场景先执行止损步骤再留痕，但两者都必须完成\n"
+     "- 处置完成后 24 小时内输出复盘"),
+    ("sop_netops_cutover", "网络割接操作规范（刚性）",
+     "计划性割接/升级/扩容施工前按本规范执行",
+     "## 网络割接操作规范（刚性）\n"
+     "适用场景：计划性网络割接、基站升级、设备扩容施工。\n\n"
+     "### 执行步骤（按顺序，不可跳过）\n\n"
+     "#### 步骤 1：割接申请\n"
+     "- 受理割接申请后 create_ticket 登记割接工单留痕\n\n"
+     "#### 步骤 2：影响评估\n"
+     "- 查本体：割接对象 → cover 关系展开受影响基站、片区、客户\n"
+     "- 涉及 VIP/政企客户须提前 3 天单独告知\n\n"
+     "#### 步骤 3：时间窗确认\n"
+     "- 割接必须在业务低谷期（00:00-06:00）执行，节假日原则上禁止割接\n\n"
+     "#### 步骤 4：回退预案\n"
+     "- 必须制定回退方案并明确回退触发条件（如割接超 90 分钟未完成即回退）\n"
+     "- 无回退预案的割接不得开工\n\n"
+     "#### 步骤 5：执行监控\n"
+     "- 割接期间持续监控告警流水与接通率，异常立即按预案处置\n\n"
+     "#### 步骤 6：完工确认\n"
+     "- 完工后次日核对运营指标是否恢复基线，未恢复按故障流程处理\n\n"
+     "### 注意事项\n"
+     "- 审批与客户告知步骤绝不跳过\n"
+     "- 割接属计划性变更：执行动作由装维/机房人员实施，本流程只做评估与留痕"),
+    ("sop_netops_escalation", "重大故障升级上报（刚性）",
+     "P1 故障/VIP政企重大影响/处置超时按本规程升级上报",
+     "## 重大故障升级上报（刚性）\n"
+     "触发条件（满足其一即升级）：\n"
+     "- P1 故障；VIP 或政企客户重大影响；处置超时（P1 超 2 小时 / P2 超 4 小时未恢复）\n\n"
+     "### 执行步骤（按顺序，不可跳过）\n\n"
+     "#### 步骤 1：判定升级条件\n"
+     "- 核对告警等级（告警流水 severity）、影响客户等级（本体查询）、已处置时长\n\n"
+     "#### 步骤 2：上报链路（逐级，不可越级跳过）\n"
+     "- 装维工程师 → 网络监控值班长（李建国）→ 网络运营部负责人\n"
+     "- 人员联系方式查本体 employee 实体 props\n\n"
+     "#### 步骤 3：上报时限\n"
+     "- 满足升级条件后 30 分钟内完成第一轮上报\n\n"
+     "#### 步骤 4：工单留痕\n"
+     "- create_ticket 登记升级工单，写明升级原因、已通知人员、当前处置进展\n\n"
+     "#### 步骤 5：持续跟进\n"
+     "- 每 30 分钟更新一次进展，直至故障闭环后输出复盘\n\n"
+     "### 注意事项\n"
+     "- 升级上报是刚性动作：宁可多报，不可瞒报漏报\n"
+     "- 联系方式以本体为准，查不到时如实说明并建议人工确认"),
+]
+
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
     "xiaosu": dict(
@@ -68,9 +135,11 @@ EMPLOYEE_SEEDS = {
         tools=_tools_with_ontology(["run_python", "bocha_search", "get_current_time"]),
         kbs=[], sops=[], cons=[]),
     "net-ops": dict(
-        skills=["fault-impact-analysis"],
+        skills=["fault-impact-analysis", "ops-metrics-analysis",
+                "resource-capacity-analysis", "sop-execution"],
         tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
-        kbs=[], sops=[], cons=[]),
+        kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
+                      "sop_netops_escalation"], cons=[]),
 }
 
 
@@ -156,6 +225,7 @@ def seed_if_empty():
          "- 不要在未登记工单前承诺赔偿金额\n"
          "- 不要与用户争辩\n"
          "- 不要把用户晾着去查东西"),
+        *NETOPS_SOPS,
     ]
     for s in sops:
         cur.execute(
@@ -301,6 +371,68 @@ def backfill_employees_if_missing():
     con.close()
     if added:
         print(f"[seed] 已为老库补种内置员工：{', '.join(added)}")
+
+
+# net-ops 升级前后 persona 的特征句：用于判断老库中的 persona 是否被管理员改过
+# （旧版首句 / 新版特征句，与 backend/employees/net-ops.yaml 保持一致）
+_NETOPS_OLD_PERSONA_MARKER = "负责基站运维、装维调度与客户网络保障"
+_NETOPS_NEW_PERSONA_MARKER = "围绕四项核心能力开展工作"
+
+
+def backfill_netops_upgrade():
+    """net-ops「算网运营专家」老库一次性升级（幂等）。
+
+    补齐三类升级缺口（新库由 seed_if_empty 直接写入，无需本函数）：
+      1. 算网 SOP 种子行（INSERT OR IGNORE，不覆盖管理员改过的 SOP 内容）；
+      2. net-ops 的新技能 / SOP 绑定（INSERT OR IGNORE，不覆盖管理员增删）；
+      3. persona/role 同步：仅当库中 persona 仍是旧版特征句（未被管理员改过）
+         才更新为新版 yaml 内容；管理员改过则保留并打印提示。
+    """
+    con = _conn()
+    cur = con.cursor()
+
+    # 1. SOP 种子行补缺
+    for s in NETOPS_SOPS:
+        cur.execute("INSERT OR IGNORE INTO sops(id,name,description,content) "
+                    "VALUES(?,?,?,?)", s)
+
+    if not cur.execute(
+        "SELECT 1 FROM employees WHERE id='net-ops' AND deleted_at IS NULL"
+    ).fetchone():
+        con.commit()
+        con.close()
+        return
+
+    # 2. 技能/SOP 绑定补齐（skills 表行由 backfill_employees_if_missing 的
+    #    目录扫描保证，这里再兜底扫描一次，保持本函数自包含）
+    for sd in sorted((ROOT / "skills").glob("*/")):
+        cur.execute(
+            "INSERT OR IGNORE INTO skills(id,name,description,dir) VALUES(?,?,?,?)",
+            (sd.name, sd.name, _skill_desc(sd), f"skills/{sd.name}"))
+    sel = EMPLOYEE_SEEDS["net-ops"]
+    for s in sel.get("skills", []):
+        cur.execute("INSERT OR IGNORE INTO employee_skills VALUES(?,?)", ("net-ops", s))
+    for s in sel.get("sops", []):
+        cur.execute("INSERT OR IGNORE INTO employee_sops VALUES(?,?)", ("net-ops", s))
+
+    # 3. persona/role 同步（仅未改过时）
+    row = cur.execute(
+        "SELECT persona FROM employees WHERE id='net-ops' AND deleted_at IS NULL"
+    ).fetchone()
+    persona = (row["persona"] if row else "") or ""
+    if _NETOPS_OLD_PERSONA_MARKER in persona:
+        spec = load_spec(str(ROOT / "employees" / "net-ops.yaml"))
+        cur.execute(
+            "UPDATE employees SET role=?, persona=?, updated_at=? WHERE id='net-ops'",
+            (spec.role, spec.persona, time.strftime("%Y-%m-%d %H:%M:%S")))
+        print("[seed] net-ops 已升级为「算网运营专家」（persona 同步为新版）")
+    elif _NETOPS_NEW_PERSONA_MARKER in persona:
+        pass  # 已是新版
+    else:
+        print("[seed] net-ops persona 已被管理员修改，跳过自动升级（技能/SOP 绑定已补齐）")
+
+    con.commit()
+    con.close()
 
 
 def backfill_ragflow_knowledge_bases():

@@ -150,6 +150,21 @@ SCHEMA_ENTITY_TYPES = [
         {"key": "priority", "name": "保障等级", "type": "text"},
         {"key": "intro", "name": "简介", "type": "textarea"},
     ]),
+    ("datacenter", "机房", "算网基础设施的物理机房/IDC", "🏭", [
+        {"key": "code", "name": "机房编号", "type": "text"},
+        {"key": "address", "name": "地址", "type": "text"},
+        {"key": "tier", "name": "机房等级", "type": "text"},
+        {"key": "status", "name": "运行状态", "type": "text"},
+    ]),
+    ("compute_node", "算力节点", "算力资源节点（GPU/CPU），部署于机房", "🖥️", [
+        {"key": "role", "name": "用途", "type": "text"},
+        {"key": "spec", "name": "规格", "type": "text"},
+        {"key": "status", "name": "运行状态", "type": "text"},
+    ]),
+    ("link", "传输链路", "基站/机房间的传输光缆与链路", "🔗", [
+        {"key": "bandwidth", "name": "带宽", "type": "text"},
+        {"key": "status", "name": "运行状态", "type": "text"},
+    ]),
 ]
 
 # 模式层预置：9 个关系类型（system 租户，全局共享）
@@ -166,6 +181,8 @@ SCHEMA_RELATION_TYPES = [
     ("cover", "覆盖", "station", "area", "1:n", "基站覆盖某片区"),
     ("maintain", "维护", "employee", "station", "n:n", "装维人员维护某基站"),
     ("located_in", "居住于", "customer", "area", "n:1", "客户位于某片区"),
+    ("deploy_in", "部署于", "compute_node", "datacenter", "n:1", "算力节点部署于某机房"),
+    ("backhaul", "回传", "station", "link", "n:1", "基站经某传输链路回传"),
 ]
 
 # 数据层演示种子：虚拟企业「星云科技」（default 租户）
@@ -468,6 +485,83 @@ def seed_netops_demo_if_empty():
     con.commit()
     con.close()
     print("[ontology] 已播种网络运营演示数据：星联通信（4 员工 / 4 基站 / 3 片区 / 5 客户）")
+
+
+def seed_netops_resources_if_empty():
+    """算网资源演示种子：default 租户无机房实体时播种（幂等）。
+
+    实体名称与 workspace/data/netops_resources.csv 台账严格对齐，
+    支撑「台账跑数 + 本体查归属」的交叉分析：
+      compute_node → deploy_in → datacenter（节点在哪个机房）
+      station → backhaul → link（基站走哪条回传链路）
+    """
+    con = _conn()
+    has_dc = con.execute(
+        "SELECT 1 FROM entities WHERE entity_type='datacenter' AND tenant_id='default' "
+        "AND deleted_at IS NULL"
+    ).fetchone()
+    if has_dc:
+        con.close()
+        return
+    now = _now()
+    ids: dict[tuple, int] = {}
+
+    def add(type_, name, props):
+        ids[(type_, name)] = dblayer.insert_returning_id(
+            con,
+            "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (type_, name, json.dumps(props, ensure_ascii=False), "default", now, now))
+
+    def find_id(type_, name):
+        """查已有实体 id（基站等由 seed_netops_demo_if_empty 先行播种）。"""
+        row = con.execute(
+            "SELECT id FROM entities WHERE entity_type=? AND name=? AND tenant_id='default' "
+            "AND deleted_at IS NULL", (type_, name)).fetchone()
+        return row["id"] if row else None
+
+    def link(frm, to, rel):
+        con.execute(
+            "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,'{}',?,?,?)",
+            (frm, to, rel, "default", now, now))
+
+    for name, props in [
+        ("滨江核心机房", {"code": "DC-01", "address": "杭州市滨江区", "tier": "T3+", "status": "运行中"}),
+        ("下沙汇聚机房", {"code": "DC-02", "address": "杭州市钱塘区", "tier": "T3", "status": "运行中"}),
+    ]:
+        add("datacenter", name, props)
+
+    for name, props in [
+        ("GPU训练节点01", {"role": "AI 模型训练", "spec": "64 卡", "status": "运行中"}),
+        ("GPU推理节点01", {"role": "在线推理服务", "spec": "48 卡", "status": "运行中"}),
+        ("CPU核心节点01", {"role": "核心业务系统", "spec": "1024 vCPU", "status": "运行中"}),
+        ("CPU边缘节点01", {"role": "边缘计算", "spec": "256 vCPU", "status": "运行中"}),
+    ]:
+        add("compute_node", name, props)
+
+    for name, props in [
+        ("城东-滨江光缆", {"bandwidth": "400 Gbps", "status": "运行中"}),
+        ("高新-下沙光缆", {"bandwidth": "400 Gbps", "status": "运行中"}),
+        ("老城-滨江光缆", {"bandwidth": "200 Gbps", "status": "运行中"}),
+    ]:
+        add("link", name, props)
+
+    # 算力节点 → 部署于 → 机房
+    for node, dc in [("GPU训练节点01", "滨江核心机房"), ("GPU推理节点01", "滨江核心机房"),
+                     ("CPU核心节点01", "下沙汇聚机房"), ("CPU边缘节点01", "下沙汇聚机房")]:
+        link(ids[("compute_node", node)], ids[("datacenter", dc)], "deploy_in")
+
+    # 基站 → 回传 → 链路（基站实体由 seed_netops_demo_if_empty 先行播种）
+    for station, lk in [("城东1号基站", "城东-滨江光缆"), ("城东2号基站", "城东-滨江光缆"),
+                        ("高新区1号基站", "高新-下沙光缆"), ("老城1号基站", "老城-滨江光缆")]:
+        sid = find_id("station", station)
+        if sid:
+            link(sid, ids[("link", lk)], "backhaul")
+
+    con.commit()
+    con.close()
+    print("[ontology] 已播种算网资源演示数据：2 机房 / 4 算力节点 / 3 传输链路")
 
 
 # ---------------- Schema CRUD ----------------
