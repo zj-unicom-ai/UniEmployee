@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 (2026-09-01)
+
+### 重磅变更：新增「浙江联通售前客服」，移除旧演示客服 xiaosu
+
+- **新员工 unicom-presale（小联·浙江联通售前客服）**：售前咨询人设（资费/政策/流程必须先 kb_search 检索、禁止编造），绑定 RAGFlow「浙江联通业务知识库」，工具 kb_search + create_ticket
+- **新技能 unicom-presale-faq**：浙江联通售前咨询规程（定位主题 → 检索 → 引用来源 → 给下一步建议）
+- **RAGFlow「浙江联通业务知识库」**：联网搜集整理的 11 个知识文档（5G 套餐、融合宽带、互联网卡、特色套餐、携号转网、合约变更、靓号、销户异地、话费积分、政企业务、增值国际业务），101 chunks，配套幂等灌入脚本 `scripts/seed_zj_unicom.py`
+- **移除 xiaosu（旧演示客服）**：员工 yaml、product-faq / complaint-handling 技能、sop_complaint 种子及 catalog 记录全部清理，历史会话数据保留；依赖真实种子员工的测试改用 unicom-presale
+
+### 变更
+
+- 调试端点（/api/debug/memory、runtime.dump_store）默认员工从 xiaosu 改为 unicom-presale
+- CONNECTOR_ASSIGN 中 crm 连接器指派移除 xiaosu；本体工具 backfill 名单加入 unicom-presale
+
 ## 0.8.0 (2026-08-30)
 
 ### 重磅变更：net-ops 从「单技能」升级为「算网运营专家」四能力架构

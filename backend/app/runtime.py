@@ -141,7 +141,7 @@ async def shutdown_mcp() -> None:
         await _close_mcp_client(client)
 
 
-async def dump_store(employee_id: str = "xiaosu") -> list[dict]:
+async def dump_store(employee_id: str = "unicom-presale") -> list[dict]:
     """调试用：导出 Store 里某员工的全部虚拟文件（记忆/技能的实体所在）。"""
     items = await _store.asearch((employee_id,))
     return [{"key": i.key, "value": i.value} for i in items]

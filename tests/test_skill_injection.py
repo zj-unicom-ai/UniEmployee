@@ -14,19 +14,19 @@ def _read(name: str) -> str:
     return (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
 
 
-def test_extract_triggers_complaint_has_trigger_section():
-    """complaint-handling 有 ## 触发条件 段落，应优先提取它。"""
-    triggers = _extract_skill_triggers(_read("complaint-handling"))
-    assert "投诉" in triggers
-    assert "负面情绪" in triggers
+def test_extract_triggers_hr_assistant_has_trigger_section():
+    """hr-assistant 有 ## 触发条件 段落，应优先提取它。"""
+    triggers = _extract_skill_triggers(_read("hr-assistant"))
+    assert "人事制度" in triggers
+    assert "薪酬福利" in triggers
     # 不应混入 frontmatter 的 description
-    assert "客户投诉处理规程" not in triggers
+    assert "HR 综合人力技能" not in triggers
 
 
-def test_extract_triggers_product_faq_has_scope_section():
-    """product-faq 有 ## 适用范围 段落，应提取它（语义等同触发条件）。"""
-    triggers = _extract_skill_triggers(_read("product-faq"))
-    assert "产品规格" in triggers or "保修" in triggers
+def test_extract_triggers_unicom_presale_faq_has_scope_section():
+    """unicom-presale-faq 有 ## 适用范围 段落，应提取它（语义等同触发条件）。"""
+    triggers = _extract_skill_triggers(_read("unicom-presale-faq"))
+    assert "套餐资费" in triggers or "携号转网" in triggers
 
 
 def test_extract_triggers_data_analysis_fallback_to_description():

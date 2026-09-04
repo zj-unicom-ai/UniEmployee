@@ -35,7 +35,7 @@ CONNECTOR_SEEDS = [
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
-CONNECTOR_ASSIGN = {"crm": ["xiaosu", "xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"]}
+CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
@@ -115,10 +115,6 @@ NETOPS_SOPS = [
 
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
-    "xiaosu": dict(
-        skills=["product-faq", "complaint-handling"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "start_refund"]),
-        kbs=[], sops=["sop_refund", "sop_complaint"], cons=["crm"]),
     "xiaoshu": dict(
         skills=["data-analysis"], tools=_tools_with_ontology([]), kbs=[], sops=[]),
     "xiaoxiao": dict(
@@ -140,6 +136,10 @@ EMPLOYEE_SEEDS = {
         tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
+    "unicom-presale": dict(
+        skills=["unicom-presale-faq"],
+        tools=["kb_search", "create_ticket"],
+        kbs=[]),
 }
 
 
@@ -201,30 +201,6 @@ def seed_if_empty():
          "### 注意事项\n"
          "- 退款将原路返回，3-5 个工作日到账\n"
          "- 审批不可跳过，必须等待人工处理"),
-        ("sop_complaint", "投诉处理（软性）",
-         "用户表达不满时按 complaint-handling 技能规程执行",
-         "## 投诉处理（软性）\n用户表达不满或投诉时，必须先用 read_file 读取 "
-         "/skills/complaint-handling/SKILL.md，然后严格按其中的规程执行。\n\n"
-         "### 执行步骤（按顺序，不可跳过）\n\n"
-         "#### 步骤 1：安抚\n"
-         "先共情一句话再处理，不辩解、不推责。\n"
-         "- 句式参考：「非常抱歉给您带来了不便」「我完全理解您的心情」\n"
-         "- 绝对禁止：「这是正常的」「您可能没看清楚」「其他用户都没问题」\n\n"
-         "#### 步骤 2：核实\n"
-         "- 先问订单号（如未提供），用 order_query 查订单详情\n"
-         "- 用 kb_search 查该产品是否有已知问题或常见故障处理\n"
-         "- 必要时查 customer_profile 了解用户等级（VIP 优先处理）\n\n"
-         "#### 步骤 3：分类定级并登记工单\n"
-         "紧急度判断标准：\n"
-         "- urgent（安全风险/大面积故障/VIP 客诉）→ 2 小时响应\n"
-         "- high（功能故障/严重影响使用）→ 24 小时响应\n"
-         "- normal（一般不满/轻微问题/咨询类）→ 48 小时响应\n\n"
-         "#### 步骤 4：给出答复\n"
-         "告知用户工单号、预计响应时间、一个当下可执行的临时方案\n\n"
-         "### 禁忌\n"
-         "- 不要在未登记工单前承诺赔偿金额\n"
-         "- 不要与用户争辩\n"
-         "- 不要把用户晾着去查东西"),
         *NETOPS_SOPS,
     ]
     for s in sops:
@@ -305,7 +281,7 @@ def backfill_ontology_tools():
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
             "VALUES(?,?,?,?,?)",
             (tid, name, desc, "local", None))
-    for e in ("xiaosu", "xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops"):
+    for e in ("xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops", "unicom-presale"):
         if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
@@ -501,6 +477,7 @@ def backfill_ragflow_knowledge_bases():
 # 名称是稳定约定；只在数据集存在时补绑，不覆盖管理员手动增删）。
 EMPLOYEE_KB_ASSIGN = {
     "xiaoxiao": ["自研产品Wiki", "产品知识库", "客户档案"],
+    "unicom-presale": ["浙江联通业务知识库"],
 }
 
 
