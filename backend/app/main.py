@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, catalog, conversations, ontology, runtime
+from app import auth, catalog, conversations, ontology, runtime, scheduler
 from app import db as dblayer
 from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.9.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.10.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -93,8 +93,10 @@ async def lifespan(app):
         runtime.set_store(store)
         await runtime.warmup_all()
         await recover_conversations()
+        scheduler.start()
         log.info("启动完成，开始接收请求")
         yield
+        await scheduler.stop()
         await runtime.shutdown_mcp()
         if dblayer.is_pg():
             dblayer.close_all_pools()

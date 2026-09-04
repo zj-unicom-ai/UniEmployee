@@ -47,6 +47,7 @@ const routes = [
       },
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue') },
       { path: 'resources', name: 'resources', component: () => import('../views/ResourcesView.vue') },
+      { path: 'automation', name: 'automation', component: () => import('../views/AutomationView.vue') },
       { path: 'ontology', name: 'ontology', component: () => import('../views/OntologyView.vue') },
       { path: 'evaluation', name: 'evaluation', component: () => import('../views/AdminEvaluation.vue') },
       {

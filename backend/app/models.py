@@ -90,3 +90,34 @@ class ImIncomingMessage(BaseModel):
     message: str
     employee_id: str | None = None
     secret: str | None = None
+
+
+class AutomationCreate(BaseModel):
+    name: str
+    trigger_type: str = "cron"          # cron | event
+    cron_expr: str = ""                 # cron：分 时 日 月 周（服务器本地时间）
+    event_key: str = ""                 # event：事件标识，如 order.refunded
+    secret: str = ""                    # event：可选 secret 校验
+    employee_id: str = ""               # 执行员工
+    prompt: str = ""                    # 任务指令（支持 {{now}} / {{payload}}）
+    run_as: str = ""                    # 以哪个用户身份运行（记忆/可见归属）
+    channel_id: str = ""                # 可选：结果推送频道（outbound_webhook）
+    enabled: bool = True
+
+
+class AutomationUpdate(BaseModel):
+    name: str | None = None
+    trigger_type: str | None = None
+    cron_expr: str | None = None
+    event_key: str | None = None
+    secret: str | None = None
+    employee_id: str | None = None
+    prompt: str | None = None
+    run_as: str | None = None
+    channel_id: str | None = None
+    enabled: bool | None = None
+
+
+class AutomationEventIn(BaseModel):
+    payload: object = None              # 事件数据（注入 {{payload}}）
+    secret: str | None = None

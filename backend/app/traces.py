@@ -114,7 +114,9 @@ def finish_run(run_id: str, status: str = "done", error: str = ""):
                 except Exception:
                     dur = None
             agg = con.execute(
-                "SELECT SUM(etype='llm') l, SUM(etype='tool') t, COALESCE(SUM(tokens),0) tk "
+                "SELECT SUM(CASE WHEN etype='llm' THEN 1 ELSE 0 END) l, "
+                "SUM(CASE WHEN etype='tool' THEN 1 ELSE 0 END) t, "
+                "COALESCE(SUM(tokens),0) tk "
                 "FROM events WHERE run_id=?", (run_id,)).fetchone()
             con.execute(
                 "UPDATE runs SET status=?, error=?, ended_at=?, duration_ms=?, "
