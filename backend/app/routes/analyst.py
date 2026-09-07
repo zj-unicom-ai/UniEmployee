@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 from app.agent.analyst.datasource import manager as ds_manager
 from app.agent.analyst.datasource import schema_inspector
+from app.agent.analyst.terminology import manager as term_manager
+from app.agent.analyst.sql_examples import manager as ex_manager
 
 logger = logging.getLogger("app.routes.analyst")
 
@@ -49,6 +51,48 @@ class TableAnnotationUpdate(BaseModel):
     table_comment: str = ""
     queryable: int = 1
     column_annotations: dict = {}
+
+
+# ----- 术语请求模型 -----
+
+class TerminologyCreate(BaseModel):
+    word: str
+    description: str = ""
+    synonyms: list[str] = []
+    datasource_ids: list[str] = []
+    enabled: int = 1
+
+
+class TerminologyUpdate(BaseModel):
+    word: str | None = None
+    description: str | None = None
+    synonyms: list[str] | None = None
+    datasource_ids: list[str] | None = None
+    enabled: int | None = None
+
+
+class SynonymUpdate(BaseModel):
+    synonym: str
+
+
+# ----- SQL 示例请求模型 -----
+
+class SqlExampleCreate(BaseModel):
+    question: str
+    sql_text: str
+    description: str = ""
+    datasource_id: str | None = None
+    chart_type: str = ""  # table/pie/bar/line
+    enabled: int = 1
+
+
+class SqlExampleUpdate(BaseModel):
+    question: str | None = None
+    sql_text: str | None = None
+    description: str | None = None
+    datasource_id: str | None = None
+    chart_type: str | None = None
+    enabled: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -206,3 +250,146 @@ async def upsert_annotation(ds_id: str, table_name: str, req: TableAnnotationUpd
         queryable=req.queryable,
         column_annotations=req.column_annotations,
     )
+
+
+# ---------------------------------------------------------------------------
+# 术语 CRUD
+# ---------------------------------------------------------------------------
+
+@router.get("/terminologies")
+async def list_terminologies(
+    datasource_id: str | None = None,
+    include_disabled: bool = False,
+):
+    """列出术语。可按 datasource_id 过滤，include_disabled=1 包含已禁用。"""
+    return term_manager.list_terminologies(
+        datasource_id=datasource_id,
+        include_disabled=include_disabled,
+    )
+
+
+@router.get("/terminologies/{term_id}")
+async def get_terminology(term_id: str):
+    """获取单个术语。"""
+    term = term_manager.get_terminology(term_id)
+    if not term:
+        raise HTTPException(404, "术语不存在")
+    return term
+
+
+@router.post("/terminologies")
+async def create_terminology(req: TerminologyCreate):
+    """创建术语。"""
+    try:
+        return term_manager.create_terminology(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/terminologies/{term_id}")
+async def update_terminology(term_id: str, req: TerminologyUpdate):
+    """更新术语（部分更新）。"""
+    data = req.model_dump(exclude_none=True)
+    updated = term_manager.update_terminology(term_id, data)
+    if not updated:
+        raise HTTPException(404, "术语不存在")
+    return updated
+
+
+@router.delete("/terminologies/{term_id}")
+async def delete_terminology(term_id: str):
+    """删除术语。"""
+    if not term_manager.delete_terminology(term_id):
+        raise HTTPException(404, "术语不存在")
+    return {"ok": True}
+
+
+@router.post("/terminologies/{term_id}/synonyms")
+async def add_synonym(term_id: str, req: SynonymUpdate):
+    """追加单个同义词（幂等去重）。"""
+    try:
+        updated = term_manager.add_synonym(term_id, req.synonym)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not updated:
+        raise HTTPException(404, "术语不存在")
+    return updated
+
+
+@router.delete("/terminologies/{term_id}/synonyms/{synonym}")
+async def remove_synonym(term_id: str, synonym: str):
+    """移除某个同义词（幂等）。"""
+    updated = term_manager.remove_synonym(term_id, synonym)
+    if not updated:
+        raise HTTPException(404, "术语不存在")
+    return updated
+
+
+@router.post("/terminologies/{term_id}/toggle")
+async def toggle_terminology(term_id: str, enabled: int = 1):
+    """启用/禁用术语。"""
+    updated = term_manager.toggle_terminology(term_id, enabled)
+    if not updated:
+        raise HTTPException(404, "术语不存在")
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# SQL 示例 CRUD
+# ---------------------------------------------------------------------------
+
+@router.get("/sql-examples")
+async def list_sql_examples(
+    datasource_id: str | None = None,
+    include_disabled: bool = False,
+):
+    """列出 SQL 示例。可按 datasource_id 过滤。"""
+    return ex_manager.list_sql_examples(
+        datasource_id=datasource_id,
+        include_disabled=include_disabled,
+    )
+
+
+@router.get("/sql-examples/{ex_id}")
+async def get_sql_example(ex_id: str):
+    """获取单个 SQL 示例。"""
+    ex = ex_manager.get_sql_example(ex_id)
+    if not ex:
+        raise HTTPException(404, "SQL 示例不存在")
+    return ex
+
+
+@router.post("/sql-examples")
+async def create_sql_example(req: SqlExampleCreate):
+    """创建 SQL 示例。"""
+    try:
+        return ex_manager.create_sql_example(req.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/sql-examples/{ex_id}")
+async def update_sql_example(ex_id: str, req: SqlExampleUpdate):
+    """更新 SQL 示例（部分更新）。"""
+    data = req.model_dump(exclude_none=True)
+    updated = ex_manager.update_sql_example(ex_id, data)
+    if not updated:
+        raise HTTPException(404, "SQL 示例不存在")
+    return updated
+
+
+@router.delete("/sql-examples/{ex_id}")
+async def delete_sql_example(ex_id: str):
+    """删除 SQL 示例。"""
+    if not ex_manager.delete_sql_example(ex_id):
+        raise HTTPException(404, "SQL 示例不存在")
+    return {"ok": True}
+
+
+@router.post("/sql-examples/{ex_id}/toggle")
+async def toggle_sql_example(ex_id: str, enabled: int = 1):
+    """启用/禁用 SQL 示例。"""
+    updated = ex_manager.toggle_sql_example(ex_id, enabled)
+    if not updated:
+        raise HTTPException(404, "SQL 示例不存在")
+    return updated

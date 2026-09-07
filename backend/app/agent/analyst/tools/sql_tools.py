@@ -26,6 +26,8 @@ from app.agent.analyst.datasource import manager as ds_manager
 from app.agent.analyst.datasource import schema_inspector
 from app.agent.analyst.tools.schema_retriever import bm25_retrieve_tables, format_schema_text
 from app.agent.analyst.tools.tool_call_manager import get_tool_call_manager
+from app.agent.analyst.terminology.retriever import build_terminology_injection
+from app.agent.analyst.sql_examples.retriever import build_sql_example_injection
 
 logger = logging.getLogger("app.agent.analyst.tools.sql_tools")
 
@@ -102,13 +104,30 @@ def sql_db_smart_search(datasource_id: str, user_query: str,
         schema_text = format_schema_text(selected_names, table_info)
         _record_tool_call(session_id, "sql_db_smart_search", True)
 
+        # 注入业务术语（命中时拼到 schema 前面，帮 LLM 理解业务名词映射）
+        term_xml = build_terminology_injection(user_query, datasource_id)
+        # 注入相似 SQL 示例（命中时作为参考写法，加速正确 SQL 生成）
+        example_xml = build_sql_example_injection(user_query, datasource_id)
+
+        context_block = ""
+        if term_xml:
+            context_block += (
+                "业务术语参考（命中用户问题中的业务词）：\n"
+                + term_xml + "\n\n"
+            )
+        if example_xml:
+            context_block += (
+                "相似问题的参考 SQL（可参考写法但不要照抄，须按当前 schema 调整）：\n"
+                + example_xml + "\n\n"
+            )
+
         header = (
             f"✅ 智能检索完成：从 {total_count} 张表中筛选出 {len(selected_names)} 张相关表。\n"
             f"相关表：{', '.join(selected_names)}\n"
             f"（如需其他表的 schema，可额外调用 sql_db_table_schema）\n"
         )
         footer = "\n\n✅ schema 已获取。请直接基于以上信息编写 SQL，无需重复调用此工具。"
-        return header + schema_text + footer
+        return context_block + header + schema_text + footer
 
     except Exception as e:
         _record_tool_call(session_id, "sql_db_smart_search", False)
