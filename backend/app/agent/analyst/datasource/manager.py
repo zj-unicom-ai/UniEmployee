@@ -276,12 +276,12 @@ def delete_datasource(datasource_id: str) -> bool:
     con = _catalog_conn()
     try:
         now = _now()
-        con.execute(
+        cur = con.execute(
             "UPDATE datasources SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
             (now, datasource_id)
         )
         con.commit()
-        deleted = con.total_changes > 0
+        deleted = cur.rowcount > 0
     finally:
         con.close()
     clear_engine_cache(datasource_id)

@@ -43,11 +43,13 @@ async def list_conv(
     employee_id: str = None,
     user: dict = Depends(auth.get_current_user_or_fallback),
     page: int | None = None, page_size: int = 10, limit: int | None = None,
+    exclude_auto: bool = False,
 ):
     uid = user["id"]
     if page:
         return conversations.list_paged(employee_id, user_id=uid, page=page, page_size=page_size)
-    return conversations.list_for(employee_id, user_id=uid, limit=limit)
+    return conversations.list_for(employee_id, user_id=uid, limit=limit,
+                                   exclude_auto=exclude_auto)
 
 
 @router.delete("/conversations/{conv_id}")
@@ -99,6 +101,7 @@ async def upload_attachment(conv_id: str, file: UploadFile = File(...),
 
 @router.post("/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, body: MessageIn,
+                       datasource_id: str = "",
                        user: dict = Depends(auth.get_current_user_or_fallback)):
     uid = user["id"]
     meta = conversations.get(conv_id)
@@ -128,7 +131,8 @@ async def send_message(conv_id: str, body: MessageIn,
     content = attachments.compose_user_content(body.message, atts)
     input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
-        _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user")),
+        _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user"),
+                    datasource_id=datasource_id),
         media_type="text/event-stream")
 
 

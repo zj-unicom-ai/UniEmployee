@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,6 +46,7 @@ class DatasourceUpdate(BaseModel):
 class TestConnection(BaseModel):
     db_type: str
     config: dict
+    datasource_id: str | None = None  # 编辑模式未改密码时回填已保存密码
 
 
 class TableAnnotationUpdate(BaseModel):
@@ -111,11 +113,8 @@ async def get_datasource(ds_id: str):
     ds = ds_manager.get_datasource(ds_id)
     if not ds:
         raise HTTPException(404, "数据源不存在")
-    # 不返回加密的 config，返回解密后的（去密码字段更安全，但这里先保持）
+    # 返回解密后的 config（含真实密码，供编辑回显）
     ds["config"] = ds_manager.decrypt_config(ds["config"])
-    # 隐藏密码
-    if "password" in ds["config"]:
-        ds["config"]["password"] = "***"
     return ds
 
 
@@ -148,8 +147,15 @@ async def delete_datasource(ds_id: str):
 
 @router.post("/datasources/test")
 async def test_connection(req: TestConnection):
-    """测试数据源连接。"""
-    ok, msg = ds_manager.test_connection(req.db_type, req.config)
+    """测试数据源连接。编辑模式未改密码时用已保存密码回填，避免空密码报错。"""
+    config = req.config
+    pwd = config.get("password", "") if isinstance(config, dict) else ""
+    if req.datasource_id and (not pwd or pwd == "***"):
+        ds = ds_manager.get_datasource(req.datasource_id)
+        if ds:
+            saved = ds_manager.decrypt_config(ds["config"])
+            config = {**config, "password": saved.get("password", "")}
+    ok, msg = ds_manager.test_connection(req.db_type, config)
     return {"success": ok, "message": msg}
 
 
@@ -209,6 +215,30 @@ async def get_table_schema(ds_id: str, table_name: str):
     except Exception as e:
         logger.error("获取表结构失败: %s", e, exc_info=True)
         raise HTTPException(500, f"获取表结构失败: {str(e)[:200]}")
+
+
+@router.get("/datasources/{ds_id}/tables/{table_name}/preview")
+async def preview_table_data(ds_id: str, table_name: str, limit: int = 10):
+    """预览表数据：返回前 N 行数据，用于库表配置页确认字段含义。
+
+    复用 datasource.manager.execute_query 跑 SELECT * LIMIT N。
+    """
+    try:
+        # 不同数据库的 LIMIT 语法不同，manager.execute_query 已对结果做了 limit 截断
+        sql = f"SELECT * FROM {table_name}"
+        result = ds_manager.execute_query(ds_id, sql, limit=limit)
+        return {
+            "table_name": table_name,
+            "columns": result.get("columns", []),
+            "data": result.get("data", []),
+            "row_count": result.get("row_count", 0),
+            "truncated": result.get("row_count", 0) >= limit,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("预览数据失败: %s", e, exc_info=True)
+        raise HTTPException(500, f"预览数据失败: {str(e)[:200]}")
 
 
 @router.get("/datasources/{ds_id}/relationships")
@@ -332,6 +362,79 @@ async def toggle_terminology(term_id: str, enabled: int = 1):
     if not updated:
         raise HTTPException(404, "术语不存在")
     return updated
+
+
+@router.post("/terminologies/generate-synonyms")
+async def generate_synonyms(req: Request, word: str = ""):
+    """AI 生成同义词：调 LLM 为术语词生成 5 个候选同义词。
+
+    用于术语配置页「AI 生成同义词」按钮，提升术语维护效率。
+    """
+    import os
+    from langchain_core.messages import HumanMessage
+
+    if not word:
+        body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
+        word = body.get("word", "")
+    if not word:
+        raise HTTPException(400, "word is required")
+
+    model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
+    try:
+        # _init_model 对非 openai: 前缀的模型返回字符串，需要显式走 init_chat_model
+        from langchain.chat_models import init_chat_model
+        if model_name.startswith("openai:"):
+            llm = init_chat_model(model_name, use_responses_api=False)
+        else:
+            llm = init_chat_model(model_name)
+    except Exception as e:
+        logger.error("init llm failed: %s", e)
+        raise HTTPException(500, f"模型初始化失败: {e}")
+
+    prompt = f"""请为术语「{word}」生成 5 个同义词或近义表述，用于数据分析和商业智能场景。
+
+要求：
+1. 同义词应贴近业务用户的口语表达，不要学术化
+2. 包含：缩写形式、口语化变体、行业别名
+3. 直接返回 JSON 数组格式的字符串，例如 ["词1", "词2", "词3"]
+4. 不要包含 Markdown 标记、解释文字、代码块包裹
+
+示例（术语「环比」）：["MoM", "上月比", "月环比", "月度环比", "环比增长"]
+"""
+    try:
+        resp = await llm.ainvoke([HumanMessage(content=prompt)])
+        content = resp.content.strip()
+        # 兼容 LLM 可能包裹的 ```json 代码块
+        if content.startswith("```json"):
+            content = content[7:]
+        elif content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        candidates = json.loads(content)
+        if not isinstance(candidates, list):
+            return {"word": word, "synonyms": []}
+        # 去重 + 去空 + 与原词不同的过滤
+        seen = set()
+        result = []
+        for w in candidates:
+            w = str(w).strip()
+            if w and w != word and w not in seen:
+                seen.add(w)
+                result.append(w)
+        return {"word": word, "synonyms": result[:5]}
+    except json.JSONDecodeError:
+        # LLM 返回非 JSON 时降级：尝试按逗号/顿号分割
+        try:
+            raw = content.replace("[", "").replace("]", "").replace("\"", "")
+            parts = [w.strip() for w in raw.replace("、", ",").split(",") if w.strip()]
+            return {"word": word, "synonyms": parts[:5]}
+        except Exception:
+            return {"word": word, "synonyms": []}
+    except Exception as e:
+        logger.error("generate_synonyms LLM 调用失败: %s", e)
+        raise HTTPException(500, f"LLM 调用失败: {e}")
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,10 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from contextvars import ContextVar
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from langchain_core.tools import tool
@@ -33,6 +37,96 @@ logger = logging.getLogger("app.agent.analyst.tools.sql_tools")
 
 _BM25_TOP_K = 20
 _MAX_RESULT_ROWS = 50
+
+
+# ---------------------------------------------------------------------------
+# SSE 事件流桥接：把 sql_db_query 的结构化结果按 conv_id 缓冲，
+# 供 streaming.py 在 ToolMessage 到达时取出，翻译成 chart/sql SSE 事件。
+# 用 contextvars 而非工具参数传 conv_id，避免依赖 LLM 自觉传 conversation_id。
+# ---------------------------------------------------------------------------
+
+# 当前会话 ID（由 streaming.py 在 astream 前 set，工具内部读取）
+_conv_id_var: ContextVar[str] = ContextVar("analyst_conv_id", default="")
+
+# 当前数据源 ID（由 streaming.py 在 astream 前 set，工具内部读取）
+# 设计动机：LLM 调用 sql_db_* 工具时常常瞎猜 datasource_id（试 "chinook"/"1"/"default"
+# 都失败），导致工具调用链爆炸。前端选数据源后通过 query param 把真实 ID 传到后端，
+# 由 streaming.py 注入到此 contextvar，工具内部优先用它兜底，LLM 不传/传错也能跑通。
+_datasource_id_var: ContextVar[str] = ContextVar("analyst_datasource_id", default="")
+
+# 按 conv_id 隔离的查询结果缓冲：conv_id -> [chart_data, ...]
+# chart_data 形如 {"sql": str, "columns": list[str], "rows": list[dict], "row_count": int}
+_query_results: dict[str, list[dict]] = {}
+_buffer_lock = threading.Lock()
+
+
+def set_conv_id(conv_id: str) -> None:
+    """streaming.py 在调用 agent.astream 前注入当前会话 ID。"""
+    _conv_id_var.set(conv_id)
+
+
+def clear_conv_id() -> None:
+    """astream 结束后清理（避免下次复用旧值）。"""
+    _conv_id_var.set("")
+
+
+def set_datasource_id(ds_id: str) -> None:
+    """streaming.py 在 astream 前注入当前数据源 ID（由前端选数据源后传到后端）。"""
+    _datasource_id_var.set(ds_id or "")
+
+
+def clear_datasource_id() -> None:
+    """astream 结束后清理。"""
+    _datasource_id_var.set("")
+
+
+def _resolve_datasource_id(explicit: str) -> str:
+    """工具内部统一的数据源 ID 解析：优先用 LLM 显式传的值，为空时用 contextvar 兜底。
+
+    设计权衡：保留 LLM 显式传值优先，是为了不破坏既有调用约定与测试；
+    contextvar 兜底覆盖 LLM 不传/传空字符串的常见场景（LLM 拿不到 ID 时）。
+    LLM 传错值（如 "chinook"）仍会失败，但这正是 fallback 价值的体现——
+    前端选好数据源后，无论 LLM 怎么猜，工具都能拿到正确 ID。
+    """
+    return explicit or _datasource_id_var.get()
+
+
+def _json_safe(obj):
+    """递归把 Decimal/datetime/date 等 json.dumps 不能直接序列化的类型转成基本类型。
+
+    设计动机：SQLAlchemy 从不同数据库引擎反序列化 numeric 字段时常返回 Decimal
+    （MySQL 的 decimal、PG 的 numeric），datetime 字段返回 datetime 对象；
+    streaming.py 用 json.dumps 把 chart 数据发 SSE 事件时会抛
+    'TypeError: Object of type Decimal is not JSON serializable'，
+    导致前端收到「⚠ 任务执行出错」错误提示（但 SQL 工具实际执行成功）。
+    在数据源头（工具内部）统一转换比在 SSE 序列化处改 default 钩子更干净，
+    因为前端 ChartRenderer 期望的是 number 而非字符串。
+    """
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    # Decimal → float（数值语义，前端图表需要 number 而非字符串）
+    if isinstance(obj, Decimal):
+        return float(obj)
+    # datetime/date/time → ISO 字符串（前端可再格式化）
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    return obj
+
+
+def _push_query_result(conv_id: str, chart_data: dict) -> None:
+    """工具内部调用：把查询结果追加到该会话的缓冲队列。"""
+    if not conv_id:
+        return
+    with _buffer_lock:
+        _query_results.setdefault(conv_id, []).append(chart_data)
+
+
+def pop_query_results(conv_id: str) -> list[dict]:
+    """streaming.py 调用：取出并清空该会话的所有待消费结果。"""
+    with _buffer_lock:
+        return _query_results.pop(conv_id, [])
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +157,7 @@ def _get_session_id(datasource_id: str, conversation_id: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def sql_db_smart_search(datasource_id: str, user_query: str,
+def sql_db_smart_search(datasource_id: str = "", user_query: str = "",
                         conversation_id: str = "") -> str:
     """智能检索数据库表：使用 BM25 检索最相关的表并返回完整 schema。
 
@@ -71,10 +165,13 @@ def sql_db_smart_search(datasource_id: str, user_query: str,
     这是数据库问数的第一步，获取 schema 后直接编写 SQL，无需重复调用。
 
     Args:
-        datasource_id: 数据源 ID（从数据源管理页面获取）
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
         user_query: 用户的原始问题或需求（中文或英文）
         conversation_id: 会话 ID（用于防循环管理，可选）
     """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_smart_search")
@@ -136,15 +233,18 @@ def sql_db_smart_search(datasource_id: str, user_query: str,
 
 
 @tool
-def sql_db_table_schema(datasource_id: str, table_names: str,
+def sql_db_table_schema(datasource_id: str = "", table_names: str = "",
                         conversation_id: str = "") -> str:
     """获取指定表的详细结构（字段名/类型/注释）。
 
     Args:
-        datasource_id: 数据源 ID
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
         table_names: 表名，多个表用逗号分隔
         conversation_id: 会话 ID（可选）
     """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_table_schema")
@@ -196,15 +296,18 @@ def sql_db_table_schema(datasource_id: str, table_names: str,
 
 
 @tool
-def sql_db_table_relationship(datasource_id: str, table_names: str,
+def sql_db_table_relationship(datasource_id: str = "", table_names: str = "",
                               conversation_id: str = "") -> str:
     """获取表间外键关联关系，用于多表 JOIN 查询。
 
     Args:
-        datasource_id: 数据源 ID
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
         table_names: 需要查询关联的表名列表，逗号分隔
         conversation_id: 会话 ID（可选）
     """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_table_relationship")
@@ -237,15 +340,18 @@ def sql_db_table_relationship(datasource_id: str, table_names: str,
 
 
 @tool
-def sql_db_query(datasource_id: str, query: str,
+def sql_db_query(datasource_id: str = "", query: str = "",
                  conversation_id: str = "") -> str:
     """执行 SQL SELECT 查询并返回结果。只允许 SELECT，禁止 INSERT/UPDATE/DELETE 等。
 
     Args:
-        datasource_id: 数据源 ID
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
         query: 要执行的 SQL SELECT 语句
         conversation_id: 会话 ID（可选）
     """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
     session_id = _get_session_id(datasource_id, conversation_id)
 
     # 安全检查
@@ -281,6 +387,20 @@ def sql_db_query(datasource_id: str, query: str,
 
         data = result["data"]
         columns = result["columns"]
+
+        # 把结构化查询结果外推到 SSE 桥接缓冲：
+        # streaming.py 收到 sql_db_query 的 ToolMessage 时会取出，发 chart/sql SSE 事件，
+        # 让前端 ChartRenderer/SqlViewer 渲染。chart_type 暂留 "table"，
+        # 后续可由 SQL 示例配置或 LLM 智能推断覆盖。
+        # JSON 序列化兼容：SQLAlchemy 反序列化时 numeric/decimal 字段会成 Decimal，
+        # datetime 会成 datetime 对象，json.dumps 都不能直接序列化，先统一转基本类型。
+        _push_query_result(_conv_id_var.get(), {
+            "sql": query,
+            "columns": columns,
+            "data": _json_safe(data[:_MAX_RESULT_ROWS]),
+            "row_count": len(data),
+            "chart_type": "table",
+        })
 
         if not data:
             return "✅ 查询成功执行，但没有返回数据。"

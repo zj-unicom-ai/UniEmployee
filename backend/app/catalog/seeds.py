@@ -40,6 +40,21 @@ CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"]}
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
 
+# 数据分析专家 xiaoshu 的 SQL 工具集（agent/analyst 模块定义，登记进 tools 表
+# 后资源中心可见可开关；老库由 backfill_analyst_sql_tools 幂等补缺）
+ANALYST_SQL_TOOLS = {
+    "sql_db_smart_search": ("智能表检索",
+                            "BM25 检索最相关的表并返回 schema（数据分析首选工具）"),
+    "sql_db_table_schema": ("表结构查询",
+                             "获取指定表的字段/类型/注释/外键详情"),
+    "sql_db_table_relationship": ("表关系查询",
+                                   "查询表间外键关联，辅助多表 JOIN"),
+    "sql_db_query": ("SQL 查询执行",
+                      "执行 SELECT 查询并返回结果（只读，禁止写操作）"),
+    "sql_db_query_checker": ("SQL 语法检查",
+                              "检查 SQL 语法是否正确（不执行）"),
+}
+
 
 def _tools_with_ontology(tools: list[str]) -> list[str]:
     """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。"""
@@ -183,6 +198,17 @@ def seed_if_empty():
          "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）", "local", None),
         ("ontology_query_relations", "企业本体关系查询",
          "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）", "local", None),
+        # 数据分析专家 SQL 工具集（与 ANALYST_SQL_TOOLS 常量保持一致）
+        ("sql_db_smart_search", "智能表检索",
+         "BM25 检索最相关的表并返回 schema（数据分析首选工具）", "local", None),
+        ("sql_db_table_schema", "表结构查询",
+         "获取指定表的字段/类型/注释/外键详情", "local", None),
+        ("sql_db_table_relationship", "表关系查询",
+         "查询表间外键关联，辅助多表 JOIN", "local", None),
+        ("sql_db_query", "SQL 查询执行",
+         "执行 SELECT 查询并返回结果（只读，禁止写操作）", "local", None),
+        ("sql_db_query_checker", "SQL 语法检查",
+         "检查 SQL 语法是否正确（不执行）", "local", None),
     ]
     for t in tools:
         cur.execute(
@@ -291,6 +317,33 @@ def backfill_ontology_tools():
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    con.commit()
+    con.close()
+
+
+def backfill_analyst_sql_tools():
+    """幂等补齐数据分析专家 SQL 工具集登记与 xiaoshu 员工指派。
+
+    与 backfill_ontology_tools 语义一致：新库由 seed_if_empty 全量写入，
+    老库（已有 xiaoshu 但缺 SQL 工具登记/指派）靠这里幂等补缺。
+    仅补缺不覆盖：管理员在资源中心取消的 SQL 工具，下次重启会补回。
+
+    设计动机：xiaoshu 的 SQL 工具集（agent/analyst 模块定义）在 EMPLOYEE_SEEDS
+    里声明，但 seed_if_empty 只对空库生效。老库升级到带 SQL 工具的版本时，
+    若没有此 backfill，xiaoshu 的 tools 字段会缺失 sql_db_* 工具，导致 LLM
+    退化为调用文件系统工具（ls/glob/execute）而非 SQL 工具链。
+    """
+    con = _conn()
+    cur = con.cursor()
+    for tid, (name, desc) in ANALYST_SQL_TOOLS.items():
+        cur.execute(
+            "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+            "VALUES(?,?,?,?,?)",
+            (tid, name, desc, "local", None))
+    # 仅当 xiaoshu 员工存在时才指派（尊重删除态）
+    if cur.execute("SELECT 1 FROM employees WHERE id='xiaoshu' AND deleted_at IS NULL").fetchone():
+        for t in ANALYST_SQL_TOOLS:
+            cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('xiaoshu', ?)", (t,))
     con.commit()
     con.close()
 

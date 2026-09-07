@@ -16,6 +16,20 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from app import runtime, traces, catalog, approvals, conversations, guard
 from app import db as dblayer
 from app.compiler import _init_model
+# 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
+# 并在 sql_db_query 完成时取出结构化结果，翻译成 chart/sql SSE 事件。
+# 延迟 import 失败时退化为无操作，避免分析师模块异常拖垮其他员工流。
+try:
+    from app.agent.analyst.tools.sql_tools import (
+        set_conv_id as analyst_set_conv_id,
+        clear_conv_id as analyst_clear_conv_id,
+        set_datasource_id as analyst_set_datasource_id,
+        clear_datasource_id as analyst_clear_datasource_id,
+        pop_query_results as analyst_pop_query_results,
+    )
+    _ANALYST_HOOK = True
+except Exception:  # noqa: BLE001  启动期容错：分析师模块尚未就绪时不影响其他员工
+    _ANALYST_HOOK = False
 
 logger = logging.getLogger("app.streaming")
 
@@ -295,8 +309,14 @@ def first_message_text(input_) -> str:
         return ""
 
 
-async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user"):
-    """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。"""
+async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
+                      datasource_id: str = ""):
+    """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。
+
+    datasource_id 由数据问数页面前端选数据源后传入，注入到分析师工具的
+    contextvar，让 sql_db_* 工具内部能拿到正确 ID，避免 LLM 瞎猜。
+    非数据问数会话留空即可。
+    """
     emp_id = employee_of(conv_id)
     if not emp_id:
         yield sse({"type": "error", "error_code": "internal_error",
@@ -344,6 +364,14 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     skill_stage_on = False
     bot_text = ""
 
+    # 数据分析专家桥接：把 conv_id 注入工具执行上下文，
+    # 让 sql_db_query 工具能按会话隔离地把结构化结果写回缓冲。
+    if _ANALYST_HOOK:
+        analyst_set_conv_id(conv_id)
+        # 前端选的数据源 ID 也注入到 contextvar，工具内部 datasource_id
+        # 参数为空时用它兜底（LLM 拿不到 ID 就不会瞎猜了）。
+        analyst_set_datasource_id(datasource_id)
+
     try:
         async for event in agent.astream(input_, config=config,
                                          stream_mode=["updates", "messages"], version="v2"):
@@ -390,6 +418,13 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         tool_status = "error" if getattr(m, "status", None) == "error" else "end"
                         yield sse({"type": "tool", "name": name, "args": {}, "status": tool_status,
                                    "preview": preview})
+                        # 数据分析专家：sql_db_query 工具执行后，从会话缓冲取出
+                        # SQL 文本发 sql SSE 事件，让前端 SqlViewer 渲染。
+                        # （chart 事件已停用：用户反馈与 AI 文字回复冗余，
+                        # ChartRenderer 已从前端移除；item 仍按 conv_id push 以取 sql 字段。）
+                        if name == "sql_db_query" and _ANALYST_HOOK:
+                            for item in analyst_pop_query_results(conv_id):
+                                yield sse({"type": "sql", "sql": item.get("sql", "")})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,
@@ -449,3 +484,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         except Exception:
             logger.warning("错误提示写入 checkpoint 失败 conv=%s", conv_id, exc_info=True)
         yield sse({"type": "error", "error_code": error_code, "message": user_message})
+    finally:
+        # 始终清理分析师 contextvar，避免下次 astream 复用旧 conv_id
+        if _ANALYST_HOOK:
+            analyst_clear_conv_id()
+            analyst_clear_datasource_id()

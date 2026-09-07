@@ -97,6 +97,12 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         else msg.trace.push({ type: 'tool', name: ev.name, args, status: st, preview: ev.preview || '' })
       }
       touch()
+    } else if (ev.type === 'sql') {
+      // 数据分析专家：sql_db_query 工具执行后回传 SQL 语句，由 SqlViewer 渲染
+      // 同一次工具调用可能产生多条结果，用数组承接避免覆盖
+      if (!msg.sql) msg.sql = ev.sql || ''
+      else if (ev.sql) msg.sql += '\n;\n' + ev.sql
+      touch()
     } else if (ev.type === 'subagent') {
       if (!msg.subagents) msg.subagents = []
       let sa = msg.subagents.find(s => s.name === ev.name)
@@ -153,7 +159,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text, attachments = []) {
+  async function sendTo(endpoint, text, attachments = [], datasourceId = null) {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachments.length) return
@@ -170,7 +176,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     abortActiveStream()
     activeController = controller
     try {
-      const resp = await fetch(endpoint, {
+      // 数据问数页前端选了数据源后，把 datasource_id 作为 query param 传到后端，
+      // 后端注入到 sql_db_* 工具的 contextvar，避免 LLM 瞎猜 ID。
+      let url = endpoint
+      if (datasourceId) {
+        url += (url.includes('?') ? '&' : '?') + 'datasource_id=' + encodeURIComponent(datasourceId)
+      }
+      const resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

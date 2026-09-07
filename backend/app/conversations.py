@@ -138,20 +138,28 @@ def touch(conv_id: str, *, title: str | None = None, preview: str | None = None,
             )
 
 
-def _where(employee_id=None, user_id=None, channel_id=None, exclude_channel=False):
+def _where(employee_id=None, user_id=None, channel_id=None, exclude_channel=False,
+           exclude_auto=False):
     sql = "WHERE deleted_at IS NULL"; params = []
     if employee_id: sql += " AND employee_id=?"; params.append(employee_id)
     if user_id: sql += " AND user_id=?"; params.append(user_id)
     if channel_id: sql += " AND channel_id=?"; params.append(channel_id)
     if exclude_channel: sql += " AND (channel_id IS NULL OR channel_id='')"
+    # exclude_auto：过滤自动任务会话（c_auto_ 前缀），用于员工专属会话页（如数据问数）
+    # 避免把"定时获取资讯/退款事件处理"等自动任务会话混入员工历史列表。
+    if exclude_auto: sql += " AND conv_id NOT LIKE 'c_auto_%'"
     return sql, params
 
 
 def list_for(employee_id: str | None = None, user_id: str | None = None,
-             limit: int | None = None) -> list[dict]:
-    """会话清单（按员工/用户过滤；limit 限制条数，用于侧栏最近会话）。"""
+             limit: int | None = None, exclude_auto: bool = False) -> list[dict]:
+    """会话清单（按员工/用户过滤；limit 限制条数，用于侧栏最近会话）。
+
+    exclude_auto=True 时排除 c_auto_ 前缀的自动任务会话，用于员工专属会话页。
+    """
     with _conn() as con:
-        wh, params = _where(employee_id, user_id, exclude_channel=True)
+        wh, params = _where(employee_id, user_id, exclude_channel=True,
+                            exclude_auto=exclude_auto)
         sql = f"SELECT * FROM conversations {wh} ORDER BY updated_at DESC, created_at DESC, conv_id DESC"
         if limit:
             sql += " LIMIT ?"; params.append(limit)
