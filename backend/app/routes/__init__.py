@@ -22,6 +22,7 @@ from .im import router as im_router
 from .guard import router as guard_router
 from .audit import router as audit_router
 from .automations import router as automation_router
+from .analyst import router as analyst_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -36,3 +37,4 @@ router.include_router(im_router)
 router.include_router(guard_router)
 router.include_router(audit_router)
 router.include_router(automation_router)
+router.include_router(analyst_router)

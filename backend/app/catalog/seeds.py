@@ -116,7 +116,12 @@ NETOPS_SOPS = [
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
     "xiaoshu": dict(
-        skills=["data-analysis"], tools=_tools_with_ontology([]), kbs=[], sops=[]),
+        skills=["data-analysis"],
+        tools=_tools_with_ontology([
+            "sql_db_smart_search", "sql_db_table_schema",
+            "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
+        ]),
+        kbs=[], sops=[]),
     "xiaoxiao": dict(
         skills=["enterprise-sales"],
         tools=_tools_with_ontology(["kb_search", "bocha_search"]),

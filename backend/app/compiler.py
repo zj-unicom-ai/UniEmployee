@@ -27,6 +27,8 @@ from app.tools.search import bocha_search
 from app.tools.time_tools import get_current_time
 from app.tools.wiki_tools import query_product_wiki, list_product_catalog
 from app.workflows.refund import make_start_refund
+# 数据分析员工 SQL 工具集（从 Aix-DB 适配搬迁）
+from app.agent.analyst.tools.sql_tools import ANALYST_SQL_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +47,12 @@ ALL_LOCAL_TOOLS = {
     # 兼容旧员工配置；实现已改为 RAGFlow 检索，不再读取本地 product-wiki。
     "query_product_wiki": query_product_wiki,
     "list_product_catalog": list_product_catalog,
+    # 数据分析员工 SQL 工具集
+    "sql_db_smart_search": ANALYST_SQL_TOOLS[0],
+    "sql_db_table_schema": ANALYST_SQL_TOOLS[1],
+    "sql_db_table_relationship": ANALYST_SQL_TOOLS[2],
+    "sql_db_query": ANALYST_SQL_TOOLS[3],
+    "sql_db_query_checker": ANALYST_SQL_TOOLS[4],
 }
 # start_refund 不在此表：它需要运行时 checkpointer 注入（支持 Point2 内层图
 # interrupt），由 _assemble_tools 用 make_start_refund(checkpointer) 工厂装配。
