@@ -29,6 +29,7 @@ from app.tools.wiki_tools import query_product_wiki, list_product_catalog
 from app.workflows.refund import make_start_refund
 # 数据分析员工 SQL 工具集（从 Aix-DB 适配搬迁）
 from app.agent.analyst.tools.sql_tools import ANALYST_SQL_TOOLS
+from app.agent.analyst.fileqa.tools import ANALYST_FILE_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +54,9 @@ ALL_LOCAL_TOOLS = {
     "sql_db_table_relationship": ANALYST_SQL_TOOLS[2],
     "sql_db_query": ANALYST_SQL_TOOLS[3],
     "sql_db_query_checker": ANALYST_SQL_TOOLS[4],
+    # 数据分析员工表格问答工具集（上传 Excel/CSV → DuckDB）
+    "file_table_list": ANALYST_FILE_TOOLS[0],
+    "file_table_query": ANALYST_FILE_TOOLS[1],
 }
 # start_refund 不在此表：它需要运行时 checkpointer 注入（支持 Point2 内层图
 # interrupt），由 _assemble_tools 用 make_start_refund(checkpointer) 工厂装配。

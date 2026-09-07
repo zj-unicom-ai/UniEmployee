@@ -43,6 +43,6 @@ persona: |
 
 skills:
   - data-analysis
-tools: []   # 工具由 seeds.py 注入：sql_db_* + ontology_*；无文件系统工具（standard 后端）
+tools: []   # 工具由 seeds.py 注入：sql_db_* + file_table_* + ontology_*；无文件系统工具（standard 后端）
 mcp_servers: {}
 interrupt_on: {}

@@ -55,6 +55,14 @@ ANALYST_SQL_TOOLS = {
                               "检查 SQL 语法是否正确（不执行）"),
 }
 
+# 数据分析专家 xiaoshu 的表格问答工具集（上传 Excel/CSV → DuckDB 注册 → SQL 查询）
+ANALYST_FILE_TOOLS = {
+    "file_table_list": ("附件表格列表",
+                        "列出用户上传注册的 Excel/CSV 数据表及其字段结构"),
+    "file_table_query": ("附件表格查询",
+                         "对上传的 Excel/CSV 表格执行 SELECT 查询（DuckDB 只读）"),
+}
+
 
 def _tools_with_ontology(tools: list[str]) -> list[str]:
     """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。"""
@@ -135,6 +143,7 @@ EMPLOYEE_SEEDS = {
         tools=_tools_with_ontology([
             "sql_db_smart_search", "sql_db_table_schema",
             "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
+            "file_table_list", "file_table_query",
         ]),
         kbs=[], sops=[]),
     "xiaoxiao": dict(
@@ -335,14 +344,16 @@ def backfill_analyst_sql_tools():
     """
     con = _conn()
     cur = con.cursor()
-    for tid, (name, desc) in ANALYST_SQL_TOOLS.items():
+    # SQL 工具与表格问答工具共用同一幂等补缺逻辑（登记 tools 表 + 指派 xiaoshu）
+    all_analyst_tools = {**ANALYST_SQL_TOOLS, **ANALYST_FILE_TOOLS}
+    for tid, (name, desc) in all_analyst_tools.items():
         cur.execute(
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
             "VALUES(?,?,?,?,?)",
             (tid, name, desc, "local", None))
     # 仅当 xiaoshu 员工存在时才指派（尊重删除态）
     if cur.execute("SELECT 1 FROM employees WHERE id='xiaoshu' AND deleted_at IS NULL").fetchone():
-        for t in ANALYST_SQL_TOOLS:
+        for t in all_analyst_tools:
             cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('xiaoshu', ?)", (t,))
     con.commit()
     con.close()

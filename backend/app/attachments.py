@@ -76,11 +76,14 @@ def _human_size(size: int) -> str:
     return f"{size}B"
 
 
-def compose_user_content(message: str, attachments: list[dict]) -> str:
+def compose_user_content(message: str, attachments: list[dict],
+                         guidance: str = "") -> str:
     """把附件清单拼进用户消息文本，供 agent 感知并按路径读取。
 
     附件不作为多模态内容传给模型，而是以结构化文本注入——
     这与现有纯文本消息管线（checkpointer/reconstruct/记忆）完全兼容。
+    guidance 可覆盖默认处理指引（如数据分析员工用 file_table_query
+    而非 run_python 分析数据文件）。
     """
     if not attachments:
         return message
@@ -91,6 +94,7 @@ def compose_user_content(message: str, attachments: list[dict]) -> str:
         ctype = a.get("content_type") or "未知类型"
         lines.append(f"- {a.get('name', '未命名')}｜路径 {a.get('path')}｜"
                      f"{_human_size(int(a.get('size', 0)))}｜{ctype}")
-    lines.append("处理指引：文本/代码/JSON 等用 read_file(路径) 读取；"
-                 "csv/xlsx 等数据文件用 run_python + pandas 按路径分析。")
+    lines.append("处理指引：" + (guidance or
+                 "文本/代码/JSON 等用 read_file(路径) 读取；"
+                 "csv/xlsx 等数据文件用 run_python + pandas 按路径分析。"))
     return "\n".join(lines)

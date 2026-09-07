@@ -27,6 +27,10 @@ try:
         clear_datasource_id as analyst_clear_datasource_id,
         pop_query_results as analyst_pop_query_results,
     )
+    from app.agent.analyst.fileqa.manager import (
+        set_user_id as fileqa_set_user_id,
+        clear_user_id as fileqa_clear_user_id,
+    )
     _ANALYST_HOOK = True
 except Exception:  # noqa: BLE001  启动期容错：分析师模块尚未就绪时不影响其他员工
     _ANALYST_HOOK = False
@@ -371,6 +375,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         # 前端选的数据源 ID 也注入到 contextvar，工具内部 datasource_id
         # 参数为空时用它兜底（LLM 拿不到 ID 就不会瞎猜了）。
         analyst_set_datasource_id(datasource_id)
+        # 表格问答（fileqa）工具按用户隔离 DuckDB 库，注入当前用户 ID。
+        fileqa_set_user_id(user_id)
 
     try:
         async for event in agent.astream(input_, config=config,
@@ -418,11 +424,11 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         tool_status = "error" if getattr(m, "status", None) == "error" else "end"
                         yield sse({"type": "tool", "name": name, "args": {}, "status": tool_status,
                                    "preview": preview})
-                        # 数据分析专家：sql_db_query 工具执行后，从会话缓冲取出
-                        # SQL 文本发 sql SSE 事件，让前端 SqlViewer 渲染。
+                        # 数据分析专家：sql_db_query / file_table_query 工具执行后，
+                        # 从会话缓冲取出 SQL 文本发 sql SSE 事件，让前端 SqlViewer 渲染。
                         # （chart 事件已停用：用户反馈与 AI 文字回复冗余，
                         # ChartRenderer 已从前端移除；item 仍按 conv_id push 以取 sql 字段。）
-                        if name == "sql_db_query" and _ANALYST_HOOK:
+                        if name in ("sql_db_query", "file_table_query") and _ANALYST_HOOK:
                             for item in analyst_pop_query_results(conv_id):
                                 yield sse({"type": "sql", "sql": item.get("sql", "")})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
@@ -489,3 +495,4 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         if _ANALYST_HOOK:
             analyst_clear_conv_id()
             analyst_clear_datasource_id()
+            fileqa_clear_user_id()

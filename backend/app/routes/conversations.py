@@ -1,4 +1,5 @@
 """对话 / 消息 / 追踪 / 审批 路由。"""
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -7,6 +8,8 @@ from langgraph.types import Command
 from app import attachments, auth, runtime, approvals, conversations, catalog, traces
 from app.models import MessageIn, DecisionIn
 from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
+
+logger = logging.getLogger("app.routes.conversations")
 
 router = APIRouter(prefix="/api")
 
@@ -129,6 +132,21 @@ async def send_message(conv_id: str, body: MessageIn,
             conversations.claim(conv_id, uid)
         conversations.touch(conv_id, title=title, preview=preview, bump=1)
     content = attachments.compose_user_content(body.message, atts)
+    # 数据分析员工：CSV/Excel 附件自动注册为 DuckDB 表（表格问答），
+    # 注册摘要替换默认处理指引——xiaoshu 是 standard 后端无 run_python。
+    if emp == "xiaoshu":
+        try:
+            from app.agent.analyst.fileqa import manager as fileqa_manager
+            reg_summary = fileqa_manager.register_attachments(atts, uid)
+        except Exception:
+            logger.warning("表格附件注册异常 conv=%s", conv_id, exc_info=True)
+            reg_summary = ""
+        if reg_summary:
+            content = attachments.compose_user_content(
+                body.message, atts,
+                guidance="csv/xlsx 数据文件已自动注册为可查询数据表，"
+                         "用 file_table_list 查看表结构，用 file_table_query "
+                         "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
     input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
         _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user"),

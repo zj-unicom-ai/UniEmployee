@@ -61,22 +61,41 @@
 
       <!-- 输入栏 -->
       <div class="input-bar">
-        <n-input
-          v-model:value="inputText"
-          type="textarea"
-          :rows="2"
-          size="small"
-          placeholder="向小数提问，如：本月销售额 TOP10 客户"
-          :disabled="stream.sending.value"
-          @keydown.enter.exact.prevent="onSend"
-        />
-        <n-button
-          type="primary"
-          size="small"
-          :loading="stream.sending.value"
-          :disabled="!inputText.trim() || !datasourceId"
-          @click="onSend"
-        >发送</n-button>
+        <div v-if="pendingFiles.length" class="att-chips">
+          <n-tag
+            v-for="(f, i) in pendingFiles" :key="i"
+            size="small" closable type="info"
+            @close="pendingFiles.splice(i, 1)"
+          >{{ f.name }}</n-tag>
+        </div>
+        <div class="input-row">
+          <n-button size="small" quaternary :loading="uploading"
+                    title="上传 Excel/CSV 表格（自动注册为可查询数据表）"
+                    @click="fileInputRef?.click()">
+            📎
+          </n-button>
+          <input
+            ref="fileInputRef" type="file" hidden multiple
+            accept=".csv,.xlsx,.xls"
+            @change="onFilePick"
+          />
+          <n-input
+            v-model:value="inputText"
+            type="textarea"
+            :rows="2"
+            size="small"
+            placeholder="向小数提问，如：本月销售额 TOP10 客户；也可粘贴后上传表格直接问"
+            :disabled="stream.sending.value"
+            @keydown.enter.exact.prevent="onSend"
+          />
+          <n-button
+            type="primary"
+            size="small"
+            :loading="stream.sending.value || uploading"
+            :disabled="(!inputText.trim() && !pendingFiles.length) || (!datasourceId && !pendingFiles.length)"
+            @click="onSend"
+          >发送</n-button>
+        </div>
       </div>
     </div>
 
@@ -101,6 +120,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useMessage } from 'naive-ui'
+import api from '../../../api.js'
 import * as analystApi from '../../../api/analyst.js'
 import { useChatStream, renderMd } from '../../../composables/useChatStream.js'
 import ChatMessage from '../../../components/chat/ChatMessage.vue'
@@ -126,6 +146,27 @@ const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
 const showOntology = ref(false)
+
+// 表格问答附件：选中的待上传文件（发送时先上传再随消息发出）
+const pendingFiles = ref([])
+const uploading = ref(false)
+const fileInputRef = ref(null)
+
+function onFilePick(e) {
+  const files = Array.from(e.target.files || [])
+  for (const f of files) {
+    if (!/\.(csv|xlsx|xls)$/i.test(f.name)) {
+      message.warning('仅支持 csv/xlsx/xls 表格文件：' + f.name)
+      continue
+    }
+    if (pendingFiles.value.length >= 5) {
+      message.warning('单条消息最多 5 个附件')
+      break
+    }
+    pendingFiles.value.push(f)
+  }
+  e.target.value = ''
+}
 
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
@@ -201,8 +242,9 @@ async function openConversation(cid) {
 
 async function onSend() {
   const text = inputText.value.trim()
-  if (!text) return
-  if (!datasourceId.value) {
+  if (!text && !pendingFiles.value.length) return
+  // 纯表格问答（只带附件）不强制选数据源；数据库问数仍需数据源
+  if (!datasourceId.value && !pendingFiles.value.length) {
     message.warning('请先选择数据源')
     return
   }
@@ -210,13 +252,35 @@ async function onSend() {
     await newConv()
     if (!convId.value) return
   }
+  // 先上传表格附件（.csv/.xlsx/.xls），后端发送消息时自动注册为 DuckDB 表
+  let attachments = []
+  if (pendingFiles.value.length) {
+    uploading.value = true
+    try {
+      for (const f of pendingFiles.value) {
+        const form = new FormData()
+        form.append('file', f)
+        const { data } = await api.post(`/conversations/${convId.value}/attachments`, form)
+        if (data.error) {
+          message.error('附件「' + f.name + '」上传失败：' + data.error)
+        } else {
+          attachments.push(data)
+        }
+      }
+    } catch (e) {
+      message.error('附件上传失败：' + (e.response?.data?.detail || e.message))
+    }
+    uploading.value = false
+    pendingFiles.value = []
+    if (!attachments.length) return
+  }
   // 把 datasource_id 作为结构化参数传到后端（query param），由 streaming.py
   // 注入到 sql_db_* 工具的 contextvar，工具内部 datasource_id 参数为空时兜底。
   // 不再用文本前缀 [数据源: xxx]，避免 LLM 把名字当 ID 瞎猜。
   await stream.sendTo(
     `/api/conversations/${convId.value}/messages`,
     text,
-    [],
+    attachments,
     datasourceId.value,
   )
   inputText.value = ''
@@ -311,10 +375,20 @@ onMounted(async () => {
   padding: 8px 12px;
   border-top: 1px solid #e5e7eb;
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.input-row {
+  display: flex;
   gap: 8px;
   align-items: flex-end;
 }
-.input-bar .n-input { flex: 1; }
+.input-row .n-input { flex: 1; }
+.att-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 
 /* 右侧本体 */
 .right-panel {
