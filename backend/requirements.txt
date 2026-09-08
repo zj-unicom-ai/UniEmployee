@@ -6,9 +6,9 @@ python-dotenv==1.2.2
 pyyaml==6.0.3
 PyJWT==2.13.0
 bcrypt==5.0.0
-deepagents==0.7.5
+deepagents==0.7.13
 langchain-deepseek==1.1.0
-langgraph==1.2.9
+langgraph==1.2.11
 # PostgreSQL 后端（checkpointer + store + 连接；DB_BACKEND=postgres 时必需）
 langgraph-checkpoint-postgres==3.1.2
 psycopg[binary,pool]==3.3.4
