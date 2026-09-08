@@ -1,6 +1,7 @@
 id: net-ops
 name: 小网
 role: 算网运营专家
+kind: composed   # 编排型员工：通过资源编排（技能/工具/知识库/SOP/连接器）页面化配置
 model: ${MODEL_NAME}
 backend: local_shell
 persona: |

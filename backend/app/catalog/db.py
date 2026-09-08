@@ -63,7 +63,8 @@ def init():
     CREATE TABLE IF NOT EXISTS employees(
       id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT, model TEXT,
       persona TEXT, backend TEXT DEFAULT 'state', mcp_servers TEXT, interrupt_on TEXT,
-      subagents TEXT, subagent_policy TEXT, created_at TEXT, updated_at TEXT);
+      subagents TEXT, subagent_policy TEXT, created_at TEXT, updated_at TEXT,
+      kind TEXT DEFAULT 'composed');  -- 员工类型：composed=编排型（资源编排配置）；custom=定制型（独立模块化开发）
     CREATE TABLE IF NOT EXISTS employee_skills(employee_id TEXT, skill_id TEXT, PRIMARY KEY(employee_id, skill_id));
     CREATE TABLE IF NOT EXISTS employee_tools(employee_id TEXT, tool_id TEXT, PRIMARY KEY(employee_id, tool_id));
     CREATE TABLE IF NOT EXISTS employee_kbs(employee_id TEXT, kb_id TEXT, PRIMARY KEY(employee_id, kb_id));
@@ -119,6 +120,7 @@ def init():
     _migrate_ragflow_datasets(con)
     _migrate_retire_kb_entries(con)
     _migrate_user_org(con)
+    _migrate_employee_kind(con)
     # 安全护栏表（guard 包）幂等建表，复用同一连接
     from ..guard.db import init_tables as _guard_init
     _guard_init(con)
@@ -132,6 +134,24 @@ def _migrate_user_org(con):
     """users 表补 org_id 列（归属组织，NULL=未分配）。幂等。"""
     if "org_id" not in dblayer.table_columns(con, "users"):
         con.execute("ALTER TABLE users ADD COLUMN org_id TEXT")
+    con.commit()
+
+
+def _migrate_employee_kind(con):
+    """employees 表补 kind 列（员工类型：composed=编排型 / custom=定制型）+ 把
+    内置定制型员工打标。
+
+    定制型员工的 kind 由代码事实决定（有独立模块化路由如 /app/analyst 与
+    专属工作台），不应受页面改动影响，每次迁移强制对齐。其余员工保持 composed
+    默认值，不受本迁移覆盖。
+    """
+    if "kind" not in dblayer.table_columns(con, "employees"):
+        con.execute("ALTER TABLE employees ADD COLUMN kind TEXT DEFAULT 'composed'")
+    # 定制型员工 kind 由代码决定（内置独立模块），每次迁移强制对齐，
+    # 避免管理员误改或历史迁移 bug 导致分类错乱
+    con.execute(
+        "UPDATE employees SET kind='custom' WHERE id IN ('xiaoshu') "
+        "AND deleted_at IS NULL")
     con.commit()
 
 

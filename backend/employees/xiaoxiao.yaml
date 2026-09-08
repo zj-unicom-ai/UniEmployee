@@ -1,6 +1,7 @@
 id: xiaoxiao
 name: 客户经理（解决方案顾问）
 role: 客户经理（解决方案顾问）
+kind: composed   # 编排型员工：通过资源编排（技能/工具/知识库/SOP/连接器）页面化配置
 model: ${MODEL_NAME}
 backend: local_shell   # 需要 execute 工具来执行 Word 生成脚本
 persona: |

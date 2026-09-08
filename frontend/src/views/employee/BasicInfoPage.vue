@@ -5,6 +5,12 @@
       <n-form-item label="员工 ID">
         <n-input :value="employee?.id || ''" readonly />
       </n-form-item>
+      <n-form-item label="员工类型">
+        <n-tag :type="isCustom ? 'warning' : 'info'" size="small" round>
+          {{ isCustom ? '定制型' : '编排型' }}
+        </n-tag>
+        <span class="kind-hint">{{ isCustom ? '独立模块化开发，专属工作台与定制工具链' : '通过资源编排页面化配置' }}</span>
+      </n-form-item>
       <n-form-item label="名称 *" required>
         <n-input v-model:value="form.name" placeholder="如：小苏" />
       </n-form-item>
@@ -34,7 +40,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../../api.js'
@@ -46,6 +52,8 @@ const emit = defineEmits(['changed'])
 
 const router = useRouter()
 const message = useMessage()
+
+const isCustom = computed(() => (props.employee?.kind || 'composed') === 'custom')
 
 const backendOptions = [
   { label: 'state（默认，标准工具后端）', value: 'state' },
@@ -93,4 +101,5 @@ async function delEmp() {
 <style scoped>
 .basic-page { max-width: 720px; }
 .actions { margin-top: 20px; display: flex; gap: 10px; }
+.kind-hint { margin-left: 10px; font-size: 12px; color: #94a3b8; }
 </style>

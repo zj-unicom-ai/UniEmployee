@@ -1,6 +1,7 @@
 id: xiaoshu
 name: 数据分析专家
 role: 数据分析专家
+kind: custom   # 定制型员工：独立模块化开发（agent/analyst + /app/analyst 专属工作台）
 model: ${MODEL_NAME}
 backend: standard   # 数据库问数员工：不需要文件系统/run_python，避免 LLM 走 csv 探测路径
 persona: |
