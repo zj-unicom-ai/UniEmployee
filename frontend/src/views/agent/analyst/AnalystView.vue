@@ -145,21 +145,6 @@
       </div>
     </div>
 
-    <!-- 右：本体面板（默认折叠） -->
-    <div class="right-panel" :class="{ collapsed: !showOntology }">
-      <div class="panel-header">
-        <span v-if="!showOntology" @click="showOntology = true" class="toggle-btn">
-          ◀ 展开本体
-        </span>
-        <template v-else>
-          <span>本体关联</span>
-          <n-button size="tiny" text @click="showOntology = false">▶</n-button>
-        </template>
-      </div>
-      <div v-if="showOntology" class="ontology-content">
-        <n-empty description="SQL 结果涉及实体时展示" size="small" />
-      </div>
-    </div>
   </div>
 </template>
 
@@ -216,7 +201,6 @@ const inputText = ref('')
 const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
-const showOntology = ref(false)
 
 // 表格问答附件：选中的待上传文件（发送时先上传再随消息发出）
 const pendingFiles = ref([])
@@ -588,26 +572,5 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
-/* 右侧本体 */
-.right-panel {
-  width: 280px;
-  border-left: 1px solid #e5e7eb;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  transition: width 0.2s;
-}
-.right-panel.collapsed { width: 40px; }
-.toggle-btn {
-  cursor: pointer;
-  font-size: 12px;
-  color: #6b7280;
-}
-.ontology-content {
-  flex: 1;
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+/* 右侧本体面板已移除（功能未实现，避免用户困惑） */
 </style>
