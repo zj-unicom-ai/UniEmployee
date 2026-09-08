@@ -55,6 +55,7 @@ def _config_from_ids(emp_row: dict, skills: list, tools: list, kbs: list,
         "id": emp_row["id"], "name": emp_row["name"], "role": emp_row["role"],
         "model": emp_row["model"], "persona": emp_row["persona"],
         "backend": emp_row["backend"] or "state",
+        "kind": emp_row["kind"] or "composed",
         "interrupt_on": _build_interrupt_on(tools),
         "subagents": json.loads(emp_row["subagents"]) if isinstance(emp_row["subagents"], str) else (emp_row["subagents"] or []),
         "subagent_policy": emp_row["subagent_policy"] or "",
@@ -67,7 +68,7 @@ def _config_from_ids(emp_row: dict, skills: list, tools: list, kbs: list,
 def list_employees_meta() -> list[dict]:
     con = _conn()
     rows = con.execute(
-        "SELECT id,name,role,model,backend FROM employees "
+        "SELECT id,name,role,model,backend,kind FROM employees "
         "WHERE deleted_at IS NULL ORDER BY created_at").fetchall()
     out = [dict(r) for r in rows]
     con.close()
@@ -218,19 +219,23 @@ def create_employee(data: dict) -> str:
     interrupt_on = _build_interrupt_on(data.get("tools", []))
     subagents = json.dumps(data.get("subagents") or [], ensure_ascii=False)
     subagent_policy = data.get("subagent_policy", "")
+    # 新建员工默认为编排型；定制型员工由代码模块化开发，不通过此入口创建
+    kind = data.get("kind") or "composed"
     con = _conn()
     cur = con.cursor()
     cur.execute(
         "INSERT INTO employees(id,name,role,model,persona,backend,mcp_servers,interrupt_on,"
-        "subagents,subagent_policy,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        "subagents,subagent_policy,created_at,updated_at,kind) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET name=excluded.name, role=excluded.role, "
         "model=excluded.model, persona=excluded.persona, backend=excluded.backend, "
         "interrupt_on=excluded.interrupt_on, subagents=excluded.subagents, "
-        "subagent_policy=excluded.subagent_policy, "
+        "subagent_policy=excluded.subagent_policy, kind=excluded.kind, "
         "updated_at=excluded.updated_at, deleted_at=NULL",
         (emp_id, data.get("name", emp_id), data.get("role", ""), data.get("model", ""),
          data.get("persona", ""), data.get("backend", "state"), "{}",
-         json.dumps(interrupt_on, ensure_ascii=False), subagents, subagent_policy, now, now))
+         json.dumps(interrupt_on, ensure_ascii=False), subagents, subagent_policy,
+         now, now, kind))
     _set_links(cur, emp_id, data)
     con.commit()
     con.close()

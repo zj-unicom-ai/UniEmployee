@@ -260,13 +260,13 @@ def seed_if_empty():
                        spec.model)
         cur.execute(
             "INSERT INTO employees(id,name,role,model,persona,backend,mcp_servers,"
-            "interrupt_on,subagents,subagent_policy,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "interrupt_on,subagents,subagent_policy,created_at,updated_at,kind) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (emp_id, spec.name, spec.role, model, spec.persona, spec.backend,
              json.dumps(spec.mcp_servers, ensure_ascii=False),
              json.dumps(spec.interrupt_on, ensure_ascii=False),
              json.dumps(spec.subagents, ensure_ascii=False),
-             spec.subagent_policy, now, now))
+             spec.subagent_policy, now, now, spec.kind))
         for s in sel.get("skills", []):
             cur.execute("INSERT OR IGNORE INTO employee_skills VALUES(?,?)", (emp_id, s))
         for t in sel.get("tools", []):
@@ -385,13 +385,13 @@ def backfill_employees_if_missing():
                        spec.model)
         cur.execute(
             "INSERT INTO employees(id,name,role,model,persona,backend,mcp_servers,"
-            "interrupt_on,subagents,subagent_policy,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "interrupt_on,subagents,subagent_policy,created_at,updated_at,kind) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (emp_id, spec.name, spec.role, model, spec.persona, spec.backend,
              json.dumps(spec.mcp_servers, ensure_ascii=False),
              json.dumps(spec.interrupt_on, ensure_ascii=False),
              json.dumps(spec.subagents, ensure_ascii=False),
-             spec.subagent_policy, now, now))
+             spec.subagent_policy, now, now, spec.kind))
         for s in sel.get("skills", []):
             cur.execute("INSERT OR IGNORE INTO employee_skills VALUES(?,?)", (emp_id, s))
         for t in sel.get("tools", []):

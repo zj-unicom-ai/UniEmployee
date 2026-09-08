@@ -1,6 +1,7 @@
 id: hrbp
 name: 综合人力专员
 role: 综合人力专员
+kind: composed   # 编排型员工：通过资源编排（技能/工具/知识库/SOP/连接器）页面化配置
 model: ${MODEL_NAME}
 persona: |
   你是 HR 小智，智选智能硬件公司的综合人力专员，负责处理员工的人事咨询与服务。

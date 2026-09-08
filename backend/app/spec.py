@@ -25,6 +25,7 @@ class EmployeeSpec(BaseModel):
     skill_dirs: dict = {}        # skill_id -> 目录路径（相对 ROOT 或绝对路径，支持外部技能）
     subagents: list[dict] = []   # 子代理配置（name/description/system_prompt/tools/model/permissions）
     subagent_policy: str = ""    # 委派策略：追加到 system_prompt 的硬性规则，可经 catalog 配置
+    kind: str = "composed"       # 员工类型：composed=编排型（资源编排配置）；custom=定制型（独立模块化开发，如数据分析专家）
 
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")

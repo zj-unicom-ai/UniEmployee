@@ -1,6 +1,7 @@
 id: biz-analyzer
 name: 小经
 role: 经营分析与决策顾问
+kind: composed   # 编排型员工：通过资源编排（技能/工具/知识库/SOP/连接器）页面化配置
 model: ${MODEL_NAME}
 backend: local_shell
 persona: |
