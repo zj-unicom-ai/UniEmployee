@@ -27,6 +27,7 @@ import { useRouter } from 'vue-router'
 import { NButton, NTag, NSpace, useDialog } from 'naive-ui'
 import api from '../api.js'
 import PaginationBar from '../components/PaginationBar.vue'
+import { routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'HistoryView' })
 
@@ -52,7 +53,8 @@ const columns = computed(() => [
     key: 'title',
     render: (row) => h('a', {
       style: 'color:#3b82f6;font-weight:500;cursor:pointer;text-decoration:none',
-      onClick: () => router.push({ name: 'chat', query: { conv: row.conv_id } }),
+      // 按员工类型分流：定制型员工（如 xiaoshu）跳专属对话路由，编排型跳 chat
+      onClick: () => router.push({ name: routeNameForEmployee(row.employee_id), query: { conv: row.conv_id } }),
     }, (row.title && row.title.trim()) ? row.title : (row.preview || '新对话')),
   },
   {

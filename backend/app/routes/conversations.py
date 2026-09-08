@@ -1,4 +1,5 @@
 """对话 / 消息 / 追踪 / 审批 路由。"""
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -7,6 +8,8 @@ from langgraph.types import Command
 from app import attachments, auth, runtime, approvals, conversations, catalog, traces
 from app.models import MessageIn, DecisionIn
 from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
+
+logger = logging.getLogger("app.routes.conversations")
 
 router = APIRouter(prefix="/api")
 
@@ -43,11 +46,13 @@ async def list_conv(
     employee_id: str = None,
     user: dict = Depends(auth.get_current_user_or_fallback),
     page: int | None = None, page_size: int = 10, limit: int | None = None,
+    exclude_auto: bool = False,
 ):
     uid = user["id"]
     if page:
         return conversations.list_paged(employee_id, user_id=uid, page=page, page_size=page_size)
-    return conversations.list_for(employee_id, user_id=uid, limit=limit)
+    return conversations.list_for(employee_id, user_id=uid, limit=limit,
+                                   exclude_auto=exclude_auto)
 
 
 @router.delete("/conversations/{conv_id}")
@@ -99,6 +104,7 @@ async def upload_attachment(conv_id: str, file: UploadFile = File(...),
 
 @router.post("/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, body: MessageIn,
+                       datasource_id: str = "",
                        user: dict = Depends(auth.get_current_user_or_fallback)):
     uid = user["id"]
     meta = conversations.get(conv_id)
@@ -126,9 +132,25 @@ async def send_message(conv_id: str, body: MessageIn,
             conversations.claim(conv_id, uid)
         conversations.touch(conv_id, title=title, preview=preview, bump=1)
     content = attachments.compose_user_content(body.message, atts)
+    # 数据分析员工：CSV/Excel 附件自动注册为 DuckDB 表（表格问答），
+    # 注册摘要替换默认处理指引——xiaoshu 是 standard 后端无 run_python。
+    if emp == "xiaoshu":
+        try:
+            from app.agent.analyst.fileqa import manager as fileqa_manager
+            reg_summary = fileqa_manager.register_attachments(atts, uid)
+        except Exception:
+            logger.warning("表格附件注册异常 conv=%s", conv_id, exc_info=True)
+            reg_summary = ""
+        if reg_summary:
+            content = attachments.compose_user_content(
+                body.message, atts,
+                guidance="csv/xlsx 数据文件已自动注册为可查询数据表，"
+                         "用 file_table_list 查看表结构，用 file_table_query "
+                         "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
     input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
-        _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user")),
+        _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user"),
+                    datasource_id=datasource_id),
         media_type="text/event-stream")
 
 

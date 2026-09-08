@@ -21,7 +21,7 @@ DB = db_path("catalog.db")
 # tools 无删除入口，但通用列表查询会遍历它，补列以便统一 deleted_at 过滤。
 _SOFT_DELETE_TABLES = (
     "users", "employees", "skills", "tools", "knowledge_bases",
-    "sops", "connectors", "orgs",
+    "sops", "connectors", "orgs", "datasources",
 )
 
 _LINK_TABLES = {
@@ -88,6 +88,28 @@ def init():
       user_id TEXT PRIMARY KEY,
       display_name TEXT, position TEXT, duties TEXT, preferences TEXT,
       updated_at TEXT);
+    -- 数据分析员工（analyst）专属表
+    CREATE TABLE IF NOT EXISTS datasources(
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+      db_type TEXT NOT NULL, config TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1, owner_id TEXT,
+      created_at TEXT, updated_at TEXT, deleted_at TEXT);
+    CREATE TABLE IF NOT EXISTS table_annotations(
+      id TEXT PRIMARY KEY, datasource_id TEXT NOT NULL,
+      table_name TEXT NOT NULL, table_comment TEXT,
+      queryable INTEGER DEFAULT 1, column_annotations TEXT,
+      created_at TEXT, updated_at TEXT,
+      UNIQUE(datasource_id, table_name));
+    CREATE TABLE IF NOT EXISTS terminologies(
+      id TEXT PRIMARY KEY, word TEXT NOT NULL, description TEXT,
+      synonyms TEXT, datasource_ids TEXT,
+      enabled INTEGER DEFAULT 1, embedding TEXT,
+      created_at TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS sql_examples(
+      id TEXT PRIMARY KEY, question TEXT NOT NULL, sql_text TEXT NOT NULL,
+      description TEXT, datasource_id TEXT, chart_type TEXT,
+      enabled INTEGER DEFAULT 1, embedding TEXT,
+      created_at TEXT, updated_at TEXT);
     """)
     con.commit()
     _migrate_soft_delete(con)

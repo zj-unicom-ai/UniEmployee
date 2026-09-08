@@ -60,6 +60,7 @@ import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
 import PipelineSidebar from '../components/chat/PipelineSidebar.vue'
 import ChatMessage from '../components/chat/ChatMessage.vue'
 import InputBar from '../components/chat/InputBar.vue'
+import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'ChatView' })
 const router = useRouter()
@@ -80,11 +81,14 @@ const stageDetail = reactive({})
 
 const HINTS = {
   xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
-  xiaoshu: '试试：\n① 哪个地区销售额最高？\n② 按月统计各产品线的销售趋势\n③ 华东和华北谁的单均金额更高？\n④ 投影仪这个产品线在Q1表现怎么样\n⑤ 做个按产品和地区的交叉分析\n⑥ 你觉得哪个产品最值得加大投入？',
 }
 
+// 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
+// 不应在本页可被选择（否则会丢失定制上下文如数据源/SQL 工具注入）。
 const empOptions = computed(() =>
-  employees.value.map(e => ({ label: e.role || e.name, value: e.id }))
+  employees.value
+    .filter(e => !isCustomEmployee(e))
+    .map(e => ({ label: e.role || e.name, value: e.id }))
 )
 
 function scrollToBottom() {
@@ -159,6 +163,12 @@ async function openConversation(cid) {
   try {
     const { data } = await api.get(`/conversations/${cid}`)
     if (data.error) return
+    // 会话属于定制型员工时，重定向到该员工的专属对话路由，避免丢失定制上下文
+    const targetRoute = routeNameForEmployee(data.employee_id)
+    if (targetRoute !== 'chat') {
+      router.replace({ name: targetRoute, query: { conv: cid } })
+      return
+    }
     convId.value = cid
     currentEmp.value = data.employee_id
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
@@ -225,8 +235,10 @@ onMounted(async () => {
     data.forEach(e => { empNames[e.id] = e.name })
     const qconv = route.query.conv
     if (qconv) {
-      if (data.length) await selectEmployee(data[0].id)
+      // 先尝试打开指定会话；若该会话属于定制型员工，openConversation 会重定向到对应路由
       await openConversation(qconv)
+      // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
+      if (!convId.value && data.length) await selectEmployee(data[0].id)
     } else if (data.length) {
       await selectEmployee(data[0].id)
     }

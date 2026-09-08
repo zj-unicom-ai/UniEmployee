@@ -51,6 +51,26 @@ const routes = [
       { path: 'ontology', name: 'ontology', component: () => import('../views/OntologyView.vue') },
       { path: 'evaluation', name: 'evaluation', component: () => import('../views/AdminEvaluation.vue') },
       {
+        path: 'analyst',
+        name: 'analyst',
+        component: () => import('../views/agent/analyst/AnalystView.vue'),
+      },
+      {
+        path: 'analyst/datasources',
+        name: 'analyst-datasources',
+        component: () => import('../views/agent/analyst/DatasourceManager.vue'),
+      },
+      {
+        path: 'analyst/terminologies',
+        name: 'analyst-terminologies',
+        component: () => import('../views/agent/analyst/TerminologyManager.vue'),
+      },
+      {
+        path: 'analyst/sql-examples',
+        name: 'analyst-sql-examples',
+        component: () => import('../views/agent/analyst/SqlExampleManager.vue'),
+      },
+      {
         path: 'settings',
         name: 'settings',
         redirect: '/app/settings/guard/sensitive-words',

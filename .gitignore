@@ -21,6 +21,9 @@ node_modules/
 docker_err.txt
 frontend/dist/
 
+# IDE/工具的计划缓存目录
+.zcode/
+
 # 本机技能软链接（指向开发者本地 ~/.agents/skills，他人环境不存在）
 backend/skills/docx-reference
 

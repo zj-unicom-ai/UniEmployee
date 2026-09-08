@@ -46,6 +46,7 @@ def discover_employees() -> list[dict]:
             "name": m["name"],
             "role": m["role"],
             "model": m["model"],
+            "kind": m.get("kind") or "composed",
             "skills": cfg.get("skills", []),
             "tools": cfg.get("tools", []),
         })
@@ -65,6 +66,7 @@ def discover_assigned_employees(user_id: str) -> list[dict]:
             "name": m["name"],
             "role": m["role"],
             "model": m["model"],
+            "kind": m.get("kind") or "composed",
             "skills": cfg.get("skills", []),
             "tools": cfg.get("tools", []),
         })

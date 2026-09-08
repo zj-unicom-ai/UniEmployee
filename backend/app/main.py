@@ -53,6 +53,7 @@ async def lifespan(app):
     catalog.backfill_subagents_if_empty()
     catalog.backfill_ontology_tools()
     catalog.backfill_employees_if_missing()
+    catalog.backfill_analyst_sql_tools()
     catalog.backfill_netops_upgrade()
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
