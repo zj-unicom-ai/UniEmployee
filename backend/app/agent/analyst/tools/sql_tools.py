@@ -54,6 +54,14 @@ _conv_id_var: ContextVar[str] = ContextVar("analyst_conv_id", default="")
 # 由 streaming.py 注入到此 contextvar，工具内部优先用它兜底，LLM 不传/传错也能跑通。
 _datasource_id_var: ContextVar[str] = ContextVar("analyst_datasource_id", default="")
 
+# 当前选中的知识库 ID（用户在数据源下拉选了知识库时注入）
+# kb_search 工具读取此值，非空时只检索这一个知识库；为空时检索员工绑定的全部知识库。
+_kb_id_var: ContextVar[str] = ContextVar("analyst_kb_id", default="")
+
+# 当前选中的连接器 ID（用户在数据源下拉选了连接器时注入）
+# MCP 工具调用时按此 ID 限定到单个连接器，避免跨连接器误调。
+_connector_id_var: ContextVar[str] = ContextVar("analyst_connector_id", default="")
+
 # 按 conv_id 隔离的查询结果缓冲：conv_id -> [chart_data, ...]
 # chart_data 形如 {"sql": str, "columns": list[str], "rows": list[dict], "row_count": int}
 _query_results: dict[str, list[dict]] = {}
@@ -78,6 +86,34 @@ def set_datasource_id(ds_id: str) -> None:
 def clear_datasource_id() -> None:
     """astream 结束后清理。"""
     _datasource_id_var.set("")
+
+
+def set_kb_id(kb_id: str) -> None:
+    """streaming.py 在 astream 前注入当前选中的知识库 ID。
+
+    用户在数据源下拉选了知识库时，前端把 kb:xxx 传到后端，由 streaming.py
+    解析后注入此 contextvar。kb_search 工具读取此值，非空时只检索这一个知识库。
+    """
+    _kb_id_var.set(kb_id or "")
+
+
+def clear_kb_id() -> None:
+    """astream 结束后清理。"""
+    _kb_id_var.set("")
+
+
+def set_connector_id(connector_id: str) -> None:
+    """streaming.py 在 astream 前注入当前选中的连接器 ID。
+
+    用户在数据源下拉选了连接器时，前端把 conn:xxx 传到后端，由 streaming.py
+    解析后注入此 contextvar。MCP 工具调用时按此 ID 限定到单个连接器。
+    """
+    _connector_id_var.set(connector_id or "")
+
+
+def clear_connector_id() -> None:
+    """astream 结束后清理。"""
+    _connector_id_var.set("")
 
 
 def _resolve_datasource_id(explicit: str) -> str:

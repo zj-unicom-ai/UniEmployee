@@ -41,9 +41,10 @@
           <n-tag v-if="datasourceName" size="tiny" type="info">{{ datasourceName }}</n-tag>
         </div>
         <div class="header-right">
-          <n-button size="tiny" text @click="$router.push({ name: 'analyst-datasources' })">库表</n-button>
-          <n-button size="tiny" text @click="$router.push({ name: 'analyst-terminologies' })">术语</n-button>
-          <n-button size="tiny" text @click="$router.push({ name: 'analyst-sql-examples' })">SQL 示例</n-button>
+          <n-button size="tiny" text @click="$router.push({ name: 'analyst-datasources' })">
+            配置
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 2px; vertical-align: middle"><path d="m6 9 6 6 6-6"/></svg>
+          </n-button>
         </div>
       </div>
 
@@ -183,19 +184,33 @@ const route = useRoute()
 const datasourceId = ref(null)
 const datasources = ref([])
 const dsOptions = computed(() =>
-  datasources.value.map(d => ({ label: d.name, value: d.id }))
+  datasources.value.map(d => ({
+    label: `[${d.kind === 'database' ? '库' : d.kind === 'knowledge_base' ? '知' : '连'}] ${d.name}`,
+    value: d.id,
+  }))
 )
 const datasourceName = computed(() =>
   datasources.value.find(d => d.id === datasourceId.value)?.name || ''
 )
+// 当前选中的数据源对象（{kind, id}），传给 useChatStream.sendTo
+const currentDataSource = computed(() => {
+  const ds = datasources.value.find(d => d.id === datasourceId.value)
+  if (!ds) return null
+  return { kind: ds.kind, id: ds.id }
+})
 
 // 当前数据源的前 3 个启用 SQL 示例（作为空态快捷话术）
 const quickPrompts = ref([])
 
 async function loadQuickPrompts() {
   if (!datasourceId.value) { quickPrompts.value = []; return }
+  // SQL 示例只对数据库类型数据源有意义
+  const ds = datasources.value.find(d => d.id === datasourceId.value)
+  if (!ds || ds.kind !== 'database') { quickPrompts.value = []; return }
   try {
-    const all = await analystApi.listSqlExamples({ datasource_id: datasourceId.value })
+    // 数据库数据源 id 形如 "ds:xxx"，SQL 示例查询需要去掉前缀
+    const rawId = datasourceId.value.startsWith('ds:') ? datasourceId.value.slice(3) : datasourceId.value
+    const all = await analystApi.listSqlExamples({ datasource_id: rawId })
     quickPrompts.value = (all || []).filter(x => x.enabled).slice(0, 3)
   } catch {
     quickPrompts.value = []
@@ -263,10 +278,10 @@ function formatTime(t) {
 
 async function loadDatasources() {
   try {
-    datasources.value = await analystApi.listDatasources()
-    const enabled = datasources.value.filter(d => d.enabled)
-    if (enabled.length && !datasourceId.value) {
-      datasourceId.value = enabled[0].id
+    // 聚合加载三类数据源：数据库 / 知识库 / 连接器
+    datasources.value = await analystApi.listAllDataSources()
+    if (datasources.value.length && !datasourceId.value) {
+      datasourceId.value = datasources.value[0].id
     }
   } catch (e) {
     message.error('加载数据源失败：' + (e.response?.data?.detail || e.message))
@@ -357,14 +372,13 @@ async function onSend() {
     pendingFiles.value = []
     if (!attachments.length) return
   }
-  // 把 datasource_id 作为结构化参数传到后端（query param），由 streaming.py
-  // 注入到 sql_db_* 工具的 contextvar，工具内部 datasource_id 参数为空时兜底。
-  // 不再用文本前缀 [数据源: xxx]，避免 LLM 把名字当 ID 瞎猜。
+  // 把 data_source={kind,id} 作为 query param 传到后端，由 streaming.py
+  // 按 kind 注入到对应工具的 contextvar（database→sql_db_* / knowledge_base→kb_search / connector→MCP）。
   await stream.sendTo(
     `/api/conversations/${convId.value}/messages`,
     text,
     attachments,
-    datasourceId.value,
+    currentDataSource.value,
   )
   inputText.value = ''
   await loadConversations()

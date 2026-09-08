@@ -71,6 +71,39 @@ export const generateSynonyms = (word) =>
 export const previewTableData = (dsId, tableName, limit = 10) =>
   api.get(`/analyst/datasources/${dsId}/tables/${encodeURIComponent(tableName)}/preview`, { params: { limit } }).then(r => r.data)
 
+/* ---------- 数据源聚合（数据库 + 知识库 + 连接器） ---------- */
+
+export const listAllDataSources = () =>
+  api.get('/analyst/data-sources').then(r => r.data)
+
+/* ---------- 知识库绑定（xiaoshu 工作台专用） ---------- */
+
+export const listAllKbs = () =>
+  api.get('/analyst/kbs').then(r => r.data)
+
+export const listBoundKbs = () =>
+  api.get('/analyst/kbs/bound').then(r => r.data)
+
+export const bindKb = (kbId) =>
+  api.post(`/analyst/kbs/${kbId}`).then(r => r.data)
+
+export const unbindKb = (kbId) =>
+  api.delete(`/analyst/kbs/${kbId}`).then(r => r.data)
+
+/* ---------- 连接器绑定（xiaoshu 工作台专用） ---------- */
+
+export const listAllConnectors = () =>
+  api.get('/analyst/connectors').then(r => r.data)
+
+export const listBoundConnectors = () =>
+  api.get('/analyst/connectors/bound').then(r => r.data)
+
+export const bindConnector = (connectorId) =>
+  api.post(`/analyst/connectors/${connectorId}`).then(r => r.data)
+
+export const unbindConnector = (connectorId) =>
+  api.delete(`/analyst/connectors/${connectorId}`).then(r => r.data)
+
 /* ---------- SQL 示例 ---------- */
 
 export const listSqlExamples = (params = {}) =>

@@ -25,6 +25,10 @@ try:
         clear_conv_id as analyst_clear_conv_id,
         set_datasource_id as analyst_set_datasource_id,
         clear_datasource_id as analyst_clear_datasource_id,
+        set_kb_id as analyst_set_kb_id,
+        clear_kb_id as analyst_clear_kb_id,
+        set_connector_id as analyst_set_connector_id,
+        clear_connector_id as analyst_clear_connector_id,
         pop_query_results as analyst_pop_query_results,
     )
     from app.agent.analyst.fileqa.manager import (
@@ -314,11 +318,12 @@ def first_message_text(input_) -> str:
 
 
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
-                      datasource_id: str = ""):
+                      datasource_id: str = "", data_source: str = ""):
     """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。
 
-    datasource_id 由数据问数页面前端选数据源后传入，注入到分析师工具的
-    contextvar，让 sql_db_* 工具内部能拿到正确 ID，避免 LLM 瞎猜。
+    data_source 是新版数据源选择参数（JSON 字符串 '{"kind":"database","id":"ds:xxx"}'），
+    支持三类数据源：database / knowledge_base / connector。
+    兼容旧版 datasource_id（纯数据库 ID，无 kind 信息），旧格式按 database 处理。
     非数据问数会话留空即可。
     """
     emp_id = employee_of(conv_id)
@@ -372,9 +377,23 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     # 让 sql_db_query 工具能按会话隔离地把结构化结果写回缓冲。
     if _ANALYST_HOOK:
         analyst_set_conv_id(conv_id)
-        # 前端选的数据源 ID 也注入到 contextvar，工具内部 datasource_id
-        # 参数为空时用它兜底（LLM 拿不到 ID 就不会瞎猜了）。
-        analyst_set_datasource_id(datasource_id)
+        # 解析前端传来的数据源选择，按类型注入对应 contextvar。
+        # 新版 data_source 支持 database/knowledge_base/connector 三类；
+        # 旧版 datasource_id 为纯数据库 ID，按 database 兜底。
+        try:
+            from app.agent.analyst.datasource.manager import parse_data_source
+            src_str = data_source or datasource_id or ""
+            ds_kind, ds_raw_id = parse_data_source(src_str)
+            if ds_kind == "knowledge_base":
+                analyst_set_kb_id(ds_raw_id)
+            elif ds_kind == "connector":
+                analyst_set_connector_id(ds_raw_id)
+            else:
+                # database 或旧格式纯 ID
+                analyst_set_datasource_id(ds_raw_id or src_str)
+        except Exception:
+            # 解析失败时退化为旧逻辑：直接注入 datasource_id
+            analyst_set_datasource_id(datasource_id)
         # 表格问答（fileqa）工具按用户隔离 DuckDB 库，注入当前用户 ID。
         fileqa_set_user_id(user_id)
 
@@ -495,4 +514,6 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         if _ANALYST_HOOK:
             analyst_clear_conv_id()
             analyst_clear_datasource_id()
+            analyst_clear_kb_id()
+            analyst_clear_connector_id()
             fileqa_clear_user_id()

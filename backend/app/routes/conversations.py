@@ -105,6 +105,7 @@ async def upload_attachment(conv_id: str, file: UploadFile = File(...),
 @router.post("/conversations/{conv_id}/messages")
 async def send_message(conv_id: str, body: MessageIn,
                        datasource_id: str = "",
+                       data_source: str = "",
                        user: dict = Depends(auth.get_current_user_or_fallback)):
     uid = user["id"]
     meta = conversations.get(conv_id)
@@ -150,7 +151,7 @@ async def send_message(conv_id: str, body: MessageIn,
     input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
         _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user"),
-                    datasource_id=datasource_id),
+                    datasource_id=datasource_id, data_source=data_source),
         media_type="text/event-stream")
 
 

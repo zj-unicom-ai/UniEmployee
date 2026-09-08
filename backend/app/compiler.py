@@ -70,6 +70,10 @@ def make_kb_search(spec: EmployeeSpec, user_id: str | None):
 
     运行时从 catalog 读取员工绑定的知识库及其 RAGFlow dataset 映射。
     未配置 RAGFLOW_API_KEY 时返回提示信息，不回退本地检索。
+
+    数据分析专家（xiaoshu）特殊：当用户在数据源下拉选了某个知识库时，
+    streaming.py 会把 kb_id 注入到 analyst ContextVar，本工具读取该值，
+    非空时只检索这一个知识库；为空时检索员工绑定的全部知识库（兼容旧行为）。
     """
     from app import catalog
     from app import knowledge
@@ -81,8 +85,24 @@ def make_kb_search(spec: EmployeeSpec, user_id: str | None):
         输入产品名、政策关键词或业务问题，返回最相关的知识片段。
         未配置 RAGFLOW_API_KEY 时无法使用。
         """
-        cfg = (catalog.get_effective_config(user_id, spec.id)
-               if user_id else catalog.get_employee_config(spec.id)) or {}
+        # xiaoshu 数据源选择：若用户选了某个知识库作为数据源，只检索该知识库
+        try:
+            from app.agent.analyst.tools.sql_tools import _kb_id_var
+            selected_kb_id = _kb_id_var.get()
+        except Exception:
+            selected_kb_id = ""
+
+        if selected_kb_id:
+            # 只检索选中的知识库：构造只含单个 kb 的 cfg
+            from app.catalog.resources import get_kb
+            kb = get_kb(selected_kb_id)
+            if not kb:
+                return f"错误: 选中的知识库 {selected_kb_id} 不存在或已删除"
+            cfg = {"kb_ragflow_datasets": {kb["id"]: kb.get("ragflow_dataset_id", "")}}
+        else:
+            # 默认：检索员工绑定的全部知识库
+            cfg = (catalog.get_effective_config(user_id, spec.id)
+                   if user_id else catalog.get_employee_config(spec.id)) or {}
         return knowledge.search(query, cfg=cfg, top_k=3)
     return kb_search
 
