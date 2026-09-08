@@ -102,24 +102,39 @@
           />
           <!-- SQL 语句展示：msg.sql 由 SSE sql 事件或工具 trace 填充 -->
           <SqlViewer v-if="msg.sql" :sql="msg.sql" style="margin: 4px 0 12px" />
+          <!-- 数据分析报告：report-generation 技能输出的整段 HTML，iframe srcdoc 渲染 -->
+          <ReportViewer v-if="msg.reportHtml" :html="msg.reportHtml" style="margin: 4px 0 12px" />
         </template>
       </div>
 
       <!-- 输入栏 -->
       <div class="input-bar">
         <div v-if="pendingFiles.length" class="att-chips">
-          <n-tag
+          <span
             v-for="(f, i) in pendingFiles" :key="i"
-            size="small" closable type="info"
-            @close="pendingFiles.splice(i, 1)"
-          >{{ f.name }}</n-tag>
+            class="att-chip"
+            :title="f.name"
+          >
+            <svg class="chip-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span class="chip-name">{{ f.name }}</span>
+            <span class="chip-size">{{ fmtSize(f.size) }}</span>
+            <span class="chip-remove" @click="pendingFiles.splice(i, 1)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </span>
+          </span>
         </div>
         <div class="input-row">
-          <n-button size="small" quaternary :loading="uploading"
-                    title="上传 Excel/CSV 表格（自动注册为可查询数据表）"
-                    @click="fileInputRef?.click()">
-            📎
-          </n-button>
+          <button
+            class="icon-btn attach-btn"
+            type="button"
+            :class="{ active: uploading }"
+            :disabled="uploading"
+            title="上传 Excel/CSV 表格（自动注册为可查询数据表）"
+            @click="fileInputRef?.click()"
+          >
+            <svg v-if="!uploading" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.57 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <span v-else class="btn-spinner"></span>
+          </button>
           <input
             ref="fileInputRef" type="file" hidden multiple
             accept=".csv,.xlsx,.xls"
@@ -134,13 +149,15 @@
             :disabled="stream.sending.value"
             @keydown.enter.exact.prevent="onSend"
           />
-          <n-button
-            type="primary"
-            size="small"
-            :loading="stream.sending.value || uploading"
-            :disabled="(!inputText.trim() && !pendingFiles.length) || (!datasourceId && !pendingFiles.length)"
+          <button
+            class="send-btn"
+            type="button"
+            :disabled="(!inputText.trim() && !pendingFiles.length) || (!datasourceId && !pendingFiles.length) || stream.sending.value || uploading"
             @click="onSend"
-          >发送</n-button>
+          >
+            <svg v-if="!stream.sending.value && !uploading" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+            <span v-else class="btn-spinner"></span>
+          </button>
         </div>
       </div>
     </div>
@@ -154,9 +171,10 @@ import { useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../../../api.js'
 import * as analystApi from '../../../api/analyst.js'
-import { useChatStream, renderMd } from '../../../composables/useChatStream.js'
+import { useChatStream, renderMd, extractReport } from '../../../composables/useChatStream.js'
 import ChatMessage from '../../../components/chat/ChatMessage.vue'
 import SqlViewer from '../../../components/agent/analyst/SqlViewer.vue'
+import ReportViewer from '../../../components/agent/analyst/ReportViewer.vue'
 
 defineOptions({ name: 'AnalystView' })
 const message = useMessage()
@@ -223,6 +241,13 @@ function onFilePick(e) {
   e.target.value = ''
 }
 
+function fmtSize(n) {
+  if (!n) return ''
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + 'MB'
+  if (n >= 1024) return Math.round(n / 1024) + 'KB'
+  return n + 'B'
+}
+
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
 function scrollToBottom() {
@@ -277,10 +302,13 @@ async function openConversation(cid) {
       if (t.role === 'user') {
         messages.value.push({ role: 'user', content: t.content, time: formatTime(t.created_at) })
       } else {
+        // 历史回放：同样从文本中抽出报告 HTML 段（若有）
+        const { reportHtml, cleanedMd } = extractReport(t.content || '')
         const msg = {
-          role: 'bot', content: '', html: renderMd(t.content || ''),
+          role: 'bot', content: '', html: renderMd(cleanedMd),
           _md: t.content || '', trace: [], time: formatTime(t.created_at),
         }
+        if (reportHtml) msg.reportHtml = reportHtml
         if (t.tool_calls && t.tool_calls.length) {
           msg.trace = t.tool_calls.map(tc => ({
             type: 'tool', name: tc.name || '',
@@ -554,23 +582,145 @@ onMounted(async () => {
   margin-top: 6px;
 }
 .input-bar {
-  padding: 8px 12px;
+  padding: 10px 16px 14px;
   border-top: 1px solid #e5e7eb;
+  background: #fafbfc;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .input-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: flex-end;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.input-row .n-input { flex: 1; }
+.input-row:focus-within {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+}
+.input-row .n-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+}
+.input-row :deep(.n-input) {
+  box-shadow: none !important;
+}
+.input-row :deep(.n-input__textarea-el) {
+  padding: 4px 2px;
+}
+
+/* 图标按钮（附件） */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: none;
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.icon-btn:hover:not(:disabled) {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.icon-btn.active {
+  background: #ede9fe;
+  color: #7c3aed;
+}
+
+/* 发送按钮 */
+.send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.25);
+}
+.send-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(124, 58, 237, 0.35);
+}
+.send-btn:disabled {
+  background: #cbd5e1;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* 附件 chip */
 .att-chips {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #0369a1;
+  border-radius: 8px;
+  padding: 4px 8px 4px 6px;
+  font-size: 12px;
+  max-width: 280px;
+}
+.chip-icon { flex-shrink: 0; }
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+.chip-size { color: #94a3b8; flex-shrink: 0; font-size: 11px; }
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  color: #94a3b8;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.chip-remove:hover { background: #fee2e2; color: #dc2626; }
+
+/* 按钮加载转圈 */
+.btn-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.icon-btn .btn-spinner {
+  border-color: rgba(124, 58, 237, 0.25);
+  border-top-color: #7c3aed;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* 右侧本体面板已移除（功能未实现，避免用户困惑） */
 </style>
