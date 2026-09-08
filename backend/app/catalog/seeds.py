@@ -139,7 +139,7 @@ NETOPS_SOPS = [
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
     "xiaoshu": dict(
-        skills=["data-analysis"],
+        skills=["data-analysis", "frontend-design", "report-generation"],
         tools=_tools_with_ontology([
             "sql_db_smart_search", "sql_db_table_schema",
             "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
@@ -355,6 +355,28 @@ def backfill_analyst_sql_tools():
     if cur.execute("SELECT 1 FROM employees WHERE id='xiaoshu' AND deleted_at IS NULL").fetchone():
         for t in all_analyst_tools:
             cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('xiaoshu', ?)", (t,))
+    con.commit()
+    con.close()
+
+
+def backfill_xiaoshu_skills():
+    """幂等补齐 xiaoshu 新增技能绑定（frontend-design + report-generation）。
+
+    设计动机：report-generation 报告生成技能是 v0.12.0 新增，frontend-design
+    此前虽已在 skills/ 目录但未绑定 xiaoshu。backfill_employees_if_missing
+    只对未存在的员工做全量绑定，已存在的 xiaoshu 不会自动获得新 skill 绑定。
+    本函数仅 INSERT OR IGNORE，不覆盖管理员在资源中心取消的绑定。
+    """
+    con = _conn()
+    cur = con.cursor()
+    if not cur.execute(
+        "SELECT 1 FROM employees WHERE id='xiaoshu' AND deleted_at IS NULL"
+    ).fetchone():
+        con.close()
+        return
+    # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这两行
+    for s in ("frontend-design", "report-generation"):
+        cur.execute("INSERT OR IGNORE INTO employee_skills VALUES('xiaoshu', ?)", (s,))
     con.commit()
     con.close()
 

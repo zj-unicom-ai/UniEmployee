@@ -36,6 +36,21 @@ export function renderMd(md) {
   catch { return `<pre>${String(md || '').replace(/</g, '&lt;')}</pre>` }
 }
 
+// 报告 HTML 提取：从 markdown 文本中抽出 REPORT_HTML_START/END 包裹的整段 HTML
+// 让前端用 iframe srcdoc 渲染（renderMd 的 sanitize 会剥掉 script/style，必须独立通道）
+export function extractReport(md) {
+  const re = /<!--\s*REPORT_HTML_START\s*-->([\s\S]*?)<!--\s*REPORT_HTML_END\s*-->/
+  const m = (md || '').match(re)
+  if (!m) return { reportHtml: '', cleanedMd: md || '' }
+  let html = m[1].trim()
+  // 兼容模型把整段包在 ```html 围栏里的情况
+  const fence = html.match(/^```(?:html)?\s*\n([\s\S]*?)\n```$/)
+  if (fence) html = fence[1].trim()
+  // 删掉报告段（含外层围栏），保留前后文本
+  const cleanedMd = (md || '').replace(re, '').trim()
+  return { reportHtml: html, cleanedMd }
+}
+
 export function useChatStream({ stageStates, stageDetail, messages, scrollToBottom }) {
   const sending = ref(false)
   let activeController = null
@@ -82,7 +97,11 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     } else if (ev.type === 'token') {
       if (!msg._md) msg._md = ''
       msg._md += ev.content
-      msg.html = renderMd(msg._md)
+      // 报告生成技能输出 HTML 时，抽出整段 HTML 走 iframe srcdoc 渲染，
+      // markdown 渲染的是去掉报告段后的剩余文本（如引言/小节说明）
+      const { reportHtml, cleanedMd } = extractReport(msg._md)
+      if (reportHtml) msg.reportHtml = reportHtml
+      msg.html = renderMd(cleanedMd)
       msg.content = ''
       touch()
     } else if (ev.type === 'tool') {
