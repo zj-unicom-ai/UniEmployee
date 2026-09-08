@@ -71,6 +71,16 @@ const routes = [
         component: () => import('../views/agent/analyst/SqlExampleManager.vue'),
       },
       {
+        path: 'analyst/kbs',
+        name: 'analyst-kbs',
+        component: () => import('../views/agent/analyst/KnowledgeBaseManager.vue'),
+      },
+      {
+        path: 'analyst/connectors',
+        name: 'analyst-connectors',
+        component: () => import('../views/agent/analyst/ConnectorManager.vue'),
+      },
+      {
         path: 'settings',
         name: 'settings',
         redirect: '/app/settings/guard/sensitive-words',

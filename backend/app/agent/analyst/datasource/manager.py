@@ -427,3 +427,215 @@ def upsert_table_annotation(datasource_id: str, table_name: str,
     finally:
         con.close()
     return get_table_annotation(datasource_id, table_name)
+
+
+# ---------------------------------------------------------------------------
+# 数据源聚合 API（数据库 + 员工绑定的知识库 + 员工绑定的连接器）
+# ---------------------------------------------------------------------------
+
+# xiaoshu 是定制型员工，其数据源由 analyst 工作台独立管理。
+# 知识库 / 连接器复用 catalog 库的 employee_kbs / employee_connectors 关联表，
+# 不进入 datasources 表，避免污染 SQL 数据源模型。
+ANALYST_EMP_ID = "xiaoshu"
+
+
+def list_employee_kbs(emp_id: str) -> list[dict]:
+    """列出员工已绑定的知识库（含 ragflow_dataset_id）。"""
+    con = _catalog_conn()
+    try:
+        rows = con.execute(
+            "SELECT kb.id, kb.name, kb.description, kb.ragflow_dataset_id "
+            "FROM employee_kbs ek JOIN knowledge_bases kb ON ek.kb_id = kb.id "
+            "WHERE ek.employee_id=? AND kb.deleted_at IS NULL "
+            "ORDER BY kb.name",
+            (emp_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def list_employee_connectors(emp_id: str) -> list[dict]:
+    """列出员工已绑定的连接器（含 config）。"""
+    con = _catalog_conn()
+    try:
+        rows = con.execute(
+            "SELECT c.id, c.name, c.description, c.config "
+            "FROM employee_connectors ec JOIN connectors c ON ec.connector_id = c.id "
+            "WHERE ec.employee_id=? AND c.deleted_at IS NULL "
+            "ORDER BY c.name",
+            (emp_id,)
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["config"] = json.loads(d["config"]) if isinstance(d["config"], str) else d.get("config", {})
+            except (json.JSONDecodeError, TypeError):
+                d["config"] = {}
+            out.append(d)
+        return out
+    finally:
+        con.close()
+
+
+def list_all_kbs() -> list[dict]:
+    """列出资源中心全部知识库（供绑定选择）。"""
+    con = _catalog_conn()
+    try:
+        rows = con.execute(
+            "SELECT id, name, description, ragflow_dataset_id "
+            "FROM knowledge_bases WHERE deleted_at IS NULL ORDER BY name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def list_all_connectors() -> list[dict]:
+    """列出资源中心全部连接器（供绑定选择）。"""
+    con = _catalog_conn()
+    try:
+        rows = con.execute(
+            "SELECT id, name, description "
+            "FROM connectors WHERE deleted_at IS NULL ORDER BY name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def bind_kb(emp_id: str, kb_id: str) -> bool:
+    """绑定知识库到员工（幂等）。"""
+    con = _catalog_conn()
+    try:
+        con.execute(
+            "INSERT OR IGNORE INTO employee_kbs (employee_id, kb_id) VALUES (?, ?)",
+            (emp_id, kb_id)
+        )
+        con.commit()
+        return True
+    finally:
+        con.close()
+
+
+def unbind_kb(emp_id: str, kb_id: str) -> bool:
+    """解绑员工的知识库。"""
+    con = _catalog_conn()
+    try:
+        cur = con.execute(
+            "DELETE FROM employee_kbs WHERE employee_id=? AND kb_id=?",
+            (emp_id, kb_id)
+        )
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def bind_connector(emp_id: str, connector_id: str) -> bool:
+    """绑定连接器到员工（幂等）。"""
+    con = _catalog_conn()
+    try:
+        con.execute(
+            "INSERT OR IGNORE INTO employee_connectors (employee_id, connector_id) "
+            "VALUES (?, ?)",
+            (emp_id, connector_id)
+        )
+        con.commit()
+        return True
+    finally:
+        con.close()
+
+
+def unbind_connector(emp_id: str, connector_id: str) -> bool:
+    """解绑员工的连接器。"""
+    con = _catalog_conn()
+    try:
+        cur = con.execute(
+            "DELETE FROM employee_connectors WHERE employee_id=? AND connector_id=?",
+            (emp_id, connector_id)
+        )
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def list_all_data_sources(emp_id: str = ANALYST_EMP_ID) -> list[dict]:
+    """聚合返回三类数据源：数据库 / 知识库 / 连接器。
+
+    返回统一格式：
+      [{"id": "ds:xxx", "name": "销售库", "kind": "database", "db_type": "mysql", "enabled": 1},
+       {"id": "kb:yyy", "name": "产品FAQ", "kind": "knowledge_base", "ragflow_dataset_id": "..."},
+       {"id": "conn:zzz", "name": "CRM连接器", "kind": "connector"}]
+
+    id 加 kind 前缀避免冲突；前端选择后原样回传，后端按前缀解析。
+    """
+    result = []
+
+    # 1. 数据库数据源（datasources 表，enabled=1）
+    for ds in list_datasources():
+        if not ds.get("enabled"):
+            continue
+        result.append({
+            "id": f"ds:{ds['id']}",
+            "name": ds["name"],
+            "kind": "database",
+            "db_type": ds.get("db_type", ""),
+            "description": ds.get("description", ""),
+        })
+
+    # 2. 员工绑定的知识库
+    for kb in list_employee_kbs(emp_id):
+        result.append({
+            "id": f"kb:{kb['id']}",
+            "name": kb["name"],
+            "kind": "knowledge_base",
+            "ragflow_dataset_id": kb.get("ragflow_dataset_id", ""),
+            "description": kb.get("description", ""),
+        })
+
+    # 3. 员工绑定的连接器
+    for c in list_employee_connectors(emp_id):
+        result.append({
+            "id": f"conn:{c['id']}",
+            "name": c["name"],
+            "kind": "connector",
+            "description": c.get("description", ""),
+        })
+
+    return result
+
+
+def parse_data_source(data_source: str) -> tuple[str, str]:
+    """解析前端传来的 data_source 字符串，返回 (kind, raw_id)。
+
+    支持两种格式：
+      1. JSON: '{"kind":"database","id":"ds:xxx"}'（新格式）
+      2. 纯 ID: 'ds:xxx' 或裸 datasource_id 'ds_xxx'（兼容旧格式）
+    """
+    if not data_source:
+        return "", ""
+
+    # 尝试 JSON 解析
+    if data_source.startswith("{"):
+        try:
+            obj = json.loads(data_source)
+            return obj.get("kind", ""), obj.get("id", "")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 兼容旧格式：纯 datasource_id（无前缀，老前端调用）
+    if not data_source.startswith(("ds:", "kb:", "conn:")):
+        return "database", data_source
+
+    # 按前缀解析
+    if data_source.startswith("ds:"):
+        return "database", data_source[3:]
+    if data_source.startswith("kb:"):
+        return "knowledge_base", data_source[3:]
+    if data_source.startswith("conn:"):
+        return "connector", data_source[5:]
+
+    return "", data_source

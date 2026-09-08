@@ -144,6 +144,8 @@ EMPLOYEE_SEEDS = {
             "sql_db_smart_search", "sql_db_table_schema",
             "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
             "file_table_list", "file_table_query",
+            # 知识库作为数据源：用户选了知识库时用 kb_search 检索
+            "kb_search",
         ]),
         kbs=[], sops=[]),
     "xiaoxiao": dict(
@@ -355,6 +357,10 @@ def backfill_analyst_sql_tools():
     if cur.execute("SELECT 1 FROM employees WHERE id='xiaoshu' AND deleted_at IS NULL").fetchone():
         for t in all_analyst_tools:
             cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('xiaoshu', ?)", (t,))
+        # kb_search 是闭包工具，不在 ANALYST_SQL_TOOLS/ANALYST_FILE_TOOLS 表中，
+        # 但 xiaoshu 需要它来检索知识库（作为数据源）。只需 employee_tools 绑定记录，
+        # 编译时 _assemble_tools 遇到 "kb_search" 会调 make_kb_search 装配。
+        cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('xiaoshu', 'kb_search')")
     con.commit()
     con.close()
 

@@ -496,3 +496,72 @@ async def toggle_sql_example(ex_id: str, enabled: int = 1):
     if not updated:
         raise HTTPException(404, "SQL 示例不存在")
     return updated
+
+
+# ---------------------------------------------------------------------------
+# 数据源聚合 + 知识库 / 连接器绑定（xiaoshu 工作台专用）
+# ---------------------------------------------------------------------------
+
+@router.get("/data-sources")
+async def list_all_data_sources():
+    """聚合返回三类数据源：数据库 / 知识库 / 连接器（仅启用的）。
+
+    供 analyst 工作台顶部「选择数据源」下拉使用，统一渲染三类。
+    """
+    return ds_manager.list_all_data_sources()
+
+
+@router.get("/kbs")
+async def list_kbs():
+    """列出资源中心全部知识库（供 xiaoshu 工作台绑定选择）。"""
+    return ds_manager.list_all_kbs()
+
+
+@router.get("/kbs/bound")
+async def list_bound_kbs():
+    """列出 xiaoshu 已绑定的知识库。"""
+    return ds_manager.list_employee_kbs(ds_manager.ANALYST_EMP_ID)
+
+
+@router.post("/kbs/{kb_id}")
+async def bind_kb(kb_id: str):
+    """绑定知识库到 xiaoshu（幂等）。"""
+    if not ds_manager.bind_kb(ds_manager.ANALYST_EMP_ID, kb_id):
+        raise HTTPException(400, "绑定失败")
+    return {"ok": True}
+
+
+@router.delete("/kbs/{kb_id}")
+async def unbind_kb(kb_id: str):
+    """解绑 xiaoshu 的知识库。"""
+    if not ds_manager.unbind_kb(ds_manager.ANALYST_EMP_ID, kb_id):
+        raise HTTPException(404, "知识库未绑定")
+    return {"ok": True}
+
+
+@router.get("/connectors")
+async def list_connectors():
+    """列出资源中心全部连接器（供 xiaoshu 工作台绑定选择）。"""
+    return ds_manager.list_all_connectors()
+
+
+@router.get("/connectors/bound")
+async def list_bound_connectors():
+    """列出 xiaoshu 已绑定的连接器。"""
+    return ds_manager.list_employee_connectors(ds_manager.ANALYST_EMP_ID)
+
+
+@router.post("/connectors/{connector_id}")
+async def bind_connector(connector_id: str):
+    """绑定连接器到 xiaoshu（幂等）。"""
+    if not ds_manager.bind_connector(ds_manager.ANALYST_EMP_ID, connector_id):
+        raise HTTPException(400, "绑定失败")
+    return {"ok": True}
+
+
+@router.delete("/connectors/{connector_id}")
+async def unbind_connector(connector_id: str):
+    """解绑 xiaoshu 的连接器。"""
+    if not ds_manager.unbind_connector(ds_manager.ANALYST_EMP_ID, connector_id):
+        raise HTTPException(404, "连接器未绑定")
+    return {"ok": True}

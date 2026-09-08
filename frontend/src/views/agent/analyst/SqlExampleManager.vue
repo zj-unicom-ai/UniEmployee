@@ -12,6 +12,8 @@
         <n-tab name="datasources">库表配置</n-tab>
         <n-tab name="terminologies">术语配置</n-tab>
         <n-tab name="sql-examples">SQL 示例</n-tab>
+        <n-tab name="knowledge-bases">知识库</n-tab>
+        <n-tab name="connectors">连接器</n-tab>
       </n-tabs>
     </div>
 
@@ -125,6 +127,8 @@ const currentTab = 'sql-examples'
 function switchTab(name) {
   if (name === 'datasources') router.push({ name: 'analyst-datasources' })
   else if (name === 'terminologies') router.push({ name: 'analyst-terminologies' })
+  else if (name === 'knowledge-bases') router.push({ name: 'analyst-kbs' })
+  else if (name === 'connectors') router.push({ name: 'analyst-connectors' })
 }
 
 const examples = ref([])

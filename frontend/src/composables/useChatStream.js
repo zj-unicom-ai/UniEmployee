@@ -178,7 +178,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text, attachments = [], datasourceId = null) {
+  async function sendTo(endpoint, text, attachments = [], dataSource = null) {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachments.length) return
@@ -195,11 +195,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     abortActiveStream()
     activeController = controller
     try {
-      // 数据问数页前端选了数据源后，把 datasource_id 作为 query param 传到后端，
-      // 后端注入到 sql_db_* 工具的 contextvar，避免 LLM 瞎猜 ID。
+      // 数据问数页前端选了数据源后，把 data_source 作为 query param 传到后端，
+      // 后端按 kind（database/knowledge_base/connector）注入到对应工具的 contextvar。
+      // dataSource 形如 {kind:'database', id:'ds:xxx'} / {kind:'knowledge_base', id:'kb:yyy'}
       let url = endpoint
-      if (datasourceId) {
-        url += (url.includes('?') ? '&' : '?') + 'datasource_id=' + encodeURIComponent(datasourceId)
+      if (dataSource && dataSource.id) {
+        const dsJson = JSON.stringify(dataSource)
+        url += (url.includes('?') ? '&' : '?') + 'data_source=' + encodeURIComponent(dsJson)
       }
       const resp = await fetch(url, {
         method: 'POST',
