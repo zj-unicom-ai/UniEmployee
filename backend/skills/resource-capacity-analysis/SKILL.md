@@ -10,7 +10,7 @@ description: 资源容量分析技能。当用户询问算力资源、GPU 节点
 
 ## 数据集
 
-netops_resources.csv：算网资源台账，列：
+/datasets/netops_resources.csv：算网资源台账，列：
 resource_id / category（机房/算力节点/传输链路/带宽）/ name / unit（机柜/卡/vCPU/Gbps）/
 capacity / used / utilization_pct / location / status / demand_forecast
 
@@ -21,7 +21,7 @@ capacity / used / utilization_pct / location / status / demand_forecast
 - 利用率 < 50% 且需求平稳：低水位，可评估整合
 - demand_forecast 含 "+N%" 时，用 预测利用率 = 当前利用率 × (1 + N%) 做前瞻判断
 
-## 执行步骤（用 execute 跑 pandas，工作目录已指向数据目录）
+## 执行步骤（用 execute 跑 pandas，工作目录 /data）
 
 ### 步骤1：明确分析范围
 

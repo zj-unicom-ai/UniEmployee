@@ -34,10 +34,11 @@ def test_save_attachment_lands_in_user_dir():
     assert meta["name"] == "data.csv"
     assert meta["size"] == 8
     assert meta["content_type"] == "text/csv"
-    assert meta["path"].startswith("/data/uploads/u1/c1/")
+    # v0.13.0 起新路径：/data/<uid>/uploads/<conv>/...
+    assert meta["path"].startswith("/data/u1/uploads/c1/")
     assert meta["path"].endswith("data.csv")
     # 真实落盘位置与虚拟路径一一对应
-    real = attachments.WORKSPACE_DATA / "uploads" / "u1" / "c1" / meta["path"].rsplit("/", 1)[-1]
+    real = attachments.WORKSPACE_DATA / "u1" / "uploads" / "c1" / meta["path"].rsplit("/", 1)[-1]
     assert real.read_bytes() == b"a,b\n1,2\n"
 
 
@@ -53,22 +54,22 @@ def test_save_attachment_rejects_empty_and_oversize(monkeypatch):
 
 
 def test_validate_attachment_path():
-    ok = "/data/uploads/u1/c1/123_a.csv"
+    ok = "/data/u1/uploads/c1/123_a.csv"
     assert attachments.validate_attachment_path("u1", ok) is True
     # 别的用户目录 / 任意路径 / 目录穿越均拒绝
-    assert attachments.validate_attachment_path("u1", "/data/uploads/u2/c1/a.csv") is False
+    assert attachments.validate_attachment_path("u1", "/data/u2/uploads/c1/a.csv") is False
     assert attachments.validate_attachment_path("u1", "/etc/passwd") is False
-    assert attachments.validate_attachment_path("u1", "/data/uploads/u1/c1/../../secret") is False
+    assert attachments.validate_attachment_path("u1", "/data/u1/uploads/c1/../../secret") is False
     assert attachments.validate_attachment_path("u1", None) is False
 
 
 def test_compose_user_content():
-    atts = [{"name": "sales.csv", "path": "/data/uploads/u1/c1/1_sales.csv",
+    atts = [{"name": "sales.csv", "path": "/data/u1/uploads/c1/1_sales.csv",
              "size": 2048, "content_type": "text/csv"}]
     # 有文本：文本在前，附件清单在后，且含读取指引
     out = attachments.compose_user_content("分析一下", atts)
     assert out.startswith("分析一下")
-    assert "sales.csv" in out and "/data/uploads/u1/c1/1_sales.csv" in out
+    assert "sales.csv" in out and "/data/u1/uploads/c1/1_sales.csv" in out
     assert "read_file" in out and "run_python" in out
     # 纯附件消息也合法
     out2 = attachments.compose_user_content("", atts)

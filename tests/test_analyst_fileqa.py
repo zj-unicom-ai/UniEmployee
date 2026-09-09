@@ -41,7 +41,8 @@ def user_ctx():
 
 def _make_csv(uid: str, name: str, rows: int = 3) -> str:
     """在用户上传目录造一个 CSV 附件，返回虚拟路径。"""
-    d = paths.WORKSPACE_DATA / "uploads" / uid / "c1"
+    # v0.13.0 起新路径：workspace/data/<uid>/uploads/<conv>/
+    d = paths.WORKSPACE_DATA / uid / "uploads" / "c1"
     d.mkdir(parents=True, exist_ok=True)
     p = d / name
     lines = ["产品,销售额,城市"]
@@ -49,20 +50,20 @@ def _make_csv(uid: str, name: str, rows: int = 3) -> str:
     for i in range(rows):
         lines.append(f"产品{i},{100 + i},{cities[i % len(cities)]}")
     p.write_text("\n".join(lines), encoding="utf-8")
-    return f"/data/uploads/{uid}/c1/{name}"
+    return f"/data/{uid}/uploads/c1/{name}"
 
 
 def _make_xlsx(uid: str, name: str, sheets: dict) -> str:
     """在用户上传目录造一个多 sheet Excel 附件，返回虚拟路径。"""
     import pandas as pd
 
-    d = paths.WORKSPACE_DATA / "uploads" / uid / "c1"
+    d = paths.WORKSPACE_DATA / uid / "uploads" / "c1"
     d.mkdir(parents=True, exist_ok=True)
     p = d / name
     with pd.ExcelWriter(p, engine="openpyxl") as writer:
         for sheet, df in sheets.items():
             df.to_excel(writer, sheet_name=sheet, index=False)
-    return f"/data/uploads/{uid}/c1/{name}"
+    return f"/data/{uid}/uploads/c1/{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -98,21 +99,21 @@ def test_register_xlsx_multi_sheet():
 def test_register_rejects_bad_path():
     # 路径穿越
     with pytest.raises(ValueError):
-        fileqa_manager.register_data_file("/data/uploads/u1/../x.csv", "u1")
+        fileqa_manager.register_data_file("/data/u1/uploads/../x.csv", "u1")
     # 非本用户目录
     with pytest.raises(ValueError):
-        fileqa_manager.register_data_file("/data/uploads/other/c1/a.csv", "u1")
+        fileqa_manager.register_data_file("/data/other/uploads/c1/a.csv", "u1")
     # 非数据文件
     with pytest.raises(ValueError):
-        fileqa_manager.register_data_file("/data/uploads/u1/c1/a.txt", "u1")
+        fileqa_manager.register_data_file("/data/u1/uploads/c1/a.txt", "u1")
 
 
 def test_register_gbk_csv():
     """国内业务系统常见 GBK 编码导出文件应能正常解析。"""
-    d = paths.WORKSPACE_DATA / "uploads" / "u1" / "c1"
+    d = paths.WORKSPACE_DATA / "u1" / "uploads" / "c1"
     d.mkdir(parents=True, exist_ok=True)
     (d / "3000_gbk.csv").write_text("产品,销售额\n手机,100\n", encoding="gbk")
-    reg = fileqa_manager.register_data_file("/data/uploads/u1/c1/3000_gbk.csv", "u1")
+    reg = fileqa_manager.register_data_file("/data/u1/uploads/c1/3000_gbk.csv", "u1")
     assert reg["tables"][0]["columns"] == ["产品", "销售额"]
 
 
@@ -136,7 +137,7 @@ def test_execute_query_select_only():
 
 def test_execute_query_rejects_write():
     _make_csv("u1", "1000_销售明细.csv")
-    fileqa_manager.register_data_file("/data/uploads/u1/c1/1000_销售明细.csv", "u1")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
     for sql in ("DELETE FROM x", "INSERT INTO x VALUES(1)",
                 "UPDATE x SET a=1", "CREATE TABLE x(a int)"):
         r = fileqa_manager.execute_query("u1", sql)
@@ -166,7 +167,7 @@ def test_list_user_tables():
 
 def test_tool_file_table_list():
     _make_csv("u1", "1000_销售明细.csv")
-    fileqa_manager.register_data_file("/data/uploads/u1/c1/1000_销售明细.csv", "u1")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
     out = file_table_list.invoke({})
     assert "1000_销售明细" in out
     assert "产品" in out
@@ -179,7 +180,7 @@ def test_tool_file_table_list_empty():
 
 def test_tool_file_table_query_and_sse_bridge():
     _make_csv("u1", "1000_销售明细.csv")
-    fileqa_manager.register_data_file("/data/uploads/u1/c1/1000_销售明细.csv", "u1")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
     set_conv_id("conv_t1")
     try:
         out = file_table_query.invoke(
@@ -214,24 +215,24 @@ def test_tool_without_user_context():
 def test_register_attachments_summary():
     _make_csv("u1", "1000_销售明细.csv")
     atts = [{"name": "1000_销售明细.csv",
-             "path": "/data/uploads/u1/c1/1000_销售明细.csv",
+             "path": "/data/u1/uploads/c1/1000_销售明细.csv",
              "size": 100, "content_type": "text/csv"}]
     summary = fileqa_manager.register_attachments(atts, "u1")
     assert "1000_销售明细" in summary
     assert "file_table_query" in summary
     # 非数据文件不触发注册
     assert fileqa_manager.register_attachments(
-        [{"name": "a.txt", "path": "/data/uploads/u1/c1/a.txt"}], "u1") == ""
+        [{"name": "a.txt", "path": "/data/u1/uploads/c1/a.txt"}], "u1") == ""
 
 
 def test_register_attachments_failure_tolerant():
-    atts = [{"name": "missing.csv", "path": "/data/uploads/u1/c1/missing.csv"}]
+    atts = [{"name": "missing.csv", "path": "/data/u1/uploads/c1/missing.csv"}]
     summary = fileqa_manager.register_attachments(atts, "u1")
     assert "注册失败" in summary
 
 
 def test_compose_user_content_guidance_override():
-    atts = [{"name": "a.csv", "path": "/data/uploads/u1/c1/a.csv",
+    atts = [{"name": "a.csv", "path": "/data/u1/uploads/c1/a.csv",
              "size": 1, "content_type": "text/csv"}]
     default_content = compose_user_content("你好", atts)
     assert "run_python" in default_content

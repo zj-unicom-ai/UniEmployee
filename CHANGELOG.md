@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.13.0 (2026-09-09)
+
+### 重磅变更：net-ops 试点接入 OpenSandbox 沙箱执行环境
+
+- **代码执行与文件操作从宿主机直接 subprocess 迁移到 OpenSandbox 沙箱容器**：net-ops（小网·算网运营专家）的 `execute` / 文件工具不再在 app 宿主机直接执行，而是按会话（thread_id）路由到专属沙箱容器（OpenSandbox server 起 docker 容器，TTL 30 分钟空闲回收，重启可重连）。每个会话一个沙箱、容器间互不影响；**沙箱不可用时明确报错，不回退宿主机执行**（避免安全机制失效）。`SANDBOX_ENABLED=1` 全局开关；未置 1 时回退 LocalShellBackend（开发/测试/未部署 server 环境零行为变化）。
+
+- **数据布局重构以支持多租户隔离**：用户上传与生成文件从 `workspace/data/uploads/<uid>/<conv>/` 调整为 `workspace/data/<uid>/uploads/<conv>/`，沙箱内 hostPath 挂载按 `<uid>` subPath 限定本用户目录可见性（沙箱内 `ls /data` 看不到其他用户）；共享数据集（算网运营 CSV 等）迁到 `workspace/datasets/`，沙箱内只读挂载到 `/datasets/`。net-ops persona 与 3 个 SKILL.md（fault-impact-analysis / ops-metrics-analysis / resource-capacity-analysis）数据集路径从裸文件名改为 `/datasets/...`。
+
+### 新增
+
+- **沙箱镜像构建文件**：`sandbox/image/Dockerfile` 基于 `python:3.12-slim` 预装 pandas / numpy / duckdb / matplotlib / openpyxl / python-docx / pyarrow / seaborn，与宿主 LocalShellBackend 数据分析栈能力对齐；不覆盖 entrypoint（保留 OpenSandbox SDK 默认 `tail -f /dev/null`，避免健康检查失败）
+
+- **`run_python` 工具双路径执行**：沙箱模式下代码写入沙箱 `/tmp/_run_<rand>.py` → `cd /data && python3 ...` 执行；非沙箱模式保持原宿主机 subprocess 路径。三道护栏（20000 字符代码上限 / 6000 字符输出上限 / 120s 超时）始终生效
+
+- **`backfill_sandbox_backend()` + `backfill_workspace_paths()` 启动钩子**：前者幂等把 net-ops 的 backend 字段对齐为 sandbox 并按特征句同步 persona 路径（管理员改过的 persona 不覆盖）；后者 best-effort 迁移老 uploads 目录结构与 netops CSV 到 datasets/（不删源、不阻断启动）
+
+### 修复
+
+- **DuckDB 文件位置规范化**：用户级 `uploaded_tables.duckdb` 从 uploads 子目录提到用户目录根下，沙箱内只读访问 uploads 时不必暴露 duckdb 文件（pandas 不需要，sql 工具走宿主侧 duckdb）
+
+- **附件路径校验**：`validate_attachment_path` 与 fileqa `virtual_to_real` 同步新路径前缀 `/data/<uid>/uploads/`，防止路径伪造/穿越
+
+### 验证
+
+- pytest 全量回归通过（含 sandbox_mgr 14 项 + 新增 paths 迁移钩子单测）；未启用 SANDBOX_ENABLED 时 net-ops / biz-analyzer / xiaoshu 行为零变化；前端无改动，vite build 通过
+
+### 已知限制
+
+- 本版仅 net-ops 试点接入沙箱；xiaoshu / xiaoxiao / biz-analyzer 仍是 local_shell，后续独立 PR 铺开
+- 真实沙箱联通需 OpenSandbox server 与 `sandbox/image/Dockerfile` 构建后的镜像，并配置 `[storage] allowed_host_paths` 放行 `SANDBOX_HOST_DATA` / `SANDBOX_HOST_DATASETS` 两个宿主机路径前缀
+- 预热池、egress FQDN 白名单、生产 api_key 强制、孤儿沙箱清扫为二期优化项
+
+***
+
 ## 0.12.0 (2026-09-09)
 
 ### 重磅变更：多模型可选 + 数据分析数据源权限体系（私有隔离 / 公共共享）

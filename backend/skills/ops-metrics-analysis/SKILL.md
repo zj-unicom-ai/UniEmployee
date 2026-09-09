@@ -10,7 +10,7 @@ description: 运营指标分析技能。当用户询问网络运营指标、KPI�
 
 ## 数据集
 
-netops_kpi.csv：180 天日粒度运营指标，列：
+/datasets/netops_kpi.csv：180 天日粒度运营指标，列：
 date / station_group（城东片区/高新区片区/老城片区）/
 connection_rate（接通率 %）/ drop_rate（掉线率 %）/ avg_latency_ms（平均时延）/
 alert_count（当日告警数）/ ticket_count（当日工单数）/
@@ -21,7 +21,7 @@ sla_met_rate（SLA 达标率 %）/ satisfaction（满意度 5 分制）
 - SLA 达标率目标 ≥ 95%，低于即不合格
 - 满意度目标 ≥ 4.5
 
-## 执行步骤（用 execute 跑 pandas，工作目录已指向数据目录）
+## 执行步骤（用 execute 跑 pandas，工作目录 /data）
 
 ### 步骤1：明确分析口径
 
@@ -39,7 +39,7 @@ sla_met_rate（SLA 达标率 %）/ satisfaction（满意度 5 分制）
 
 1. 逐片区筛异常日：connection_rate < 99.0 或 drop_rate > 0.5
    或 sla_met_rate < 95 的日期清单；
-2. 异常日关联告警：读 netops_alerts.csv（列：alert_id/time/station/
+2. 异常日关联告警：读 /datasets/netops_alerts.csv（列：alert_id/time/station/
    station_code/alarm_type/severity P1~P4/status/duration_min/root_cause/
    handler），取异常日前后 1 天对应基站（片区内）的 P1/P2 告警，
    对照告警类型与根因，判定指标异常是否由故障引起；
