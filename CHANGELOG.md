@@ -2,11 +2,13 @@
 
 ## 0.13.0 (2026-09-09)
 
-### 重磅变更：net-ops 试点接入 OpenSandbox 沙箱执行环境
+### 重磅变更：net-ops 试点接入 OpenSandbox 沙箱执行环境 + 平台首页视觉与导航重构
 
 - **代码执行与文件操作从宿主机直接 subprocess 迁移到 OpenSandbox 沙箱容器**：net-ops（小网·算网运营专家）的 `execute` / 文件工具不再在 app 宿主机直接执行，而是按会话（thread_id）路由到专属沙箱容器（OpenSandbox server 起 docker 容器，TTL 30 分钟空闲回收，重启可重连）。每个会话一个沙箱、容器间互不影响；**沙箱不可用时明确报错，不回退宿主机执行**（避免安全机制失效）。`SANDBOX_ENABLED=1` 全局开关；未置 1 时回退 LocalShellBackend（开发/测试/未部署 server 环境零行为变化）。
 
 - **数据布局重构以支持多租户隔离**：用户上传与生成文件从 `workspace/data/uploads/<uid>/<conv>/` 调整为 `workspace/data/<uid>/uploads/<conv>/`，沙箱内 hostPath 挂载按 `<uid>` subPath 限定本用户目录可见性（沙箱内 `ls /data` 看不到其他用户）；共享数据集（算网运营 CSV 等）迁到 `workspace/datasets/`，沙箱内只读挂载到 `/datasets/`。net-ops persona 与 3 个 SKILL.md（fault-impact-analysis / ops-metrics-analysis / resource-capacity-analysis）数据集路径从裸文件名改为 `/datasets/...`。
+
+- **侧边栏栏目重构与平台首页视觉升级**：IM 频道从主导航移入「系统设置」子菜单（admin 可见）；栏目顺序调整——员工管理上移至第三位、会话历史下移至系统设置前；n-menu 改为受控展开（`v-model:expanded-keys`），切到非系统设置栏目时自动收起父项，修复"系统设置展开后不收起"问题。平台首页 hero 区改蓝青渐变背景 + 装饰光斑 + 顶部 badge + 用户名金色渐变；统计卡片加左侧色条 + hover 上浮；快捷入口独立成 section + 投影增强；数字员工卡片 hover 上浮 + 状态点脉冲动画。同时修复 `HomeView.startChat` 未区分 `kind=custom` 的问题——点击 xiaoshu 现在正确跳转 analyst 工作台而非老 chat 路由。
 
 ### 新增
 
@@ -22,9 +24,14 @@
 
 - **附件路径校验**：`validate_attachment_path` 与 fileqa `virtual_to_real` 同步新路径前缀 `/data/<uid>/uploads/`，防止路径伪造/穿越
 
+- **菜单展开状态失控**：n-menu 默认 uncontrolled 模式下父项展开独立于选中项，系统设置展开后切到其他栏目不收起；改为 `v-model:expanded-keys` 受控，`onMenuSelect` 中判断非系统设置范围内栏目时清空 expandedKeys 触发自动收起
+
+- **xiaoshu 入口跳错路由**：`HomeView.startChat` 此前对所有员工统一 push 到 chat 路由，xiaoshu（kind=custom）本应走 analyst 工作台；改为按 `emp.kind === 'custom'` 分流，后端 `/employees` 已返回 kind 字段无需改后端
+
 ### 验证
 
-- pytest 全量回归通过（含 sandbox_mgr 14 项 + 新增 paths 迁移钩子单测）；未启用 SANDBOX_ENABLED 时 net-ops / biz-analyzer / xiaoshu 行为零变化；前端无改动，vite build 通过
+- pytest 全量回归通过（含 sandbox_mgr 14 项 + 新增 paths 迁移钩子单测）；未启用 SANDBOX_ENABLED 时 net-ops / biz-analyzer / xiaoshu 行为零变化
+- 前端 `npx vite build` 通过；本次 UI 改动纯样式 + 路由分流，未触碰后端/数据迁移
 
 ### 已知限制
 
