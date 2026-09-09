@@ -31,6 +31,7 @@ from app.workflows.refund import make_start_refund
 from app.agent.analyst.tools.sql_tools import ANALYST_SQL_TOOLS
 from app.agent.analyst.fileqa.tools import ANALYST_FILE_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
+from app.sandbox_mgr import RoutingSandboxBackend, enabled as sandbox_enabled
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV_BIN = str(ROOT / ".venv" / "bin")
@@ -428,19 +429,33 @@ def sops_namespace(user_id: str | None, emp_id: str) -> tuple[str, ...]:
     return (user_id or "default", emp_id)
 
 
+def _local_shell_backend() -> LocalShellBackend:
+    """宿主机本地 shell backend（local_shell 员工，或 sandbox 开关未开时的回退）。
+
+    virtual_mode=False：execute 是真实 shell（cwd=PROJECT_ROOT），输出会暴露真实绝对路径；
+    若 virtual_mode=True，模型用这些绝对路径调用 write_file 会被 _resolve_path 当成虚拟路径
+    拼到 root_dir 下，产生 PROJECT_ROOT/<主机绝对路径> 镜像目录（曾引发文件落错位置的线上事故）。
+    关掉后绝对路径按字面落位，与 execute 语义一致。/data/ 等虚拟路由不受影响。
+    """
+    return LocalShellBackend(
+        root_dir=str(PROJECT_ROOT),
+        virtual_mode=False,
+        env={"PATH": f"{VENV_BIN}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
+        inherit_env=True,
+    )
+
+
 def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     """构造 CompositeBackend：默认后端 + /data、/skills、/memories、/sops 路由。"""
     if spec.backend == "local_shell":
-        # virtual_mode=False：execute 是真实 shell（cwd=PROJECT_ROOT），输出会暴露真实绝对路径；
-        # 若 virtual_mode=True，模型用这些绝对路径调用 write_file 会被 _resolve_path 当成虚拟路径
-        # 拼到 root_dir 下，产生 PROJECT_ROOT/<主机绝对路径> 镜像目录（曾引发文件落错位置的线上事故）。
-        # 关掉后绝对路径按字面落位，与 execute 语义一致。/data/ 等虚拟路由不受影响。
-        default_backend = LocalShellBackend(
-            root_dir=str(PROJECT_ROOT),
-            virtual_mode=False,
-            env={"PATH": f"{VENV_BIN}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
-            inherit_env=True,
-        )
+        default_backend = _local_shell_backend()
+    elif spec.backend == "sandbox":
+        # sandbox 员工：execute/fs 工具进 OpenSandbox 沙箱（按会话路由，见 sandbox_mgr）。
+        # 开关未置 1（测试/开发/未部署 server）回退宿主机 LocalShellBackend，零行为变化。
+        if sandbox_enabled():
+            default_backend = RoutingSandboxBackend()
+        else:
+            default_backend = _local_shell_backend()
     else:
         default_backend = StateBackend()
     return CompositeBackend(
