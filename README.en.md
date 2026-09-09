@@ -181,12 +181,12 @@ The current release ships with a product FAQ knowledge base, markdown product wi
 
 | Employee | Role | Skills | Connectors |
 |----------|------|--------|------------|
-| `xiaosu` | Customer service | Product FAQ, complaint handling | CRM |
-| `xiaoshu` | Data analyst | Data analysis | News |
+| `unicom-presale` | Presales customer service (Zhejiang Unicom) | Presales consulting playbook (RAGFlow business KB retrieval) | — |
+| `xiaoshu` | Data analyst | Data analysis, frontend design, report generation | News |
 | `xiaoxiao` | Sales advisor | Enterprise sales, solution doc generation | CRM |
 | `hrbp` | HR partner | HR assistant | CRM |
 | `biz-analyzer` | Business analysis & decision advisor | Business overview, root-cause analysis, decision analysis, market intelligence | — |
-| `net-ops` | Network operations expert | Fault impact analysis (base-station outage scenario showcasing multi-hop ontology queries) | — |
+| `net-ops` | Network operations expert | Fault impact analysis, ops metrics analysis, resource capacity analysis, SOP routing | — |
 
 > Built-in skills live in `backend/skills/` (each with a `SKILL.md` playbook). The `frontend-design` skill is based on [Matt Pocock](https://github.com/mattpocock)'s open-source skill library and distributed under [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt), with the original license attached therein.
 
@@ -244,7 +244,7 @@ Quick local start: `docker compose up -d db` (7 databases are created automatica
 | `JWT_EXPIRE_HOURS` | `24` | Token lifetime (hours) |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / empty | Log level / file path |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | Database backend and connection params (host/port/user/password/db prefix) |
-| `APP_VERSION` | `0.9.0` | Printed at /health and in logs |
+| `APP_VERSION` | `0.13.0` | Printed at /health and in logs |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | Markdown product-KB directory for the sales skill |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow integration (optional) |
 

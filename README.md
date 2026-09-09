@@ -198,12 +198,12 @@ Employee ── 数字员工（人设 / 模型 / 技能 / 工具 / 知识库 / �
 
 | 员工 | 岗位 | 技能 | 连接器 |
 |------|------|------|--------|
-| `xiaosu` | 客服 | 产品 FAQ、投诉处理 | CRM |
-| `xiaoshu` | 数据分析师 | 数据分析 | 新闻 |
+| `unicom-presale` | 售前客服（浙江联通） | 售前咨询规程（RAGFlow 业务知识库检索） | — |
+| `xiaoshu` | 数据分析专家 | 数据分析、前端设计、报告生成 | 新闻 |
 | `xiaoxiao` | 销售顾问 | 企业销售、方案文档生成 | CRM |
 | `hrbp` | HR 合作伙伴 | HR 助手 | CRM |
 | `biz-analyzer` | 经营分析与决策顾问 | 经营全景、归因分析、决策分析、市场情报 | — |
-| `net-ops` | 网络运营专家 | 故障影响分析（基站退服场景打样本体多跳查询） | — |
+| `net-ops` | 算网运营专家 | 故障影响分析、运营指标分析、资源容量分析、SOP 路由执行 | — |
 
 > 内置技能存于 `backend/skills/`（各含 `SKILL.md` 规程）。其中 `frontend-design` 技能基于 [Matt Pocock](https://github.com/mattpocock) 的开源技能库编写，按 [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt) 分发，其内独立附带原始许可证。
 
@@ -261,7 +261,7 @@ UniEmployee/
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | 数据库后端与连接参数（host/port/user/password/db 前缀） |
-| `APP_VERSION` | `0.10.0` | 打印在 /health 与日志 |
+| `APP_VERSION` | `0.13.0` | 打印在 /health 与日志 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
 
