@@ -164,21 +164,93 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def list_datasources() -> list[dict]:
-    """列出所有数据源。"""
+def can_access_datasource(ds: dict | None, user_id: str | None,
+                          is_admin: bool) -> bool:
+    """数据源【使用/读取】权限：管理员 / 创建者（owner_id）/ 公共数据源可访问。
+
+    用于：工作台下拉、问数连库、表结构/预览/标注读取等只读与运行时场景。
+    user_id 为空表示系统/内部调用（播种、运行时已在更上层校验），放行；
+    普通用户可访问 owner_id 等于自己、或被标记为公共（is_public=1）的数据源。
+    """
+    if not ds:
+        return False
+    if is_admin or not user_id:
+        return True
+    if ds.get("is_public"):
+        return True
+    return ds.get("owner_id") == user_id
+
+
+def can_manage_datasource(ds: dict | None, user_id: str | None,
+                          is_admin: bool) -> bool:
+    """数据源【管理/写入】权限：仅管理员或创建者（owner_id）可编辑/删除/改标注。
+
+    与 can_access 的区别：公共数据源（is_public=1）对所有人开放【使用】，
+    但不因此开放【管理】——普通用户能用公共源问数，却不能改它的连接配置、
+    表标注或删除它，避免公共种子源被使用者破坏。
+    """
+    if not ds:
+        return False
+    if is_admin or not user_id:
+        return True
+    return ds.get("owner_id") == user_id
+
+
+def get_owned_datasource(datasource_id: str, user_id: str | None,
+                         is_admin: bool) -> dict | None:
+    """取数据源并做【使用】权限校验：不存在或无权使用均返回 None。
+
+    路由层据此返回 404（不区分「不存在」与「无权限」，避免越权探测资源存在性）。
+    """
+    ds = get_datasource(datasource_id)
+    if not can_access_datasource(ds, user_id, is_admin):
+        return None
+    return ds
+
+
+def get_managed_datasource(datasource_id: str, user_id: str | None,
+                           is_admin: bool) -> dict | None:
+    """取数据源并做【管理】权限校验：不存在或无权管理均返回 None。
+
+    用于编辑/删除/写标注等修改类接口；公共源仅 owner/管理员可管理。
+    """
+    ds = get_datasource(datasource_id)
+    if not can_manage_datasource(ds, user_id, is_admin):
+        return None
+    return ds
+
+
+def list_datasources(owner_id: str | None = None,
+                     is_admin: bool = False) -> list[dict]:
+    """列出数据源。
+
+    可见范围：管理员或内部调用（owner_id 为空）返回全部；普通用户返回
+    自己创建的（owner_id 匹配）+ 所有公共数据源（is_public=1）。
+    """
     con = _catalog_conn()
     try:
-        rows = con.execute(
-            "SELECT id, name, description, db_type, config, enabled, "
-            "owner_id, created_at, updated_at "
-            "FROM datasources WHERE deleted_at IS NULL ORDER BY created_at DESC"
-        ).fetchall()
+        if owner_id and not is_admin:
+            rows = con.execute(
+                "SELECT id, name, description, db_type, config, enabled, "
+                "owner_id, is_public, created_at, updated_at "
+                "FROM datasources WHERE deleted_at IS NULL "
+                "AND (owner_id=? OR is_public=1) "
+                "ORDER BY is_public DESC, created_at DESC",
+                (owner_id,)
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id, name, description, db_type, config, enabled, "
+                "owner_id, is_public, created_at, updated_at "
+                "FROM datasources WHERE deleted_at IS NULL "
+                "ORDER BY is_public DESC, created_at DESC"
+            ).fetchall()
         result = []
         for r in rows:
             result.append({
                 "id": r["id"], "name": r["name"], "description": r["description"],
                 "db_type": r["db_type"], "enabled": r["enabled"],
-                "owner_id": r["owner_id"],
+                "owner_id": r["owner_id"], "is_public": r["is_public"],
                 "created_at": r["created_at"], "updated_at": r["updated_at"],
             })
         return result
@@ -192,7 +264,7 @@ def get_datasource(datasource_id: str) -> dict | None:
     try:
         r = con.execute(
             "SELECT id, name, description, db_type, config, enabled, "
-            "owner_id, created_at, updated_at "
+            "owner_id, is_public, created_at, updated_at "
             "FROM datasources WHERE id = ? AND deleted_at IS NULL",
             (datasource_id,)
         ).fetchone()
@@ -201,7 +273,7 @@ def get_datasource(datasource_id: str) -> dict | None:
         return {
             "id": r["id"], "name": r["name"], "description": r["description"],
             "db_type": r["db_type"], "config": r["config"], "enabled": r["enabled"],
-            "owner_id": r["owner_id"],
+            "owner_id": r["owner_id"], "is_public": r["is_public"],
             "created_at": r["created_at"], "updated_at": r["updated_at"],
         }
     finally:
@@ -209,7 +281,11 @@ def get_datasource(datasource_id: str) -> dict | None:
 
 
 def create_datasource(data: dict) -> dict:
-    """创建数据源。data: {id, name, description, db_type, config(dict), enabled, owner_id}"""
+    """创建数据源。
+
+    data: {id, name, description, db_type, config(dict), enabled, owner_id, is_public}
+    is_public 默认 0（私有）；是否允许设为公共由路由层按管理员权限把关。
+    """
     import uuid
     ds_id = data.get("id") or f"ds_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
     config = data.get("config", {})
@@ -222,11 +298,12 @@ def create_datasource(data: dict) -> dict:
     try:
         con.execute(
             "INSERT INTO datasources (id, name, description, db_type, config, "
-            "enabled, owner_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "enabled, owner_id, is_public, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ds_id, data["name"], data.get("description", ""),
              data["db_type"], encrypted,
              data.get("enabled", 1), data.get("owner_id"),
+             1 if data.get("is_public") else 0,
              now, now)
         )
         con.commit()
@@ -236,7 +313,7 @@ def create_datasource(data: dict) -> dict:
 
 
 def update_datasource(datasource_id: str, data: dict) -> dict | None:
-    """更新数据源（部分更新）。"""
+    """更新数据源（部分更新）。is_public 仅在 data 显式提供时更新（路由层限管理员）。"""
     existing = get_datasource(datasource_id)
     if not existing:
         return None
@@ -245,10 +322,16 @@ def update_datasource(datasource_id: str, data: dict) -> dict | None:
     description = data.get("description", existing["description"])
     db_type = data.get("db_type", existing["db_type"])
     enabled = data.get("enabled", existing["enabled"])
+    is_public = data.get("is_public", existing["is_public"])
 
     if "config" in data:
         config = data["config"]
         if isinstance(config, dict):
+            # 详情接口出于安全把 password 脱敏为 "***"；编辑时若未改密码
+            # （回传 "***"/空），回填原密码，避免把占位符当新密码加密入库。
+            if config.get("password") in (None, "", "***"):
+                saved = decrypt_config(existing["config"])
+                config = {**config, "password": saved.get("password", "")}
             encrypted = encrypt_config(config)
         else:
             encrypted = config
@@ -260,8 +343,9 @@ def update_datasource(datasource_id: str, data: dict) -> dict | None:
     try:
         con.execute(
             "UPDATE datasources SET name=?, description=?, db_type=?, "
-            "config=?, enabled=?, updated_at=? WHERE id=?",
-            (name, description, db_type, encrypted, enabled, now, datasource_id)
+            "config=?, enabled=?, is_public=?, updated_at=? WHERE id=?",
+            (name, description, db_type, encrypted, enabled,
+             1 if is_public else 0, now, datasource_id)
         )
         con.commit()
     finally:
@@ -562,7 +646,9 @@ def unbind_connector(emp_id: str, connector_id: str) -> bool:
         con.close()
 
 
-def list_all_data_sources(emp_id: str = ANALYST_EMP_ID) -> list[dict]:
+def list_all_data_sources(emp_id: str = ANALYST_EMP_ID,
+                          user_id: str | None = None,
+                          is_admin: bool = False) -> list[dict]:
     """聚合返回三类数据源：数据库 / 知识库 / 连接器。
 
     返回统一格式：
@@ -571,11 +657,14 @@ def list_all_data_sources(emp_id: str = ANALYST_EMP_ID) -> list[dict]:
        {"id": "conn:zzz", "name": "CRM连接器", "kind": "connector"}]
 
     id 加 kind 前缀避免冲突；前端选择后原样回传，后端按前缀解析。
+
+    可见范围：数据库数据源普通用户可见自己创建的 + 公共数据源（is_public=1），
+    管理员全部；知识库/连接器为员工绑定级共享资源，凡有 xiaoshu 使用权限者均可见。
     """
     result = []
 
-    # 1. 数据库数据源（datasources 表，enabled=1）
-    for ds in list_datasources():
+    # 1. 数据库数据源（datasources 表，enabled=1；自己的 + 公共的）
+    for ds in list_datasources(owner_id=user_id, is_admin=is_admin):
         if not ds.get("enabled"):
             continue
         result.append({
@@ -584,6 +673,7 @@ def list_all_data_sources(emp_id: str = ANALYST_EMP_ID) -> list[dict]:
             "kind": "database",
             "db_type": ds.get("db_type", ""),
             "description": ds.get("description", ""),
+            "is_public": ds.get("is_public", 0),
         })
 
     # 2. 员工绑定的知识库
@@ -622,7 +712,17 @@ def parse_data_source(data_source: str) -> tuple[str, str]:
     if data_source.startswith("{"):
         try:
             obj = json.loads(data_source)
-            return obj.get("kind", ""), obj.get("id", "")
+            kind = obj.get("kind", "")
+            raw_id = obj.get("id", "")
+            # list_all_data_sources 返回的 id 统一带 kind 前缀（ds:/kb:/conn:），
+            # 前端原样回传，这里必须剥掉前缀得到真实资源 ID；裸 ID（兼容旧数据）原样返回。
+            # 不剥会导致注入 "ds:ds_xxx"，查库报「数据源 ds:ds_xxx 不存在」。
+            if isinstance(raw_id, str):
+                for prefix in ("ds:", "kb:", "conn:"):
+                    if raw_id.startswith(prefix):
+                        raw_id = raw_id[len(prefix):]
+                        break
+            return kind, raw_id
         except (json.JSONDecodeError, TypeError):
             pass
 

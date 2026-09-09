@@ -39,6 +39,15 @@
             style="width: 220px"
           />
           <n-tag v-if="datasourceName" size="tiny" type="info">{{ datasourceName }}</n-tag>
+          <n-select
+            v-if="aiModels.length"
+            :value="currentModel"
+            :options="modelOptions"
+            size="small"
+            placeholder="选择模型"
+            style="width: 150px"
+            @update:value="(v) => currentModel = v"
+          />
         </div>
         <div class="header-right">
           <n-button size="tiny" text @click="$router.push({ name: 'analyst-datasources' })">
@@ -183,9 +192,25 @@ const route = useRoute()
 
 const datasourceId = ref(null)
 const datasources = ref([])
+// 模型选择
+const aiModels = ref([])
+const currentModel = ref('')
+const modelOptions = computed(() =>
+  aiModels.value.map(m => ({ label: m.name, value: m.base_model }))
+)
+function defaultModelBase() {
+  const d = aiModels.value.find(m => m.default_model)
+  return d ? d.base_model : (aiModels.value[0]?.base_model || '')
+}
+async function loadAiModels() {
+  try {
+    const { data } = await api.get('/ai-models')
+    aiModels.value = Array.isArray(data) ? data : []
+  } catch {}
+}
 const dsOptions = computed(() =>
   datasources.value.map(d => ({
-    label: `[${d.kind === 'database' ? '库' : d.kind === 'knowledge_base' ? '知' : '连'}] ${d.name}`,
+    label: `[${d.kind === 'database' ? '库' : d.kind === 'knowledge_base' ? '知' : '连'}] ${d.name}${d.kind === 'database' && d.is_public ? ' · 公共' : ''}`,
     value: d.id,
   }))
 )
@@ -298,6 +323,7 @@ async function newConv() {
   try {
     const data = await analystApi.createAnalystConversation()
     convId.value = data.conversation_id
+    currentModel.value = defaultModelBase()
     messages.value = []
     stream.resetPipeline()
     await loadConversations()
@@ -311,6 +337,7 @@ async function openConversation(cid) {
     const data = await analystApi.getAnalystConversation(cid)
     if (data.error) return
     convId.value = cid
+    currentModel.value = data.model || defaultModelBase()
     messages.value = []
     stream.resetPipeline()
     for (const t of (data.turns || [])) {
@@ -379,12 +406,14 @@ async function onSend() {
     text,
     attachments,
     currentDataSource.value,
+    currentModel.value,
   )
   inputText.value = ''
   await loadConversations()
 }
 
 onMounted(async () => {
+  await loadAiModels()
   await loadDatasources()
   await loadConversations()
   // 优先从 URL ?conv=xxx 恢复指定会话（从会话历史页跳转过来时）

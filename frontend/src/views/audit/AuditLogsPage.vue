@@ -120,7 +120,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.audit-page { width: 100%; }
+.audit-page { width: 100%; height: 100%; padding: 18px 28px 24px; box-sizing: border-box; overflow-y: auto; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .flex-sp { flex: 1; }
 .total { font-size: 12px; color: #94a3b8; }

@@ -58,6 +58,13 @@ from .seeds import (
     seed_assignments_if_empty, seed_admin_if_empty, flag_default_admin_password,
 )
 
+# ai_models
+from .ai_models import (
+    init_tables as ai_models_init, list_models, get_model, create_model,
+    update_model, delete_model, set_default_model, get_default_model,
+    resolve_runtime_model, seed_default_model_if_empty, SUPPLIER_NAMES,
+)
+
 __all__ = [
     # db
     "GLOBAL_TOOL_NAMES", "ROOT", "init", "_unlink", "_unlink_view",
@@ -88,4 +95,8 @@ __all__ = [
     "backfill_employees_if_missing", "backfill_analyst_sql_tools",
     "backfill_xiaoshu_skills", "backfill_netops_upgrade",
     "seed_assignments_if_empty", "seed_admin_if_empty", "flag_default_admin_password",
+    # ai_models
+    "ai_models_init", "list_models", "get_model", "create_model",
+    "update_model", "delete_model", "set_default_model", "get_default_model",
+    "resolve_runtime_model", "seed_default_model_if_empty", "SUPPLIER_NAMES",
 ]

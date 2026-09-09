@@ -14,6 +14,7 @@ class AttachmentIn(BaseModel):
 class MessageIn(BaseModel):
     message: str = ""
     attachments: list[AttachmentIn] = []
+    model: str = ""  # 本次请求使用的模型（base_model 名），空则用会话绑定/员工默认
 
 
 class DecisionIn(BaseModel):

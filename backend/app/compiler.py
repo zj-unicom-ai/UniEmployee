@@ -344,9 +344,25 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
     return tools, mcp_client
 
 def _init_model(model: str):
-    """openai: 前缀模型在 deepagents 中默认走 Responses API，
+    """模型初始化：优先从 DB ai_models 表取 api_key/api_domain，
+    没配置时回退到环境变量（兼容老库 / 未通过模型管理页配置的场景）。
+
+    openai: 前缀模型在 deepagents 中默认走 Responses API，
     国内 MaaS 兼容端点只支持 /chat/completions，必须显式关掉，
     否则报 404。"""
+    try:
+        from app.catalog.ai_models import resolve_runtime_model
+        cfg = resolve_runtime_model(model)
+    except Exception:
+        cfg = None
+    if cfg:
+        kwargs = {"use_responses_api": False}
+        if cfg.get("api_key"):
+            kwargs["api_key"] = cfg["api_key"]
+        if cfg.get("api_domain"):
+            kwargs["base_url"] = cfg["api_domain"]
+        return init_chat_model(cfg["base_model"], **kwargs)
+    # 回退到环境变量
     if model.startswith("openai:"):
         return init_chat_model(model, use_responses_api=False)
     return model

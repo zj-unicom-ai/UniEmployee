@@ -73,10 +73,14 @@ def discover_assigned_employees(user_id: str) -> list[dict]:
     return out
 
 
-def build_spec(cfg: dict) -> EmployeeSpec:
-    """目录库配置 → EmployeeSpec（编译层输入）。"""
+def build_spec(cfg: dict, model_override: str | None = None) -> EmployeeSpec:
+    """目录库配置 → EmployeeSpec（编译层输入）。
+
+    model_override 不为空时，用它替代员工配置里的 model 字段（会话级模型切换）。
+    """
     return EmployeeSpec(
-        id=cfg["id"], name=cfg["name"], role=cfg.get("role", ""), model=cfg["model"],
+        id=cfg["id"], name=cfg["name"], role=cfg.get("role", ""),
+        model=model_override or cfg["model"],
         persona=cfg["persona"], backend=cfg.get("backend", "state"),
         interrupt_on=cfg.get("interrupt_on", {}),
         skills=cfg.get("skills", []), tools=cfg.get("tools", []),
@@ -293,13 +297,15 @@ async def resume_refund(inner_thread: str, approved: bool) -> str:
 
 
 async def get_agent(employee_id: str, user_id: str | None = None,
-                     overrides: dict | None = None):
+                     overrides: dict | None = None,
+                     model_override: str | None = None):
     """按员工懒编译 + 进程内缓存。
 
     - 管理员 / 模板路径：user_id=None → 缓存键为 emp_id，用纯模板配置。
     - 普通用户路径：user_id 给定 → 缓存键为 f"{emp_id}|{user_id}"，
       用 get_effective_config（模板 + 该用户覆盖合并）编译，A/B 互不影响。
     overrides 由调用方传入（来自该用户的分配行），避免在编译层再查库。
+    model_override 不为空时用指定模型编译，缓存键追加模型名以隔离不同模型的 agent。
     """
     async with _lock:
         if user_id:
@@ -312,6 +318,8 @@ async def get_agent(employee_id: str, user_id: str | None = None,
             cfg = catalog.get_employee_config(employee_id)
         if not cfg:
             raise KeyError(f"未知员工：{employee_id}")
+        if model_override:
+            key = f"{key}|m:{model_override}"
         # 编译前先同步当前有效技能到 Store，让技能成为运行时资源，
         # compile_agent 只负责把技能挂进 deepagents，不再承担“唯一播种入口”。
         await sync_skills_to_store(employee_id, user_id)
@@ -319,7 +327,8 @@ async def get_agent(employee_id: str, user_id: str | None = None,
         await sync_sops_to_store(employee_id, user_id)
         if key not in _agents:
             agent, stage_meta, mcp_client = await compile_agent(
-                build_spec(cfg), _checkpointer, _store, user_id=user_id)
+                build_spec(cfg, model_override=model_override),
+                _checkpointer, _store, user_id=user_id)
             _agents[key] = (agent, stage_meta)
             _mcp_clients[key] = mcp_client
     return _agents[key]

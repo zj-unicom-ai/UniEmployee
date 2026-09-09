@@ -93,7 +93,7 @@ def init():
     CREATE TABLE IF NOT EXISTS datasources(
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
       db_type TEXT NOT NULL, config TEXT NOT NULL,
-      enabled INTEGER DEFAULT 1, owner_id TEXT,
+      enabled INTEGER DEFAULT 1, owner_id TEXT, is_public INTEGER DEFAULT 0,
       created_at TEXT, updated_at TEXT, deleted_at TEXT);
     CREATE TABLE IF NOT EXISTS table_annotations(
       id TEXT PRIMARY KEY, datasource_id TEXT NOT NULL,
@@ -121,12 +121,16 @@ def init():
     _migrate_retire_kb_entries(con)
     _migrate_user_org(con)
     _migrate_employee_kind(con)
+    _migrate_datasource_public(con)
     # 安全护栏表（guard 包）幂等建表，复用同一连接
     from ..guard.db import init_tables as _guard_init
     _guard_init(con)
     # 管理端审计日志表（audit 包）幂等建表，复用同一连接
     from ..audit.db import init_tables as _audit_init
     _audit_init(con)
+    # AI 模型配置表幂等建表，复用同一连接
+    from .ai_models import init_tables as _ai_models_init
+    _ai_models_init(con)
     con.close()
 
 
@@ -152,6 +156,20 @@ def _migrate_employee_kind(con):
     con.execute(
         "UPDATE employees SET kind='custom' WHERE id IN ('xiaoshu') "
         "AND deleted_at IS NULL")
+    con.commit()
+
+
+def _migrate_datasource_public(con):
+    """datasources 表补 is_public 列（1=公共，全员可用；0=私有，仅 owner/管理员）。
+
+    存量数据源在引入「私有隔离」前本就是全局共享的，因此首次补列时把所有
+    未删除的数据源统一标记为公共（is_public=1），保留升级前的共享行为；
+    之后新建的数据源默认私有（is_public=0），由管理员按需设为公共。
+    """
+    if "is_public" not in dblayer.table_columns(con, "datasources"):
+        con.execute("ALTER TABLE datasources ADD COLUMN is_public INTEGER DEFAULT 0")
+        con.execute(
+            "UPDATE datasources SET is_public=1 WHERE deleted_at IS NULL")
     con.commit()
 
 
