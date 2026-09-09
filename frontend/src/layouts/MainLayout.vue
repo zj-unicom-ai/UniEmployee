@@ -26,6 +26,7 @@
           :collapsed-icon-size="22"
           :options="menuOptions"
           :value="activeKey"
+          v-model:expanded-keys="expandedKeys"
           @update:value="onMenuSelect"
         />
       </div>
@@ -96,7 +97,6 @@ function iconEl(svg) {
 const mainNavOptions = [
   { label: '平台首页', key: 'home', icon: iconEl('<path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '对话工作台', key: 'chat', icon: iconEl('<path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
-  { label: 'IM 频道', key: 'im', icon: iconEl('<path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '会话历史', key: 'history', icon: iconEl('<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '资源中心', key: 'resources', icon: iconEl('<path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
 ]
@@ -120,6 +120,7 @@ const settingsNavOptions = [
     icon: iconEl('<path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'),
     children: [
       { label: '安全护栏', key: 'guard-words' },
+      { label: 'IM 频道', key: 'im' },
       { label: '模型管理', key: 'model-manager' },
       { label: '审计日志', key: 'audit-logs' },
     ],
@@ -153,11 +154,21 @@ const activeKey = computed(() => {
 })
 
 const menuOptions = computed(() => {
-  const items = [...mainNavOptions]
+  // 显式顺序：平台首页 → 对话工作台 → [员工管理] → 资源中心
+  //         → [业务本体/自动任务/用户管理/运行评估] → 会话历史 → [系统设置]
+  // 方括号项仅 admin 可见
+  const items = []
+  items.push(mainNavOptions.find(x => x.key === 'home'))
+  items.push(mainNavOptions.find(x => x.key === 'chat'))
   if (auth.isAdmin) {
-    // 管理类栏目插在资源中心后面（mainNavOptions 末尾位置）
-    items.splice(items.length, 0, ...adminOnlyNavOptions)
-    // 系统设置固定在最下方
+    items.push(adminOnlyNavOptions.find(x => x.key === 'admin')) // 员工管理放第三位
+  }
+  items.push(mainNavOptions.find(x => x.key === 'resources'))
+  if (auth.isAdmin) {
+    items.push(...adminOnlyNavOptions.filter(x => x.key !== 'admin'))
+  }
+  items.push(mainNavOptions.find(x => x.key === 'history')) // 会话历史放系统设置前
+  if (auth.isAdmin) {
     items.push(...settingsNavOptions)
   }
   return items
@@ -166,7 +177,13 @@ const menuOptions = computed(() => {
 function onMenuSelect(key) {
   if (key === 'landing') {
     router.push({ name: 'landing' })
-  } else if (key !== 'change-password') {
+    return
+  }
+  // 切到非系统设置范围内的栏目时，自动收起系统设置父项
+  if (!SETTINGS_GROUP_KEYS.includes(key)) {
+    expandedKeys.value = []
+  }
+  if (key !== 'change-password') {
     router.push({ name: key })
   } else {
     router.push({ name: 'change-password' })
