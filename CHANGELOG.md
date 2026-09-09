@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.1 (2026-09-09)
+
+### 修复：数据分析 SQL 只读校验从字符串级升级为 AST 级
+
+- **历史漏洞**：`analyst/datasource/manager.py::execute_query` 用 `startswith` 关键词判断 SQL 是否只读，存在多条绕过路径——`/* comment */ DROP TABLE x` 注释前缀绕过、`SELECT ... ; DROP TABLE x` 多语句（stacked queries）、`WITH x AS (DELETE ...) SELECT` CTE 改写 DML、`SELECT ... INTO new_tbl` 建表、`SELECT pg_terminate_backend(pid)` 危险函数调用，均能逃逸只读约束。`analyst.py::preview_table_data` 用 `f"SELECT * FROM {table_name}"` 直接拼字符串，`table_name` 来自 URL 路径参数，等价 SQL 注入通道（`customers; DROP TABLE orders`、`information_schema.tables` 均可注入）。
+
+- **修复策略（纵深防御三道闸）**：
+  1. AST 校验：引入 `sqlglot==26.29.0` 按数据源方言解析 SQL，多语句拒绝、根节点必须是 SELECT、CTE 体只允许 SELECT、SELECT INTO 拒绝、危险函数黑名单（pg_terminate_backend / pg_sleep / load_file / sleep / benchmark / sys_exec / xp_cmdshell 等）。解析失败 fail-closed。
+  2. 行数硬上限：服务端 `fetchmany(min(limit, _QUERY_MAX_ROWS))` 取代 `fetchall`，杜绝全表载入内存；用户 limit 与全局 `ANALYST_QUERY_MAX_ROWS`（默认 1000）取较小者，SQL 字符串追加 LIMIT 仅作 DB 端兜底。
+  3. 服务端超时：PG `SET LOCAL statement_timeout` / MySQL `SET SESSION MAX_EXECUTION_TIME`，可通过 `ANALYST_QUERY_TIMEOUT_SEC`（默认 30s）环境变量覆盖；其他方言退化到 SQLAlchemy `execution_options(timeout=)` 客户端 cancel；失败不阻断（仅日志）。
+
+- **表预览路由注入修复**：新增 `is_table_readable(ds_id, table_name)` 严格白名单（先字符级防注入字符，再 inspector.get_table_names / get_view_names 校验真实存在），不存在即 404；新增 `quote_table_identifier` 用方言 `identifier_preparer.quote_identifier` 引用标识符拼 SQL。两道闸配合等价参数化但支持 identifier 绑定（SQLAlchemy 的 `text(":tbl")` 不支持 identifier 绑定）。
+
+### 验证
+
+- 新增 40 个单元测试覆盖关键绕过路径：多语句拒绝、CTE 改写 DML 拒绝、SELECT INTO 拒绝、危险函数拒绝（pg_terminate_backend / sleep / load_file / benchmark）、注释前缀 DROP 拒绝、SQL 语法错误 fail-closed、fetchmany 全局行数硬上限、is_table_readable 拒 8 类注入字符串（`; DROP` / `WHERE 1=1` / `--` / `/* */` / information_schema / `' OR '1'='1` / UNION 等）
+- analyst 全套 193 个测试通过；其他模块未回归（isolation/security/assignment/browser 失败在 main 上同存，与本次无关）
+- 前端构建通过
+
 ## 0.13.0 (2026-09-09)
 
 ### 重磅变更：net-ops 试点接入 OpenSandbox 沙箱执行环境 + 平台首页视觉与导航重构

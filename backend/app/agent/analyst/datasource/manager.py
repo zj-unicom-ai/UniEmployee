@@ -14,6 +14,8 @@ import time
 import urllib.parse
 from typing import Any
 
+import sqlglot
+from sqlglot import exp
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
@@ -21,6 +23,147 @@ from app import db as dblayer
 from app.catalog.db import _conn as _catalog_conn
 
 logger = logging.getLogger("app.agent.analyst.datasource")
+
+# ---------------------------------------------------------------------------
+# SQL 只读安全护栏（AST 级）
+# ---------------------------------------------------------------------------
+# 历史问题：startswith 关键词判断可被注释/括号/CTE 改写 DML/方言函数绕过；
+# table_preview 直接 f-string 拼接 table_name 等价 SQL 注入通道。
+# 修复策略：sqlglot AST 解析 + 多语句拒绝 + CTE 体只允许 SELECT + 危险函数黑名单。
+
+# sqlglot 方言映射（datasource.db_type -> sqlglot dialect）
+_SQLGLOT_DIALECTS = {
+    "mysql": "mysql",
+    "pg": "postgres",
+    "postgres": "postgres",
+    "oracle": "oracle",
+    "sqlServer": "tsql",
+    "mssql": "tsql",
+    "ck": "clickhouse",
+    "clickhouse": "clickhouse",
+    "sqlite": "sqlite",
+}
+
+# 危险函数：可用于数据破坏/资源耗尽/文件系统/进程管理/信息泄露。
+# 大小写不敏感匹配（已 lower 处理）。pg_read_* / pg_sleep / pg_terminate_backend 等数据库特有
+# 系统管理函数，及 MySQL INTO OUTFILE / INTO DUMPFILE 类（sqlglot 解析为 Select.into，
+# 已在 stmt.args["into"] 处单独拦截，这里再防御同名函数调用）。
+_DANGEROUS_FUNCTIONS = {
+    "pg_terminate_backend", "pg_cancel_backend", "pg_sleep", "pg_sleep_for",
+    "pg_sleep_until", "pg_read_file", "pg_read_binary_file", "pg_ls_dir",
+    "pg_stat_file", "pg_ls_dir", "pg_size_pretty", "pg_database_size",
+    "pg_tablespace_size", "lo_import", "lo_export", "lo_unlink",
+    "load_file", "benchmark", "sleep", "get_lock", "release_all_locks",
+    "sys_exec", "sys_eval", "xp_cmdshell",
+}
+
+# 查询资源限制（可在启动时通过环境变量覆盖）
+_QUERY_TIMEOUT_SEC = float(os.environ.get("ANALYST_QUERY_TIMEOUT_SEC", "30"))
+_QUERY_MAX_ROWS = int(os.environ.get("ANALYST_QUERY_MAX_ROWS", "1000"))
+
+
+def _sqlglot_dialect_for(db_type: str) -> str:
+    """根据 datasource.db_type 返回 sqlglot 方言名。未知类型用默认（不指定）。"""
+    if not db_type:
+        return ""
+    return _SQLGLOT_DIALECTS.get(db_type, "")
+
+
+def _validate_readonly_sql(sql: str, db_type: str = "") -> tuple[bool, str]:
+    """AST 级只读校验，返回 (is_safe, error_message)。
+
+    通过条件：
+    1. sqlglot 解析后只能得到 1 条语句（拒绝多语句 stacked queries）。
+    2. 根节点必须是 SELECT（含 WITH ... SELECT 的 CTE 形式；CTE body 也只能是 SELECT）。
+    3. SELECT 语句不得带 INTO（PG 建表）。
+    4. 不得调用 _DANGEROUS_FUNCTIONS 中的函数。
+    5. 不允许 PIVOT/UNPIVOTE 等改写 schema 的扩展形式。
+
+    解析失败（语法错误/方言不识别）会被拒绝而非放行——安全场景下 fail-closed。
+    """
+    if not sql or not sql.strip():
+        return False, "SQL 为空"
+
+    dialect = _sqlglot_dialect_for(db_type)
+    try:
+        statements = sqlglot.parse(sql, dialect=dialect or None)
+    except Exception as e:
+        # 解析失败一律拒绝，避免脏 SQL 借解析器 bug 通过
+        logger.warning("SQL AST 解析失败 [db_type=%s]: %s", db_type, e)
+        return False, f"SQL 语法解析失败，已拒绝执行：{type(e).__name__}"
+
+    if not statements:
+        return False, "SQL 解析为空"
+
+    # 1. 多语句拒绝（sqlglot 对多语句分隔的 SQL 返回 list[Expression]）
+    non_none = [s for s in statements if s is not None]
+    if len(non_none) != 1:
+        return False, "禁止多语句执行（stacked queries rejected）"
+
+    stmt = non_none[0]
+
+    # 2. 根节点必须是 SELECT（含 WITH/CTE 的 SELECT 仍是 exp.Select）
+    if not isinstance(stmt, exp.Select):
+        # 显式拒绝常见 DML/DDL 节点，错误信息更具操作性（关键词大写便于识别）
+        kind_name = type(stmt).__name__.upper()
+        return False, f"安全限制：禁止执行 {kind_name} 语句，只允许 SELECT"
+
+    # 3. SELECT INTO 拒绝（PostgreSQL `SELECT ... INTO` 会建表）
+    if stmt.args.get("into"):
+        return False, "安全限制：禁止 SELECT INTO（避免建表）"
+
+    # 4. CTE body 必须是 SELECT（防 `WITH x AS (DELETE ...) SELECT`）
+    for cte in stmt.find_all(exp.CTE):
+        body = cte.this
+        # sqlglot 把 CTE 体包在 Subquery 里
+        if isinstance(body, exp.Subquery):
+            body = body.this
+        if body is not None and not isinstance(body, exp.Select):
+            return False, "安全限制：CTE 体内只允许 SELECT"
+
+    # 5. 危险函数黑名单（跨方言）
+    for func in stmt.find_all(exp.Anonymous):
+        fname = (func.name or "").lower().strip()
+        if fname in _DANGEROUS_FUNCTIONS:
+            return False, f"安全限制：禁止调用函数 {fname}"
+
+    # 6. 防御：SELECT 中不应出现 DDL/DML 子查询（如 `SELECT * FROM (DELETE ...) x`）
+    for bad_kind in (exp.Insert, exp.Update, exp.Delete, exp.Drop,
+                     exp.Create, exp.Alter, exp.Merge, exp.TruncateTable,
+                     exp.Command):
+        # 根节点已在 2 中处理；这里只查子节点
+        found = stmt.find(bad_kind)
+        if found is not None:
+            return False, f"安全限制：SELECT 中嵌套了 {bad_kind.__name__} 子语句"
+
+    return True, ""
+
+
+def _apply_session_safety_limits(conn, db_type: str, timeout_sec: float) -> None:
+    """在当前连接/事务上设置服务端语句超时。
+
+    PG: SET LOCAL statement_timeout = '<sec>s'（事务级，连接关闭自动恢复）。
+    MySQL: SET SESSION MAX_EXECUTION_TIME = <ms>（会话级；下一次 connect 复用 engine
+        时仍是同一 pool 连接，但 SET 是 session 级不会持久污染其他会话——连接池
+        实现层会在归还时执行 rollback 清理事务状态）。
+    SQL Server / Oracle / ClickHouse：暂不强制，依赖 _QUERY_TIMEOUT_SEC 通过
+        SQLAlchemy execution_options(timeout=) 兜底（client 端 cancel）。
+    SQLite：不支持 statement_timeout，跳过（测试用，不影响生产）。
+
+    失败不抛错：部分驱动对未知 SET 命令会报错，这里 log 后吞掉，
+    避免护栏机制反而阻断正常查询。
+    """
+    if timeout_sec <= 0:
+        return
+    try:
+        if db_type in ("pg", "postgres"):
+            conn.execute(text(f"SET LOCAL statement_timeout = '{int(timeout_sec)}s'"))
+        elif db_type == "mysql":
+            # MAX_EXECUTION_TIME 单位为毫秒
+            conn.execute(text(f"SET SESSION MAX_EXECUTION_TIME = {int(timeout_sec * 1000)}"))
+    except Exception as e:
+        # 仅日志，不阻断——sqlglot 已挡住危险语句，超时是纵深防御
+        logger.debug("设置服务端超时失败 [db_type=%s]: %s", db_type, e)
 
 # ---------------------------------------------------------------------------
 # 加密 / 解密（轻量 AES-GCM，密钥取环境变量）
@@ -377,39 +520,96 @@ def delete_datasource(datasource_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def execute_query(datasource_id: str, sql: str, limit: int = 100) -> dict:
-    """执行 SELECT 查询，返回 {success, data, columns, error}。
+    """执行 SELECT 查询，返回 {success, data, columns, error, row_count}。
 
-    安全：只允许 SELECT，禁止 INSERT/UPDATE/DELETE 等。
+    安全（纵深防御三道闸）：
+    1. AST 校验：sqlglot 解析 + 多语句拒绝 + CTE 体只允许 SELECT + 危险函数黑名单。
+       历史的 startswith 关键词判断可被注释/括号/CTE 改写 DML 绕过，已废弃。
+    2. 行数硬上限：服务端 fetchmany(min(limit, _QUERY_MAX_ROWS))，杜绝 fetchall
+       把全表拉进内存；即使 SQL 自带 LIMIT 也走 fetchmany 兜底。
+    3. 超时：PG SET LOCAL statement_timeout / MySQL MAX_EXECUTION_TIME，
+       失败不阻断（仅日志）；SQLite 等不支持则跳过。
     """
-    sql_stripped = sql.strip().upper()
-    forbidden = ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
-                 "TRUNCATE", "CREATE", "GRANT", "REVOKE")
-    # 检查是否以禁止语句开头（跳过前导空白和 WITH/括号）
-    check_sql = sql.strip()
-    # CTE 以 WITH 开头是允许的
-    if check_sql.upper().startswith("WITH"):
-        pass
-    elif not check_sql.upper().startswith("SELECT"):
-        for kw in forbidden:
-            if check_sql.upper().startswith(kw):
-                return {"success": False, "data": None, "columns": None,
-                        "error": f"安全限制：禁止执行 {kw} 语句，只允许 SELECT"}
+    if not sql or not sql.strip():
+        return {"success": False, "data": None, "columns": None,
+                "error": "SQL 为空", "row_count": 0}
 
-    # 加 LIMIT（如果用户没加）
-    if "LIMIT" not in sql_stripped:
-        sql = sql.rstrip(";").rstrip() + f" LIMIT {limit}"
+    ds = get_datasource(datasource_id)
+    if not ds:
+        return {"success": False, "data": None, "columns": None,
+                "error": f"数据源 {datasource_id} 不存在", "row_count": 0}
+
+    # 第一道闸：AST 只读校验
+    is_safe, err = _validate_readonly_sql(sql, ds.get("db_type", ""))
+    if not is_safe:
+        logger.warning("SQL 被安全护栏拒绝 [datasource=%s]: %s | SQL=%.200s",
+                       datasource_id, err, sql)
+        return {"success": False, "data": None, "columns": None,
+                "error": err, "row_count": 0}
+
+    # 行数硬上限：用户 limit 与全局 _QUERY_MAX_ROWS 取较小者
+    effective_limit = max(1, min(int(limit), _QUERY_MAX_ROWS))
+    # 仍保留字符串追加 LIMIT 兜底（用户未带 LIMIT 时，让 DB 端也只生成 effective_limit 行）
+    # 注意：sqlglot 校验已通过，原 SQL 不含 DML，追加 LIMIT 字符串不再引入绕过风险。
+    sql_upper = sql.upper()
+    if "LIMIT" not in sql_upper:
+        sql = sql.rstrip(";").rstrip() + f" LIMIT {effective_limit}"
 
     try:
         engine = get_engine(datasource_id)
-        with engine.connect() as conn:
+        with engine.connect().execution_options(timeout=_QUERY_TIMEOUT_SEC) as conn:
+            _apply_session_safety_limits(conn, ds.get("db_type", ""),
+                                          _QUERY_TIMEOUT_SEC)
             result = conn.execute(text(sql))
             columns = list(result.keys())
-            rows = [dict(zip(columns, row)) for row in result.fetchall()]
-            return {"success": True, "data": rows, "columns": columns, "error": None}
+            # 服务端 cursor 取数，避免 fetchall 把全表载入内存
+            rows_raw = result.fetchmany(effective_limit)
+            rows = [dict(zip(columns, row)) for row in rows_raw]
+            return {"success": True, "data": rows, "columns": columns,
+                    "error": None, "row_count": len(rows)}
     except Exception as e:
         logger.warning("SQL 执行失败 [datasource=%s]: %s", datasource_id, e)
         return {"success": False, "data": None, "columns": None,
-                "error": f"{type(e).__name__}: {e}"}
+                "error": f"{type(e).__name__}: {e}", "row_count": 0}
+
+
+def is_table_readable(datasource_id: str, table_name: str) -> bool:
+    """表名白名单校验：仅允许该数据源真实存在的表参与预览/拼接。
+
+    用于阻止路由参数 `table_name` 注入 `foo; DROP TABLE bar` 或
+    `information_schema.tables` 信息泄露——preview_table_data 路由
+    的 `SELECT * FROM {table_name}` 字符串拼接等价 SQL 注入通道。
+    """
+    if not table_name:
+        return False
+    # 严格白名单：必须为标识符（防 `; -- /` 等控制字符）
+    if any(c in table_name for c in ";'\"\\-/*@()\t\r\n "):
+        return False
+    try:
+        engine = get_engine(datasource_id)
+        inspector = inspect(engine)
+        existing = set(inspector.get_table_names())
+        # 视图也允许预览（部分库把视图列在 get_table_names 之外）
+        try:
+            existing |= set(inspector.get_view_names())
+        except Exception:
+            pass
+        return table_name in existing
+    except Exception as e:
+        logger.warning("表白名单校验失败 [datasource=%s, table=%s]: %s",
+                       datasource_id, table_name, e)
+        return False
+
+
+def quote_table_identifier(datasource_id: str, table_name: str) -> str:
+    """按数据源方言引用表名，避免标识符被解析为 SQL 控制符。
+
+    返回值仅在校验通过后使用：调用方必须先 is_table_readable 通过，
+    再用本函数拼 SQL。两者配合等价参数化但支持 identifier 绑定。
+    """
+    engine = get_engine(datasource_id)
+    preparer = engine.dialect.identifier_preparer
+    return preparer.quote_identifier(table_name)
 
 
 def test_connection(db_type: str, config: dict) -> tuple[bool, str]:

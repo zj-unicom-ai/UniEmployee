@@ -497,3 +497,221 @@ def test_format_schema_text_skips_missing_table():
     # b 不在 table_info 中应被跳过，不抛错
     assert "表名: a" in text
     assert "b" not in text
+
+
+# ===========================================================================
+# SQL AST 只读校验：_validate_readonly_sql
+# ===========================================================================
+# 历史漏洞：startswith 关键词判断可被注释/括号/CTE 改写 DML 绕过。
+# 修复用 sqlglot AST 解析，这里覆盖关键绕过路径与正常通过路径。
+
+from app.agent.analyst.datasource.manager import _validate_readonly_sql
+
+
+@pytest.mark.parametrize("sql,db_type", [
+    ("SELECT * FROM customers", "sqlite"),
+    ("WITH cte AS (SELECT id FROM customers) SELECT * FROM cte", "sqlite"),
+    ("SELECT id, name FROM customers WHERE id > 0 ORDER BY id", "sqlite"),
+    ("SELECT COUNT(*) FROM orders", "sqlite"),
+    ("SELECT * FROM customers LIMIT 5", "sqlite"),
+])
+def test_validate_readonly_sql_accepts_safe_select(sql, db_type):
+    ok, err = _validate_readonly_sql(sql, db_type)
+    assert ok is True, f"应放行安全 SELECT: {sql} | 错误: {err}"
+
+
+@pytest.mark.parametrize("sql,db_type,expected_keyword", [
+    ("INSERT INTO customers VALUES (1,'x')", "sqlite", "INSERT"),
+    ("UPDATE customers SET name='x' WHERE id=1", "sqlite", "UPDATE"),
+    ("DELETE FROM customers WHERE id=1", "sqlite", "DELETE"),
+    ("DROP TABLE customers", "sqlite", "DROP"),
+    ("CREATE TABLE foo (id INT)", "sqlite", "CREATE"),
+    ("ALTER TABLE customers ADD COLUMN x INT", "sqlite", "ALTER"),
+    ("TRUNCATE TABLE customers", "sqlite", "TRUNCATE"),
+    # 注释前缀绕过：startswith 检查会被注释骗过，AST 检查不会
+    ("/* comment */ DROP TABLE customers", "sqlite", "DROP"),
+    ("-- line comment\nDROP TABLE customers", "sqlite", "DROP"),
+])
+def test_validate_readonly_sql_rejects_dml_ddl(sql, db_type, expected_keyword):
+    ok, err = _validate_readonly_sql(sql, db_type)
+    assert ok is False
+    assert expected_keyword in err.upper(), f"错误信息应含 {expected_keyword}，实际: {err}"
+
+
+def test_validate_readonly_sql_rejects_multistatement():
+    """多语句（stacked queries）拒绝——这是 startswith 时代最大的绕过漏洞。"""
+    ok, err = _validate_readonly_sql(
+        "SELECT * FROM customers; DROP TABLE customers", "sqlite")
+    assert ok is False
+    assert "多语句" in err or "stacked" in err.lower()
+
+
+def test_validate_readonly_sql_rejects_select_into():
+    """PG `SELECT ... INTO` 会建表，必须拒绝。"""
+    ok, err = _validate_readonly_sql(
+        "SELECT * INTO new_tbl FROM customers", "pg")
+    assert ok is False
+    # sqlglot 会把 SELECT INTO 重写为 CREATE，根节点判别拦下
+    assert "CREATE" in err.upper() or "INTO" in err.upper()
+
+
+def test_validate_readonly_sql_rejects_cte_with_dml_body():
+    """`WITH x AS (DELETE ...) SELECT` —— CTE 改写 DML 绕过路径。"""
+    ok, err = _validate_readonly_sql(
+        "WITH x AS (DELETE FROM customers RETURNING *) SELECT * FROM x", "pg")
+    assert ok is False
+    assert "CTE" in err
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT pg_terminate_backend(1)",
+    "SELECT pg_sleep(10)",
+    "SELECT sleep(5)",
+    "SELECT load_file('/etc/passwd')",
+    "SELECT benchmark(1000000, MD5('x'))",
+])
+def test_validate_readonly_sql_rejects_dangerous_functions(sql):
+    ok, err = _validate_readonly_sql(sql, "mysql")
+    assert ok is False
+    assert "禁止调用函数" in err or "安全限制" in err
+
+
+def test_validate_readonly_sql_rejects_empty():
+    assert _validate_readonly_sql("", "sqlite")[0] is False
+    assert _validate_readonly_sql("   ", "sqlite")[0] is False
+
+
+def test_validate_readonly_sql_rejects_syntax_error():
+    """语法错误的 SQL 应 fail-closed（拒绝而非放行）。"""
+    ok, err = _validate_readonly_sql("SELECT FROM WHERE", "sqlite")
+    assert ok is False
+    assert "解析失败" in err or "语法" in err
+
+
+# ===========================================================================
+# execute_query 集成：AST 校验 + fetchmany 行数硬上限
+# ===========================================================================
+
+def test_execute_query_rejects_multistatement(monkeypatch, tmp_path):
+    """execute_query 入口应拦截多语句 SQL。"""
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    result = ds_manager.execute_query(
+        ds["id"], "SELECT * FROM customers; DROP TABLE customers")
+    assert result["success"] is False
+    assert "多语句" in result["error"] or "stacked" in result["error"].lower()
+
+
+def test_execute_query_rejects_select_into(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    # sqlite 不支持 SELECT INTO 但 sqlglot 会重写为 CREATE，AST 层就拦下
+    result = ds_manager.execute_query(
+        ds["id"], "SELECT * INTO new_tbl FROM customers")
+    assert result["success"] is False
+    assert "CREATE" in result["error"].upper() or "INTO" in result["error"].upper()
+
+
+def test_execute_query_rejects_dangerous_function(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    result = ds_manager.execute_query(ds["id"], "SELECT sleep(10)")
+    assert result["success"] is False
+    assert "禁止调用函数" in result["error"]
+
+
+def test_execute_query_fetchmany_caps_rows_at_global_max(monkeypatch, tmp_path):
+    """limit 超过 _QUERY_MAX_ROWS 时应被硬上限截断。"""
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    # 把全局上限调小到 1，验证 fetchmany 真的只取 1 行
+    monkeypatch.setattr(ds_manager, "_QUERY_MAX_ROWS", 1)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    # 用户传 limit=100，但全局上限 1 应该赢
+    result = ds_manager.execute_query(
+        ds["id"], "SELECT * FROM customers", limit=100)
+    assert result["success"] is True
+    assert result["row_count"] == 1
+    assert len(result["data"]) == 1
+
+
+def test_execute_query_respects_user_limit_below_max(monkeypatch, tmp_path):
+    """limit 在 _QUERY_MAX_ROWS 以内时按用户 limit 返回。"""
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    monkeypatch.setattr(ds_manager, "_QUERY_MAX_ROWS", 1000)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    result = ds_manager.execute_query(
+        ds["id"], "SELECT * FROM customers", limit=1)
+    assert result["success"] is True
+    assert result["row_count"] == 1
+
+
+# ===========================================================================
+# is_table_readable 表名白名单：preview_table_data 路由的 SQL 注入防御
+# ===========================================================================
+
+def test_is_table_readable_returns_true_for_existing_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    assert ds_manager.is_table_readable(ds["id"], "customers") is True
+    assert ds_manager.is_table_readable(ds["id"], "orders") is True
+
+
+def test_is_table_readable_returns_false_for_nonexistent_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    assert ds_manager.is_table_readable(ds["id"], "no_such_table") is False
+
+
+@pytest.mark.parametrize("malicious_table_name", [
+    "customers; DROP TABLE customers",
+    "customers WHERE 1=1",
+    "customers--",
+    "customers /* comment */",
+    "information_schema.tables",
+    "customers' OR '1'='1",
+    "customers UNION SELECT * FROM orders",
+    "customers; --",
+])
+def test_is_table_readable_rejects_injection_strings(monkeypatch, tmp_path,
+                                                     malicious_table_name):
+    """table_name 含 SQL 注入字符的应一律拒绝。"""
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    assert ds_manager.is_table_readable(ds["id"], malicious_table_name) is False
+
+
+def test_quote_table_identifier_quotes_correctly(monkeypatch, tmp_path):
+    """quote_table_identifier 应用方言标识符引用，避免被解析为 SQL 控制符。"""
+    monkeypatch.setenv("ANALYST_DB_KEY", "test-key-for-analyst-0123456789")
+    monkeypatch.setattr(ds_manager, "_CIPHER_KEY", None)
+    ds = ds_manager.create_datasource(_make_ds_data(name="DS"))
+    _inject_sqlite_engine(monkeypatch, tmp_path, ds["id"])
+
+    quoted = ds_manager.quote_table_identifier(ds["id"], "customers")
+    # SQLite 引用形式是 "customers"（双引号）
+    assert "customers" in quoted
+    assert quoted != "customers"  # 应被引用符包裹，不等于裸标识符
