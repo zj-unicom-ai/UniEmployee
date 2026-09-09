@@ -64,23 +64,33 @@ def _sanitize_ident(name: str, max_len: int = 40) -> str:
 
 
 def _uploads_dir(uid: str) -> Path:
-    """用户上传根目录（paths.WORKSPACE_DATA 动态读取，便于测试替换）。"""
-    return _paths.WORKSPACE_DATA / "uploads" / uid
+    """用户上传根目录（paths.WORKSPACE_DATA 动态读取，便于测试替换）。
+
+    沙箱模式下 /data 挂载用 subPath=<uid>，沙箱内只看到本用户目录；
+    uploads 必须在 <uid> 子目录下才能被沙箱读到。结构：
+    workspace/data/<uid>/uploads/<conv>/{file}，DuckDB 库与 uploads 同级。
+    """
+    return _paths.WORKSPACE_DATA / uid / "uploads"
 
 
 def _duckdb_path(uid: str) -> Path:
-    """用户级 DuckDB 库文件：每用户一个，跨会话复用。"""
-    return _uploads_dir(uid) / "uploaded_tables.duckdb"
+    """用户级 DuckDB 库文件：每用户一个，跨会话复用。
+
+    放在用户目录根下（不在 uploads/ 内），便于沙箱内只读访问 uploads 时
+    不必暴露 duckdb 文件（pandas 不需要它，sql 工具走宿主侧 duckdb）。
+    """
+    return _paths.WORKSPACE_DATA / uid / "uploaded_tables.duckdb"
 
 
 def virtual_to_real(virtual_path: str, uid: str) -> Optional[Path]:
     """校验并转换 /data/ 虚拟路径为真实路径。
 
     只允许本用户 uploads 目录内的 csv/xlsx/xls 文件，防止路径伪造/穿越。
+    路径形如 /data/<uid>/uploads/<conv>/<file>。
     """
     if not isinstance(virtual_path, str):
         return None
-    prefix = f"/data/uploads/{uid}/"
+    prefix = f"/data/{uid}/uploads/"
     if not virtual_path.startswith(prefix) or ".." in virtual_path:
         return None
     rel = virtual_path[len("/data/"):]

@@ -11,7 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APP_DATA_DIR", str(PROJECT_ROOT / "data" / "db"))).resolve()
 # 对话/数据分析生成的用户文件统一放这里：项目根/workspace/data/
+# 沙箱模式下，本目录会被 hostPath 挂载进沙箱（按 <uid> subPath 隔离用户）。
 WORKSPACE_DATA = PROJECT_ROOT / "workspace" / "data"
+# 共享数据集目录（只读挂载到沙箱 /datasets）：算网运营 CSV 等跨用户共享数据。
+# 沙箱 server 通过 docker.sock 起 hostPath，SANDBOX_HOST_DATASETS 指 docker 宿主机
+# 上此目录的绝对路径（开发环境裸跑时与 WORKSPACE_DATASETS 同源）。
+WORKSPACE_DATASETS = PROJECT_ROOT / "workspace" / "datasets"
 
 # 全部需要持久化的 SQLite 库文件名（备份脚本也用这一份清单）
 DB_FILES = ("catalog.db", "conversations.db", "checkpoints.db", "store.db", "traces.db", "approvals.db", "ontology.db")

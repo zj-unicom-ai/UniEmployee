@@ -80,13 +80,15 @@ def test_generator_storylines_consistent(tmp_path, monkeypatch):
 
 def test_netops_yaml_upgraded():
     spec = load_spec(str(NETOPS_YAML))
-    assert spec.backend == "local_shell"
+    # v0.13.0：net-ops 切沙箱后端（SANDBOX_ENABLED 未置 1 时回退 local_shell）
+    assert spec.backend == "sandbox"
     assert spec.role == "算网运营专家"
     assert spec.skills == ["fault-impact-analysis", "ops-metrics-analysis",
                            "resource-capacity-analysis", "sop-execution"]
     assert "kb_search" in spec.tools and "create_ticket" in spec.tools
-    # persona 引用三个数据集与能力路由
-    for kw in ("netops_alerts.csv", "netops_kpi.csv", "netops_resources.csv",
+    # persona 引用三个数据集（沙箱内 /datasets/ 路径）与能力路由
+    for kw in ("/datasets/netops_alerts.csv", "/datasets/netops_kpi.csv",
+               "/datasets/netops_resources.csv",
                "能力路由", "算网运营专家"):
         assert kw in spec.persona
 
@@ -188,6 +190,103 @@ def test_backfill_idempotent():
     ).fetchone()["c"]
     assert n == 3
     con.close()
+
+
+# ---------- v0.13.0 沙箱切换 + workspace 路径迁移 ----------
+
+def test_backfill_sandbox_backend_forces_sandbox():
+    """老库 net-ops 仍是 local_shell → backfill_sandbox_backend 强制对齐为 sandbox。"""
+    catalog.create_employee({
+        "id": "net-ops", "name": "小网", "role": "算网运营专家",
+        "model": "dummy-model",
+        # 旧版特征句（沙箱前 persona）
+        "persona": "你是小网，星联通信的算网运营专家，所有文件在 workspace/data/ 目录下，"
+                   "execute 的工作目录已指向该位置。",
+        "skills": [], "tools": []})
+    catalog.backfill_sandbox_backend()
+
+    con = catalog._conn()
+    cur = con.cursor()
+    row = cur.execute(
+        "SELECT backend, persona FROM employees WHERE id='net-ops'"
+    ).fetchone()
+    assert row["backend"] == "sandbox"
+    # persona 同步为新版 /datasets/ 路径
+    assert "/datasets/netops_alerts.csv" in row["persona"]
+    con.close()
+
+
+def test_backfill_sandbox_backend_preserves_modified_persona():
+    """管理员改过 persona → backend 仍切 sandbox，但 persona 保留。"""
+    custom = "自定义网络运营人设，管理员手写。"
+    catalog.create_employee({
+        "id": "net-ops", "name": "小网", "role": "算网运营专家",
+        "model": "dummy-model", "persona": custom,
+        "skills": [], "tools": []})
+    catalog.backfill_sandbox_backend()
+    con = catalog._conn()
+    cur = con.cursor()
+    row = cur.execute(
+        "SELECT backend, persona FROM employees WHERE id='net-ops'"
+    ).fetchone()
+    assert row["backend"] == "sandbox"
+    assert row["persona"] == custom
+    con.close()
+
+
+def test_backfill_sandbox_backend_idempotent():
+    catalog.create_employee({
+        "id": "net-ops", "name": "小网", "role": "算网运营专家",
+        "model": "dummy-model",
+        "persona": "你是小网，所有文件在 workspace/data/ 目录下。",
+        "skills": [], "tools": []})
+    catalog.backfill_sandbox_backend()
+    catalog.backfill_sandbox_backend()  # 第二次不应报错
+    con = catalog._conn()
+    cur = con.cursor()
+    row = cur.execute(
+        "SELECT backend FROM employees WHERE id='net-ops'").fetchone()
+    assert row["backend"] == "sandbox"
+    con.close()
+
+
+def test_backfill_workspace_paths_migrates_uploads_and_datasets(tmp_path, monkeypatch):
+    """老 uploads 结构 → 新 <uid>/uploads 结构，netops CSV → datasets/。"""
+    from app import paths
+    monkeypatch.setattr(paths, "WORKSPACE_DATA", tmp_path / "data")
+    monkeypatch.setattr(paths, "WORKSPACE_DATASETS", tmp_path / "datasets")
+
+    # 旧 uploads 结构：workspace/data/uploads/u1/c1/a.csv
+    old_csv = tmp_path / "data" / "uploads" / "u1" / "c1" / "a.csv"
+    old_csv.parent.mkdir(parents=True, exist_ok=True)
+    old_csv.write_text("x,y\n1,2\n", encoding="utf-8")
+    # 旧 netops CSV 在 workspace/data 根下
+    (tmp_path / "data" / "netops_alerts.csv").write_text("alert\nA\n", encoding="utf-8")
+
+    catalog.backfill_workspace_paths()
+
+    # 新位置：workspace/data/u1/uploads/c1/a.csv
+    new_csv = tmp_path / "data" / "u1" / "uploads" / "c1" / "a.csv"
+    assert new_csv.exists()
+    assert new_csv.read_text(encoding="utf-8") == "x,y\n1,2\n"
+    # 数据集迁到 datasets/
+    assert (tmp_path / "datasets" / "netops_alerts.csv").exists()
+
+
+def test_backfill_workspace_paths_idempotent(tmp_path, monkeypatch):
+    """重复运行不报错，目标已存在不覆盖。"""
+    from app import paths
+    monkeypatch.setattr(paths, "WORKSPACE_DATA", tmp_path / "data")
+    monkeypatch.setattr(paths, "WORKSPACE_DATASETS", tmp_path / "datasets")
+    (tmp_path / "data" / "uploads" / "u1" / "c1").mkdir(parents=True)
+    (tmp_path / "data" / "uploads" / "u1" / "c1" / "a.csv").write_text(
+        "old\n", encoding="utf-8")
+    catalog.backfill_workspace_paths()
+    # 第二次：旧 uploads 已空（被移走），不报错
+    catalog.backfill_workspace_paths()
+    new_csv = tmp_path / "data" / "u1" / "uploads" / "c1" / "a.csv"
+    assert new_csv.exists()
+    assert new_csv.read_text(encoding="utf-8") == "old\n"
 
 
 # ---------- 本体算网资源 ----------

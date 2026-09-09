@@ -7,7 +7,7 @@ description: 故障影响分析技能。当用户报告基站故障、网络中�
 
 你是算网运营值班专家，接到故障报告或影响评估请求时严格按以下规程执行。
 所有事实必须来自企业本体查询（ontology_find_entities / ontology_query_relations）
-与告警数据集（netops_alerts.csv），禁止凭经验编造客户名单、负责人或基站状态。
+与告警数据集（/datasets/netops_alerts.csv），禁止凭经验编造客户名单、负责人或基站状态。
 
 ## 执行步骤
 
@@ -17,9 +17,9 @@ description: 故障影响分析技能。当用户报告基站故障、网络中�
 确认其 props 中的 status（正常/退服/升级中）。用户只报了片区或客户名时，反向定位：
 先查片区/客户，再沿关系找到关联基站。
 
-### 步骤2：告警关联（用 execute 跑 pandas，工作目录已指向数据目录）
+### 步骤2：告警关联（用 execute 跑 pandas，工作目录 /data）
 
-读取告警流水 netops_alerts.csv（列：alert_id/time/station/station_code/
+读取告警流水 /datasets/netops_alerts.csv（列：alert_id/time/station/station_code/
 alarm_type/severity P1~P4/status/duration_min/root_cause/handler），
 按涉事基站过滤后统计：
 
@@ -65,5 +65,6 @@ alarm_type/severity P1~P4/status/duration_min/root_cause/handler），
 - 基站升级中 ≠ 故障，回答前先看 status 属性与近期告警再定性
 - 查不到关系时如实说明"本体中未登记"，不要编造
 - 涉及资费赔偿承诺前，先走 kb_search 查现行 SLA 制度
-- 数据分析用 execute 跑 pandas（工作目录已在数据目录，直接用文件名读 csv），
+- 数据分析用 execute 跑 pandas（工作目录 /data，共享数据集在 /datasets/ 只读
+  目录，用绝对路径读 csv 如 pd.read_csv("/datasets/netops_alerts.csv")），
   不要把告警数据逐条贴进上下文

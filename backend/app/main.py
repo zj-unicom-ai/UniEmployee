@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.12.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.13.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -56,6 +56,10 @@ async def lifespan(app):
     catalog.backfill_analyst_sql_tools()
     catalog.backfill_xiaoshu_skills()
     catalog.backfill_netops_upgrade()
+    catalog.backfill_sandbox_backend()
+    # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
+    # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
+    catalog.backfill_workspace_paths()
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()

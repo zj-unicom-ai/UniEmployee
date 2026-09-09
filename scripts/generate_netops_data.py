@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成算网运营模拟数据集（CSV），输出到 workspace/data/。
+"""生成算网运营模拟数据集（CSV），输出到 workspace/datasets/。
 
 覆盖三个算网运营分析维度：
   1. netops_alerts.csv     — 告警流水（90 天，含等级/时长/根因/处理人）
@@ -15,6 +15,11 @@
   B. 城东1号基站 8 月上旬一次 P1 板卡故障大障（长历时）
   C. 资源台账中 AI 训练算力节点与高新区光缆利用率超 80% 预警线
 所有数字均为通信行业真实水平估算。
+
+数据集改为 workspace/datasets/（共享只读目录）：沙箱模式下，
+本目录通过 hostPath 只读挂载到沙箱 /datasets，net-ops 与数据分析
+员工的 execute/run_python 用 pd.read_csv("/datasets/netops_alerts.csv")
+读取；非沙箱模式下也可直接从 workspace/datasets/ 文件名读取。
 """
 
 import csv
@@ -24,7 +29,7 @@ from pathlib import Path
 
 random.seed(42)
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "workspace" / "data"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "workspace" / "datasets"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 数据截止日（与演示叙事对齐的固定日期，不用 datetime.now 保证可复现）

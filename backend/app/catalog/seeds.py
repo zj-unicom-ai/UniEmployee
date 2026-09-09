@@ -508,6 +508,103 @@ def backfill_netops_upgrade():
     con.close()
 
 
+# net-ops 切沙箱后的特征句：用于判断老库 persona 是否仍是沙箱前的版本，
+# 决定是否同步 persona（管理员改过则保留）。
+_NETOPS_PRE_SANDBOX_MARKER = "所有文件在 workspace/data/ 目录下"
+
+
+def backfill_sandbox_backend():
+    """net-ops 切沙箱后端 + persona 路径同步（幂等）。
+
+    设计动机：v0.13.0 把 net-ops 的 backend 从 local_shell 切到 sandbox，
+    并把数据集路径从裸文件名（workspace/data/）改到 /datasets/（沙箱只读
+    挂载点）。新库由 seed_if_empty 直接写入；老库靠这里幂等补缺：
+      - backend 字段强制对齐为 sandbox（与 yaml 一致，不可被页面误改）；
+      - persona 仅当库中仍是沙箱前的旧版特征句时同步为新版 yaml 内容。
+    """
+    con = _conn()
+    cur = con.cursor()
+    if not cur.execute(
+        "SELECT 1 FROM employees WHERE id='net-ops' AND deleted_at IS NULL"
+    ).fetchone():
+        con.close()
+        return
+    # backend 强制对齐（沙箱开关由环境变量控制，yaml/库一致即可）
+    cur.execute(
+        "UPDATE employees SET backend='sandbox', updated_at=? "
+        "WHERE id='net-ops' AND deleted_at IS NULL",
+        (time.strftime("%Y-%m-%d %H:%M:%S"),))
+    # persona 同步：仅当旧版特征句存在（未改过）才更新
+    row = cur.execute(
+        "SELECT persona FROM employees WHERE id='net-ops' AND deleted_at IS NULL"
+    ).fetchone()
+    persona = (row["persona"] if row else "") or ""
+    if _NETOPS_PRE_SANDBOX_MARKER in persona:
+        spec = load_spec(str(ROOT / "employees" / "net-ops.yaml"))
+        cur.execute(
+            "UPDATE employees SET persona=?, updated_at=? WHERE id='net-ops'",
+            (spec.persona, time.strftime("%Y-%m-%d %H:%M:%S")))
+        print("[seed] net-ops persona 已同步为沙箱版（/datasets/ 路径）")
+    elif "/datasets/" in persona:
+        pass  # 已是新版
+    else:
+        print("[seed] net-ops persona 已被管理员修改，跳过路径同步（backend 已切 sandbox）")
+    con.commit()
+    con.close()
+
+
+def backfill_workspace_paths():
+    """workspace 数据目录迁移钩子（幂等，best-effort，不删源）。
+
+    v0.13.0 把数据布局改为：
+      - 旧：workspace/data/uploads/<uid>/... → 新：workspace/data/<uid>/uploads/...
+      - 旧：workspace/data/netops_*.csv     → 新：workspace/datasets/netops_*.csv
+        （沙箱模式下 /datasets 是只读 hostPath 挂载点）
+
+    迁移策略：best-effort 移动文件（不删源目录），目标已存在则跳过；
+    失败仅打印告警，不阻断启动。开发/测试环境（WORKSPACE_DATA 被替换为
+    tmp 目录）不会触发迁移（旧目录不存在）。
+    """
+    import shutil
+    from app.paths import WORKSPACE_DATA, WORKSPACE_DATASETS
+    data_root = WORKSPACE_DATA
+    # 1. uploads 子目录重构
+    old_uploads = data_root / "uploads"
+    if old_uploads.exists() and old_uploads.is_dir():
+        for uid_dir in old_uploads.iterdir():
+            if not uid_dir.is_dir():
+                continue
+            new_dir = data_root / uid_dir.name / "uploads"
+            try:
+                new_dir.mkdir(parents=True, exist_ok=True)
+                # 移动 uid_dir 下的所有内容到新目录（同名覆盖跳过）
+                for item in uid_dir.iterdir():
+                    target = new_dir / item.name
+                    if target.exists():
+                        continue
+                    shutil.move(str(item), str(target))
+            except Exception as e:
+                print(f"[migrate] uploads 迁移 {uid_dir.name} 失败（忽略）："
+                      f"{type(e).__name__}: {e}")
+        # 旧 uploads 目录留着（已空则清理，非空保留以备排查）
+        try:
+            old_uploads.rmdir()
+        except OSError:
+            pass
+    # 2. netops 数据集迁到 datasets/
+    datasets_dir = WORKSPACE_DATASETS
+    datasets_dir.mkdir(parents=True, exist_ok=True)
+    for csv_name in ("netops_alerts.csv", "netops_kpi.csv", "netops_resources.csv"):
+        src = data_root / csv_name
+        dst = datasets_dir / csv_name
+        if src.exists() and not dst.exists():
+            try:
+                shutil.move(str(src), str(dst))
+            except Exception as e:
+                print(f"[migrate] {csv_name} 迁移失败（忽略）："
+                      f"{type(e).__name__}: {e}")
+
+
 def backfill_ragflow_knowledge_bases():
     """从 RAGFlow 同步真实知识库列表到 catalog。
 

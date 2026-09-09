@@ -1,6 +1,9 @@
 """对话附件处理：上传落盘 + 用户消息附件信息注入。
 
-设计：附件保存到 workspace/data/uploads/{uid}/{conv_id}/ 下。
+设计：附件保存到 workspace/data/{uid}/uploads/{conv_id}/ 下
+（沙箱模式下，hostPath 挂载时按 <uid> subPath 隔离用户，沙箱内
+/data 即对应该用户的 workspace/data/<uid> 子目录，故 uploads 必须
+落在 <uid> 子目录下才能被沙箱内的 read_file/run_python 读到）。
 编译层已把 /data/ 虚拟路由挂到 FilesystemBackend(WORKSPACE_DATA)，
 因此所有员工（含 StateBackend 后端）都能 read_file("/data/...") 读取，
 数据分析师还可用 run_python + pandas 直接分析上传的数据文件，
@@ -28,13 +31,13 @@ def _sanitize_name(name: str) -> str:
 
 
 async def save_attachment(conv_id: str, uid: str, file: UploadFile) -> dict:
-    """把上传文件落盘到 uploads/{uid}/{conv_id}/{毫秒时间戳}_{清洗后文件名}。
+    """把上传文件落盘到 {uid}/uploads/{conv_id}/{毫秒时间戳}_{清洗后文件名}。
 
     返回前端可直接回传 MessageIn.attachments 的条目（name 为原始文件名，
     path 为 agent 可 read_file 的 /data/ 虚拟路径）。
     """
     stored = f"{int(time.time() * 1000)}_{_sanitize_name(file.filename)}"
-    target_dir = WORKSPACE_DATA / "uploads" / uid / conv_id
+    target_dir = WORKSPACE_DATA / uid / "uploads" / conv_id
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / stored
 
@@ -53,7 +56,7 @@ async def save_attachment(conv_id: str, uid: str, file: UploadFile) -> dict:
         raise HTTPException(400, "附件内容为空")
     return {
         "name": file.filename or stored,
-        "path": f"/data/uploads/{uid}/{conv_id}/{stored}",
+        "path": f"/data/{uid}/uploads/{conv_id}/{stored}",
         "size": size,
         "content_type": file.content_type or "",
     }
@@ -63,7 +66,7 @@ def validate_attachment_path(uid: str, path: str) -> bool:
     """校验消息里回传的附件路径：必须是本用户上传目录内的 /data/ 虚拟路径。"""
     return (
         isinstance(path, str)
-        and path.startswith(f"/data/uploads/{uid}/")
+        and path.startswith(f"/data/{uid}/uploads/")
         and ".." not in path
     )
 
