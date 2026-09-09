@@ -88,6 +88,15 @@ const route = useRoute()
 const auth = useAuthStore()
 const collapsed = ref(false)
 
+// 系统设置受控展开：切到非系统设置栏目时自动收起父项，
+// 避免父项一直占空间。包含父项 key 和所有子项 key。
+const SETTINGS_GROUP_KEYS = [
+  'settings', 'guard-words', 'guard-tools',
+  'im', 'model-manager', 'audit-logs',
+]
+// 默认收起；切到系统设置子项时由 onMenuSelect 展开
+const expandedKeys = ref([])
+
 function iconEl(svg) {
   return () => h(NIcon, null, {
     default: () => h('svg', { width: '18', height: '18', viewBox: '0 0 24 24', fill: 'none', innerHTML: svg })
@@ -179,8 +188,10 @@ function onMenuSelect(key) {
     router.push({ name: 'landing' })
     return
   }
-  // 切到非系统设置范围内的栏目时，自动收起系统设置父项
-  if (!SETTINGS_GROUP_KEYS.includes(key)) {
+  // 切到系统设置子项时展开父项；切到其他栏目时收起，避免占空间
+  if (SETTINGS_GROUP_KEYS.includes(key) && key !== 'settings') {
+    expandedKeys.value = ['settings']
+  } else if (key !== 'settings') {
     expandedKeys.value = []
   }
   if (key !== 'change-password') {
