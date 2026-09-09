@@ -322,3 +322,166 @@ def test_build_backends_sandbox_toggle(monkeypatch):
     monkeypatch.setenv("SANDBOX_ENABLED", "1")
     backend2 = build_backends(spec, None)
     assert isinstance(backend2.default, RoutingSandboxBackend)
+
+
+# ---- 孤儿清扫（二期）----
+
+class _FakeInfo:
+    """SandboxInfo 的最小替身（只用到 id 字段）。"""
+    def __init__(self, sid):
+        self.id = sid
+
+
+class _FakePagedResult:
+    """PagedSandboxInfos 的最小替身。"""
+    def __init__(self, infos):
+        self.sandbox_infos = infos
+
+
+class _FakeSandboxService:
+    """记录 list/kill 调用的假 SandboxesSync 服务。"""
+    def __init__(self, pages: list[list[str]], fail_kill: set | None = None):
+        self._pages = pages
+        self._fail_kill = fail_kill or set()
+        self.list_calls = 0
+        self.killed: list[str] = []
+
+    def list_sandboxes(self, flt):
+        self.list_calls += 1
+        idx = self.list_calls - 1
+        if idx >= len(self._pages):
+            return _FakePagedResult([])
+        return _FakePagedResult([_FakeInfo(sid) for sid in self._pages[idx]])
+
+    def kill_sandbox(self, sid):
+        if sid in self._fail_kill:
+            raise RuntimeError("kill failed")
+        self.killed.append(sid)
+
+
+def test_sweep_orphans_kills_all_and_clears_sessions(enabled_env, monkeypatch):
+    mgr = SandboxManager()
+    fake_svc = _FakeSandboxService(pages=[["sb-1", "sb-2", "sb-3"]])
+    clear_called = {"n": 0}
+
+    def fake_clear():
+        clear_called["n"] += 1
+
+    monkeypatch.setattr(sandbox_mgr, "_sandbox_service", lambda: fake_svc)
+    monkeypatch.setattr(sandbox_mgr, "_clear_sessions", fake_clear)
+
+    killed = mgr.sweep_orphans()
+
+    assert killed == 3
+    assert fake_svc.killed == ["sb-1", "sb-2", "sb-3"]
+    assert fake_svc.list_calls == 1   # 第一页 3 条 < 100 直接终止，不查空页
+    assert clear_called["n"] == 1
+
+
+def test_sweep_orphans_paginates_large_set(enabled_env, monkeypatch):
+    """孤儿超过一页时翻页清扫。"""
+    mgr = SandboxManager()
+    page1 = [f"sb-{i:03d}" for i in range(100)]
+    page2 = [f"sb-{i:03d}" for i in range(100, 150)]
+    fake_svc = _FakeSandboxService(pages=[page1, page2])
+
+    monkeypatch.setattr(sandbox_mgr, "_sandbox_service", lambda: fake_svc)
+    monkeypatch.setattr(sandbox_mgr, "_clear_sessions", lambda: None)
+
+    killed = mgr.sweep_orphans()
+    assert killed == 150
+    assert fake_svc.list_calls == 2   # 100（满页续查）+ 50（不足一页终止）
+    assert len(fake_svc.killed) == 150
+
+
+def test_sweep_orphans_disabled_returns_zero(monkeypatch):
+    monkeypatch.delenv("SANDBOX_ENABLED", raising=False)
+    mgr = SandboxManager()
+    assert mgr.sweep_orphans() == 0
+
+
+def test_sweep_orphans_swallows_failure(enabled_env, monkeypatch):
+    """list_sandboxes 抛错时不阻断启动，返回 0。"""
+    mgr = SandboxManager()
+
+    class BoomSvc:
+        def list_sandboxes(self, flt):
+            raise RuntimeError("server offline")
+        def kill_sandbox(self, sid):
+            raise AssertionError("不应被调到")
+
+    monkeypatch.setattr(sandbox_mgr, "_sandbox_service", lambda: BoomSvc())
+    monkeypatch.setattr(sandbox_mgr, "_clear_sessions", lambda: None)
+
+    assert mgr.sweep_orphans() == 0   # 异常被吞，返回 0
+
+
+def test_sweep_orphans_partial_kill_failure(enabled_env, monkeypatch):
+    """部分 kill 失败不阻塞其余清扫。"""
+    mgr = SandboxManager()
+    fake_svc = _FakeSandboxService(
+        pages=[["sb-1", "sb-2", "sb-3"]],
+        fail_kill={"sb-2"},
+    )
+    monkeypatch.setattr(sandbox_mgr, "_sandbox_service", lambda: fake_svc)
+    monkeypatch.setattr(sandbox_mgr, "_clear_sessions", lambda: None)
+
+    killed = mgr.sweep_orphans()
+    assert killed == 2                # sb-2 失败不算
+    assert "sb-2" not in fake_svc.killed
+    assert set(fake_svc.killed) == {"sb-1", "sb-3"}
+
+
+# ---- 并发上限（二期）----
+
+def test_concurrency_cap_default_20(monkeypatch):
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    monkeypatch.delenv("SANDBOX_MAX_CONCURRENT", raising=False)
+    mgr = SandboxManager()
+    assert mgr.max_concurrent == 20
+
+
+def test_concurrency_cap_env_override(monkeypatch):
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    monkeypatch.setenv("SANDBOX_MAX_CONCURRENT", "5")
+    mgr = SandboxManager()
+    assert mgr.max_concurrent == 5
+
+
+def test_concurrency_cap_blocks_new_create(enabled_env, monkeypatch):
+    """达上限后新建抛错，不溢出。"""
+    monkeypatch.setenv("SANDBOX_MAX_CONCURRENT", "2")
+    mgr = SandboxManager()
+    _patch_manager(monkeypatch, mgr)
+
+    mgr.acquire(thread_id="t1", user_id="u1")
+    mgr.acquire(thread_id="t2", user_id="u2")
+    with pytest.raises(RuntimeError, match="并发上限"):
+        mgr.acquire(thread_id="t3", user_id="u3")
+
+
+def test_concurrency_cap_cache_hit_does_not_count(enabled_env, monkeypatch):
+    """cache 命中（renew 成功）不占新槽位，上限=1 时同会话多次取用不触发上限。"""
+    monkeypatch.setenv("SANDBOX_MAX_CONCURRENT", "1")
+    mgr = SandboxManager()
+    _patch_manager(monkeypatch, mgr)
+
+    b1 = mgr.acquire(thread_id="t1", user_id="u1")
+    b2 = mgr.acquire(thread_id="t1", user_id="u1")
+    assert b1 is b2                   # 同会话复用，未新建
+    # 另一会话才触发上限
+    with pytest.raises(RuntimeError, match="并发上限"):
+        mgr.acquire(thread_id="t2", user_id="u2")
+
+
+def test_concurrency_cap_freed_after_kill(enabled_env, monkeypatch):
+    """kill_thread 释放槽位后可新建。"""
+    monkeypatch.setenv("SANDBOX_MAX_CONCURRENT", "1")
+    mgr = SandboxManager()
+    _patch_manager(monkeypatch, mgr)
+
+    mgr.acquire(thread_id="t1", user_id="u1")
+    mgr.kill_thread("t1")             # 释放槽位
+    # 新会话可建（槽位已释放）
+    b = mgr.acquire(thread_id="t2", user_id="u2")
+    assert b.id.startswith("sb-")

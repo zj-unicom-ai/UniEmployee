@@ -60,6 +60,14 @@ async def lifespan(app):
     # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
     # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
     catalog.backfill_workspace_paths()
+    # OpenSandbox 沙箱：建表 + 启动清扫孤儿（enabled 时；不阻塞启动，异常仅日志）
+    from app import sandbox_mgr
+    sandbox_mgr.init_tables()
+    if sandbox_mgr.enabled():
+        killed = sandbox_mgr.manager.sweep_orphans()
+        log.info("OpenSandbox 已启用，启动清扫孤儿沙箱 %d 个", killed)
+    else:
+        log.info("OpenSandbox 未启用（SANDBOX_ENABLED 未置 1），沙箱员工回退 LocalShellBackend")
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()
