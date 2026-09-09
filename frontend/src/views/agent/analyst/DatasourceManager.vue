@@ -35,20 +35,37 @@
             <div class="ds-item-row">
               <span class="ds-name">{{ ds.name }}</span>
               <div class="ds-actions" @click.stop>
-                <n-button size="tiny" text @click="openEdit(ds)">编辑</n-button>
-                <n-popconfirm @positive-click="deleteDs(ds)">
+                <n-button v-if="canManage(ds)" size="tiny" text @click="openEdit(ds)">编辑</n-button>
+                <n-popconfirm v-if="canManage(ds)" @positive-click="deleteDs(ds)">
                   <template #trigger>
                     <n-button size="tiny" text type="error">删除</n-button>
                   </template>
                   确认删除数据源「{{ ds.name }}」？
                 </n-popconfirm>
+                <n-tag v-if="!canManage(ds)" size="tiny" :bordered="false" type="warning">
+                  只读
+                </n-tag>
               </div>
             </div>
             <div class="ds-item-row">
               <n-tag size="tiny" :type="ds.enabled ? 'success' : 'default'">
                 {{ ds.enabled ? '启用' : '禁用' }}
               </n-tag>
+              <n-tag v-if="ds.is_public" size="tiny" type="info" round :bordered="false">
+                公共
+              </n-tag>
               <span class="ds-item-meta">{{ ds.db_type }}</span>
+              <!-- 管理员可切换公共/私有；普通用户只读展示公共徽标 -->
+              <n-tooltip v-if="auth.isAdmin">
+                <template #trigger>
+                  <n-switch
+                    size="tiny"
+                    :value="!!ds.is_public"
+                    @update:value="(v) => togglePublic(ds, v)"
+                  />
+                </template>
+                {{ ds.is_public ? '当前为公共数据源（全员可用），点击改为私有' : '点击设为公共数据源（全员可用）' }}
+              </n-tooltip>
             </div>
             <div v-if="ds.description" class="ds-item-meta">{{ ds.description }}</div>
           </div>
@@ -85,16 +102,17 @@
               <n-tab-pane name="annotation" tab="字段标注">
                 <div class="panel-header">
                   <span>{{ selectedTable }} · 标注</span>
-                  <n-button size="tiny" type="primary" @click="saveAnnotation">保存标注</n-button>
+                  <n-button v-if="canManage(selectedDs)" size="tiny" type="primary" @click="saveAnnotation">保存标注</n-button>
+                  <n-tag v-else size="tiny" type="warning" :bordered="false">公共/他人数据源 · 只读</n-tag>
                 </div>
                 <div class="ann-form">
                   <div class="ann-row">
                     <label>表中文名</label>
-                    <n-input v-model:value="annotation.table_comment" size="small" placeholder="如：客户表" />
+                    <n-input v-model:value="annotation.table_comment" size="small" placeholder="如：客户表" :disabled="!canManage(selectedDs)" />
                   </div>
                   <div class="ann-row">
                     <label>可查询</label>
-                    <n-switch v-model:value="annotation.queryable" :checked-value="1" :unchecked-value="0" />
+                    <n-switch v-model:value="annotation.queryable" :checked-value="1" :unchecked-value="0" :disabled="!canManage(selectedDs)" />
                   </div>
                   <div class="ann-columns">
                     <div
@@ -107,6 +125,7 @@
                         v-model:value="annotation.column_annotations[colName].comment"
                         size="small"
                         placeholder="字段中文标注"
+                        :disabled="!canManage(selectedDs)"
                       />
                     </div>
                   </div>
@@ -173,9 +192,31 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import * as analystApi from '../../../api/analyst.js'
+import { useAuthStore } from '../../../stores/auth.js'
 
 const router = useRouter()
 const message = useMessage()
+const auth = useAuthStore()
+
+// 管理员切换数据源公共/私有（普通用户后端会拒绝，前端也不展示开关）
+async function togglePublic(ds, isPublic) {
+  try {
+    await analystApi.updateDatasource(ds.id, { is_public: isPublic ? 1 : 0 })
+    ds.is_public = isPublic ? 1 : 0
+    message.success(isPublic ? `「${ds.name}」已设为公共数据源` : `「${ds.name}」已改为私有`)
+  } catch (e) {
+    message.error('设置失败：' + (e.response?.data?.detail || e.message))
+  }
+}
+
+// 是否可【管理】该数据源（编辑/删除/改标注）：仅管理员或创建者。
+// 公共数据源对普通用户只读可用——能选它问数、看表结构，但不能改删，
+// 避免公共种子源被使用者破坏。
+function canManage(ds) {
+  if (!ds) return false
+  if (auth.isAdmin) return true
+  return ds.owner_id === auth.user?.id
+}
 
 const currentTab = 'datasources'
 function switchTab(name) {
@@ -413,10 +454,12 @@ onMounted(loadDatasources)
   background: #fff;
 }
 .config-nav {
-  padding: 8px 16px 0;
+  padding: 8px 16px;
   border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
-.config-nav :deep(.n-button) { margin-bottom: 4px; }
 .ds-body {
   flex: 1;
   display: flex;

@@ -29,6 +29,8 @@ try:
         clear_kb_id as analyst_clear_kb_id,
         set_connector_id as analyst_set_connector_id,
         clear_connector_id as analyst_clear_connector_id,
+        set_user_ctx as analyst_set_user_ctx,
+        clear_user_ctx as analyst_clear_user_ctx,
         pop_query_results as analyst_pop_query_results,
     )
     from app.agent.analyst.fileqa.manager import (
@@ -318,13 +320,15 @@ def first_message_text(input_) -> str:
 
 
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
-                      datasource_id: str = "", data_source: str = ""):
+                      datasource_id: str = "", data_source: str = "",
+                      model_override: str = ""):
     """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。
 
     data_source 是新版数据源选择参数（JSON 字符串 '{"kind":"database","id":"ds:xxx"}'），
     支持三类数据源：database / knowledge_base / connector。
     兼容旧版 datasource_id（纯数据库 ID，无 kind 信息），旧格式按 database 处理。
     非数据问数会话留空即可。
+    model_override 不为空时用指定模型编译 agent（会话级模型切换）。
     """
     emp_id = employee_of(conv_id)
     if not emp_id:
@@ -347,11 +351,11 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     await runtime.ensure_user_memory(user_id, emp_id)
     if role == "admin":
         # admin 无分配时 get_agent 内部回退纯模板；传 user_id 让个人画像同样注入
-        agent, stage_meta = await runtime.get_agent(emp_id, user_id)
+        agent, stage_meta = await runtime.get_agent(emp_id, user_id, model_override=model_override or None)
     else:
         asg = catalog.get_assignment(user_id, emp_id)
         overrides = asg["overrides"] if asg else {}
-        agent, stage_meta = await runtime.get_agent(emp_id, user_id, overrides)
+        agent, stage_meta = await runtime.get_agent(emp_id, user_id, overrides, model_override=model_override or None)
     for st in stage_meta:
         yield sse({"type": "stage", **st})
 
@@ -377,11 +381,15 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     # 让 sql_db_query 工具能按会话隔离地把结构化结果写回缓冲。
     if _ANALYST_HOOK:
         analyst_set_conv_id(conv_id)
+        is_admin = role == "admin"
+        # 注入当前会话用户上下文，供 sql 工具做数据源归属的纵深校验。
+        analyst_set_user_ctx(user_id, is_admin)
         # 解析前端传来的数据源选择，按类型注入对应 contextvar。
         # 新版 data_source 支持 database/knowledge_base/connector 三类；
         # 旧版 datasource_id 为纯数据库 ID，按 database 兜底。
         try:
-            from app.agent.analyst.datasource.manager import parse_data_source
+            from app.agent.analyst.datasource.manager import (
+                parse_data_source, get_datasource, can_access_datasource)
             src_str = data_source or datasource_id or ""
             ds_kind, ds_raw_id = parse_data_source(src_str)
             if ds_kind == "knowledge_base":
@@ -389,8 +397,18 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             elif ds_kind == "connector":
                 analyst_set_connector_id(ds_raw_id)
             else:
-                # database 或旧格式纯 ID
-                analyst_set_datasource_id(ds_raw_id or src_str)
+                # database 或旧格式纯 ID。注入前做归属校验：数据源存在但
+                # 不属于当前用户（非 admin）则不注入，工具层另有 contextvar
+                # 纵深校验，双保险防止越权访问他人数据源。
+                target = ds_raw_id or src_str
+                if target:
+                    _ds = get_datasource(target)
+                    if _ds is not None and not can_access_datasource(
+                            _ds, user_id, is_admin):
+                        logger.warning(
+                            "数据源越权，已阻止注入: ds=%s user=%s", target, user_id)
+                        target = ""
+                analyst_set_datasource_id(target)
         except Exception:
             # 解析失败时退化为旧逻辑：直接注入 datasource_id
             analyst_set_datasource_id(datasource_id)
@@ -516,4 +534,5 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             analyst_clear_datasource_id()
             analyst_clear_kb_id()
             analyst_clear_connector_id()
+            analyst_clear_user_ctx()
             fileqa_clear_user_id()

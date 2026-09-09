@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app import auth
 from app.agent.analyst.datasource import manager as ds_manager
 from app.agent.analyst.datasource import schema_inspector
 from app.agent.analyst.terminology import manager as term_manager
@@ -19,7 +20,38 @@ from app.agent.analyst.sql_examples import manager as ex_manager
 
 logger = logging.getLogger("app.routes.analyst")
 
-router = APIRouter(prefix="/api/analyst", tags=["analyst"])
+# 整个 analyst 路由组都要求登录：数据源含数据库连接凭据，术语/SQL 示例/知识库
+# 等均为内部配置，任何接口都不允许匿名访问（此前缺失鉴权导致未登录即可列数据源、
+# 甚至经详情接口拿到解密后的数据库明文密码）。
+router = APIRouter(prefix="/api/analyst", tags=["analyst"],
+                   dependencies=[Depends(auth.get_current_user)])
+
+
+def _is_admin(user: dict) -> bool:
+    return user.get("role") == "admin"
+
+
+def _require_usable(ds_id: str, user: dict) -> dict:
+    """校验【使用】权限（owner/管理员/公共源均可），无则统一抛 404。
+
+    用于表结构读取、数据预览、标注读取等只读场景——普通用户可使用公共源。
+    """
+    ds = ds_manager.get_owned_datasource(ds_id, user["id"], _is_admin(user))
+    if not ds:
+        raise HTTPException(404, "数据源不存在")
+    return ds
+
+
+def _require_managed(ds_id: str, user: dict) -> dict:
+    """校验【管理】权限（仅 owner/管理员，公共源不对普通用户开放），无则抛 404。
+
+    用于编辑/删除/写标注/读取连接配置等修改类场景——公共种子源只能被其
+    owner（管理员）维护，普通用户只能使用，不能改删。
+    """
+    ds = ds_manager.get_managed_datasource(ds_id, user["id"], _is_admin(user))
+    if not ds:
+        raise HTTPException(404, "数据源不存在或无权操作")
+    return ds
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +65,7 @@ class DatasourceCreate(BaseModel):
     db_type: str  # mysql/pg/oracle/sqlServer/clickhouse
     config: dict  # {host, port, database, username, password, dbSchema, ...}
     enabled: int = 1
+    is_public: int = 0  # 1=公共（全员可用）；仅管理员可置 1
 
 
 class DatasourceUpdate(BaseModel):
@@ -41,6 +74,7 @@ class DatasourceUpdate(BaseModel):
     db_type: str | None = None
     config: dict | None = None
     enabled: int | None = None
+    is_public: int | None = None  # 仅管理员可改
 
 
 class TestConnection(BaseModel):
@@ -102,35 +136,51 @@ class SqlExampleUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/datasources")
-async def list_datasources():
-    """列出所有数据源。"""
-    return ds_manager.list_datasources()
+async def list_datasources(user: dict = Depends(auth.get_current_user)):
+    """列出数据源（私有隔离：普通用户仅自己创建的，管理员全部）。"""
+    return ds_manager.list_datasources(owner_id=user["id"], is_admin=_is_admin(user))
 
 
 @router.get("/datasources/{ds_id}")
-async def get_datasource(ds_id: str):
-    """获取单个数据源详情。"""
-    ds = ds_manager.get_datasource(ds_id)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
-    # 返回解密后的 config（含真实密码，供编辑回显）
-    ds["config"] = ds_manager.decrypt_config(ds["config"])
+async def get_datasource(ds_id: str, user: dict = Depends(auth.get_current_user)):
+    """获取单个数据源详情（含连接配置，仅 owner/管理员）。
+
+    详情用于编辑回显，属【管理】权限：公共源普通用户可使用（问数/看表结构），
+    但不向其暴露连接配置。密码同样脱敏为 "***"。
+    """
+    ds = _require_managed(ds_id, user)
+    cfg = ds_manager.decrypt_config(ds["config"])
+    if isinstance(cfg, dict) and cfg.get("password"):
+        cfg["password"] = "***"
+    ds["config"] = cfg
     return ds
 
 
 @router.post("/datasources")
-async def create_datasource(req: DatasourceCreate, request: Request):
-    """创建数据源。"""
-    user_id = request.state.user_id if hasattr(request.state, "user_id") else None
+async def create_datasource(req: DatasourceCreate,
+                            user: dict = Depends(auth.get_current_user)):
+    """创建数据源（owner 记为当前登录用户）。
+
+    安全：is_public（公共数据源）仅管理员可置 1，普通用户即使传 1 也强制为 0。
+    """
     data = req.model_dump()
-    data["owner_id"] = user_id
+    data["owner_id"] = user["id"]
+    if not _is_admin(user):
+        data["is_public"] = 0
     return ds_manager.create_datasource(data)
 
 
 @router.put("/datasources/{ds_id}")
-async def update_datasource(ds_id: str, req: DatasourceUpdate):
-    """更新数据源。"""
+async def update_datasource(ds_id: str, req: DatasourceUpdate,
+                            user: dict = Depends(auth.get_current_user)):
+    """更新数据源（【管理】权限：仅 owner/管理员；公共源普通用户不可改）。
+
+    安全：is_public 仅管理员可改；普通用户提交的该字段直接忽略。
+    """
+    _require_managed(ds_id, user)
     data = req.model_dump(exclude_none=True)
+    if not _is_admin(user):
+        data.pop("is_public", None)
     updated = ds_manager.update_datasource(ds_id, data)
     if not updated:
         raise HTTPException(404, "数据源不存在")
@@ -138,23 +188,34 @@ async def update_datasource(ds_id: str, req: DatasourceUpdate):
 
 
 @router.delete("/datasources/{ds_id}")
-async def delete_datasource(ds_id: str):
-    """删除数据源（软删）。"""
+async def delete_datasource(ds_id: str,
+                            user: dict = Depends(auth.get_current_user)):
+    """删除数据源（软删，【管理】权限：仅 owner/管理员；公共源普通用户不可删）。"""
+    _require_managed(ds_id, user)
     if not ds_manager.delete_datasource(ds_id):
         raise HTTPException(404, "数据源不存在")
     return {"ok": True}
 
 
 @router.post("/datasources/test")
-async def test_connection(req: TestConnection):
-    """测试数据源连接。编辑模式未改密码时用已保存密码回填，避免空密码报错。"""
+async def test_connection(req: TestConnection,
+                          user: dict = Depends(auth.get_current_user)):
+    """测试数据源连接。编辑模式未改密码时用已保存密码回填，避免空密码报错。
+
+    新建模式（无 datasource_id）不校验，任何登录用户都能测试自己填写的连接；
+    编辑模式（带 id，需回填已保存密码）属【管理】权限，仅 owner/管理员可对该源
+    测试——公共源普通用户不能借回填读到/复用其保存的密码。
+    回填的真实密码只在后端用于本次连接测试，不返回前端。
+    """
     config = req.config
     pwd = config.get("password", "") if isinstance(config, dict) else ""
     if req.datasource_id and (not pwd or pwd == "***"):
-        ds = ds_manager.get_datasource(req.datasource_id)
-        if ds:
-            saved = ds_manager.decrypt_config(ds["config"])
-            config = {**config, "password": saved.get("password", "")}
+        ds = ds_manager.get_managed_datasource(
+            req.datasource_id, user["id"], _is_admin(user))
+        if not ds:
+            raise HTTPException(404, "数据源不存在或无权操作")
+        saved = ds_manager.decrypt_config(ds["config"])
+        config = {**config, "password": saved.get("password", "")}
     ok, msg = ds_manager.test_connection(req.db_type, config)
     return {"success": ok, "message": msg}
 
@@ -164,11 +225,9 @@ async def test_connection(req: TestConnection):
 # ---------------------------------------------------------------------------
 
 @router.get("/datasources/{ds_id}/tables")
-async def discover_tables(ds_id: str):
-    """自动发现数据源的所有表结构。"""
-    ds = ds_manager.get_datasource(ds_id)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+async def discover_tables(ds_id: str, user: dict = Depends(auth.get_current_user)):
+    """自动发现数据源的所有表结构（使用权限：owner/管理员/公共源可读）。"""
+    _require_usable(ds_id, user)
     try:
         tables = schema_inspector.get_all_tables(ds_id)
         # 返回简洁的表名列表 + 字段数
@@ -191,11 +250,10 @@ async def discover_tables(ds_id: str):
 
 
 @router.get("/datasources/{ds_id}/tables/{table_name}/schema")
-async def get_table_schema(ds_id: str, table_name: str):
-    """获取指定表的详细结构。"""
-    ds = ds_manager.get_datasource(ds_id)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+async def get_table_schema(ds_id: str, table_name: str,
+                           user: dict = Depends(auth.get_current_user)):
+    """获取指定表的详细结构（使用权限：owner/管理员/公共源可读）。"""
+    _require_usable(ds_id, user)
     try:
         table_info = schema_inspector.get_table_schema(ds_id, [table_name])
         if table_name not in table_info:
@@ -218,11 +276,13 @@ async def get_table_schema(ds_id: str, table_name: str):
 
 
 @router.get("/datasources/{ds_id}/tables/{table_name}/preview")
-async def preview_table_data(ds_id: str, table_name: str, limit: int = 10):
-    """预览表数据：返回前 N 行数据，用于库表配置页确认字段含义。
+async def preview_table_data(ds_id: str, table_name: str, limit: int = 10,
+                             user: dict = Depends(auth.get_current_user)):
+    """预览表数据：返回前 N 行数据，用于库表配置页确认字段含义（使用权限：owner/管理员/公共源可读）。
 
     复用 datasource.manager.execute_query 跑 SELECT * LIMIT N。
     """
+    _require_usable(ds_id, user)
     try:
         # 不同数据库的 LIMIT 语法不同，manager.execute_query 已对结果做了 limit 截断
         sql = f"SELECT * FROM {table_name}"
@@ -242,11 +302,10 @@ async def preview_table_data(ds_id: str, table_name: str, limit: int = 10):
 
 
 @router.get("/datasources/{ds_id}/relationships")
-async def get_relationships(ds_id: str, tables: str = ""):
-    """获取表间关联关系。tables 参数为逗号分隔的表名。"""
-    ds = ds_manager.get_datasource(ds_id)
-    if not ds:
-        raise HTTPException(404, "数据源不存在")
+async def get_relationships(ds_id: str, tables: str = "",
+                            user: dict = Depends(auth.get_current_user)):
+    """获取表间关联关系。tables 参数为逗号分隔的表名（使用权限：owner/管理员/公共源可读）。"""
+    _require_usable(ds_id, user)
     table_list = [t.strip() for t in tables.split(",")] if tables else []
     relationships = schema_inspector.get_table_relationships(ds_id, table_list)
     return {"relationships": relationships}
@@ -257,14 +316,18 @@ async def get_relationships(ds_id: str, tables: str = ""):
 # ---------------------------------------------------------------------------
 
 @router.get("/datasources/{ds_id}/annotations")
-async def list_annotations(ds_id: str):
-    """列出数据源下所有表标注。"""
+async def list_annotations(ds_id: str,
+                           user: dict = Depends(auth.get_current_user)):
+    """列出数据源下所有表标注（使用权限：owner/管理员/公共源可读）。"""
+    _require_usable(ds_id, user)
     return ds_manager.list_table_annotations(ds_id)
 
 
 @router.get("/datasources/{ds_id}/annotations/{table_name}")
-async def get_annotation(ds_id: str, table_name: str):
-    """获取单表标注。"""
+async def get_annotation(ds_id: str, table_name: str,
+                         user: dict = Depends(auth.get_current_user)):
+    """获取单表标注（使用权限：owner/管理员/公共源可读）。"""
+    _require_usable(ds_id, user)
     ann = ds_manager.get_table_annotation(ds_id, table_name)
     if not ann:
         raise HTTPException(404, "标注不存在")
@@ -272,8 +335,10 @@ async def get_annotation(ds_id: str, table_name: str):
 
 
 @router.put("/datasources/{ds_id}/annotations/{table_name}")
-async def upsert_annotation(ds_id: str, table_name: str, req: TableAnnotationUpdate):
-    """创建或更新表标注。"""
+async def upsert_annotation(ds_id: str, table_name: str, req: TableAnnotationUpdate,
+                            user: dict = Depends(auth.get_current_user)):
+    """创建或更新表标注（【管理】权限：仅 owner/管理员；公共源只读）。"""
+    _require_managed(ds_id, user)
     return ds_manager.upsert_table_annotation(
         ds_id, table_name,
         table_comment=req.table_comment,
@@ -381,12 +446,8 @@ async def generate_synonyms(req: Request, word: str = ""):
 
     model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
     try:
-        # _init_model 对非 openai: 前缀的模型返回字符串，需要显式走 init_chat_model
-        from langchain.chat_models import init_chat_model
-        if model_name.startswith("openai:"):
-            llm = init_chat_model(model_name, use_responses_api=False)
-        else:
-            llm = init_chat_model(model_name)
+        from app.compiler import _init_model
+        llm = _init_model(model_name)
     except Exception as e:
         logger.error("init llm failed: %s", e)
         raise HTTPException(500, f"模型初始化失败: {e}")
@@ -503,12 +564,15 @@ async def toggle_sql_example(ex_id: str, enabled: int = 1):
 # ---------------------------------------------------------------------------
 
 @router.get("/data-sources")
-async def list_all_data_sources():
+async def list_all_data_sources(user: dict = Depends(auth.get_current_user)):
     """聚合返回三类数据源：数据库 / 知识库 / 连接器（仅启用的）。
 
     供 analyst 工作台顶部「选择数据源」下拉使用，统一渲染三类。
+    数据库源按 owner 私有隔离（普通用户仅自己创建的，管理员全部）；
+    知识库/连接器为员工绑定级共享资源。
     """
-    return ds_manager.list_all_data_sources()
+    return ds_manager.list_all_data_sources(
+        user_id=user["id"], is_admin=_is_admin(user))
 
 
 @router.get("/kbs")

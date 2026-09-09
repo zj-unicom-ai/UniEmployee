@@ -84,6 +84,7 @@ async def get_conv(conv_id: str, user: dict = Depends(auth.get_current_user_or_f
         "employee_id": emp,
         "title": meta["title"],
         "message_count": meta["message_count"],
+        "model": meta.get("model") or "",
         "turns": reconstruct(msgs),
     }
 
@@ -125,13 +126,17 @@ async def send_message(conv_id: str, body: MessageIn,
         raise HTTPException(400, "消息内容为空")
     title = text[:40] or f"附件：{atts[0]['name']}"[:40]
     preview = text[:60] or f"[附件] {atts[0]['name']}"
+    # 模型选择：请求体 model > 会话绑定 model > 员工默认
+    req_model = (body.model or "").strip()
     if not meta:
         conversations.create(conv_id, emp, title=title, preview=preview,
-                             count=1, user_id=uid)
+                             count=1, user_id=uid, model=req_model or None)
     else:
         if meta.get("user_id") == "default":
             conversations.claim(conv_id, uid)
         conversations.touch(conv_id, title=title, preview=preview, bump=1)
+        if req_model:
+            conversations.set_model(conv_id, req_model)
     content = attachments.compose_user_content(body.message, atts)
     # 数据分析员工：CSV/Excel 附件自动注册为 DuckDB 表（表格问答），
     # 注册摘要替换默认处理指引——xiaoshu 是 standard 后端无 run_python。
@@ -148,10 +153,14 @@ async def send_message(conv_id: str, body: MessageIn,
                 guidance="csv/xlsx 数据文件已自动注册为可查询数据表，"
                          "用 file_table_list 查看表结构，用 file_table_query "
                          "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
+    # 最终使用的模型：请求体优先，其次会话绑定
+    bound_model = (meta or {}).get("model") or ""
+    use_model = req_model or bound_model
     input_ = {"messages": [{"role": "user", "content": content}]}
     return StreamingResponse(
         _stream_run(conv_id, input_, user_id=uid, role=user.get("role", "user"),
-                    datasource_id=datasource_id, data_source=data_source),
+                    datasource_id=datasource_id, data_source=data_source,
+                    model_override=use_model),
         media_type="text/event-stream")
 
 

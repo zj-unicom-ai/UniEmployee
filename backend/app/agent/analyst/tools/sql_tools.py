@@ -62,6 +62,10 @@ _kb_id_var: ContextVar[str] = ContextVar("analyst_kb_id", default="")
 # MCP 工具调用时按此 ID 限定到单个连接器，避免跨连接器误调。
 _connector_id_var: ContextVar[str] = ContextVar("analyst_connector_id", default="")
 
+# 当前会话用户上下文 (user_id, is_admin)：由 streaming.py 在 astream 前注入，
+# 工具层据此做数据源归属的纵深校验（防止伪造/越权访问他人数据源）。
+_user_ctx_var: ContextVar[tuple] = ContextVar("analyst_user_ctx", default=("", False))
+
 # 按 conv_id 隔离的查询结果缓冲：conv_id -> [chart_data, ...]
 # chart_data 形如 {"sql": str, "columns": list[str], "rows": list[dict], "row_count": int}
 _query_results: dict[str, list[dict]] = {}
@@ -116,15 +120,47 @@ def clear_connector_id() -> None:
     _connector_id_var.set("")
 
 
-def _resolve_datasource_id(explicit: str) -> str:
-    """工具内部统一的数据源 ID 解析：优先用 LLM 显式传的值，为空时用 contextvar 兜底。
+def set_user_ctx(user_id: str, is_admin: bool) -> None:
+    """streaming.py 在 astream 前注入当前会话用户（用于数据源归属校验）。"""
+    _user_ctx_var.set((user_id or "", bool(is_admin)))
 
-    设计权衡：保留 LLM 显式传值优先，是为了不破坏既有调用约定与测试；
-    contextvar 兜底覆盖 LLM 不传/传空字符串的常见场景（LLM 拿不到 ID 时）。
-    LLM 传错值（如 "chinook"）仍会失败，但这正是 fallback 价值的体现——
-    前端选好数据源后，无论 LLM 怎么猜，工具都能拿到正确 ID。
+
+def clear_user_ctx() -> None:
+    """astream 结束后清理。"""
+    _user_ctx_var.set(("", False))
+
+
+def _check_datasource_access(datasource_id: str) -> str:
+    """纵深校验当前会话用户是否有权访问该数据源。
+
+    返回非空字符串表示拒绝（错误提示，工具直接 return 给 LLM）；空串表示放行。
+    管理员 / 系统内部调用（无用户上下文）放行；数据源不存在不在此拦截
+    （交由后续 get_engine 报「不存在」），仅拦截「存在但属于他人」的越权访问。
     """
-    return explicit or _datasource_id_var.get()
+    user_id, is_admin = _user_ctx_var.get()
+    if is_admin or not user_id:
+        return ""
+    ds = ds_manager.get_datasource(datasource_id)
+    if ds and ds.get("owner_id") not in (None, user_id):
+        logger.warning("数据源越权访问被拦截: ds=%s user=%s owner=%s",
+                       datasource_id, user_id, ds.get("owner_id"))
+        return (f"错误: 无权访问数据源 {datasource_id}（该数据源属于其他用户，"
+                f"请在数据源下拉中选择自己的数据源）。")
+    return ""
+
+
+def _resolve_datasource_id(explicit: str) -> str:
+    """工具内部统一的数据源 ID 解析。
+
+    优先级：会话注入（contextvar，用户在界面显式选择的数据源）> LLM 显式传值。
+
+    contextvar 由 streaming.py 在每次 astream 前按前端选择注入、结束后清理，
+    代表当前会话唯一有效的数据源；LLM 传值可能是历史消息里的陈旧 ID（如已删除
+    的数据源）或瞎猜值（"chinook"/"1"/"default"），若让它优先，会把「用户已
+    选好数据源」的会话直接跑挂（报「数据源 xxx 不存在」）。因此仅当会话未注入
+    （测试 / 非界面调用）时才采用 LLM 传值。
+    """
+    return _datasource_id_var.get() or explicit
 
 
 def _json_safe(obj):
@@ -208,6 +244,9 @@ def sql_db_smart_search(datasource_id: str = "", user_query: str = "",
     datasource_id = _resolve_datasource_id(datasource_id)
     if not datasource_id:
         return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_smart_search")
@@ -281,6 +320,9 @@ def sql_db_table_schema(datasource_id: str = "", table_names: str = "",
     datasource_id = _resolve_datasource_id(datasource_id)
     if not datasource_id:
         return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_table_schema")
@@ -344,6 +386,9 @@ def sql_db_table_relationship(datasource_id: str = "", table_names: str = "",
     datasource_id = _resolve_datasource_id(datasource_id)
     if not datasource_id:
         return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
     session_id = _get_session_id(datasource_id, conversation_id)
 
     allowed, reason = _check_tool_call(session_id, "sql_db_table_relationship")
@@ -388,6 +433,9 @@ def sql_db_query(datasource_id: str = "", query: str = "",
     datasource_id = _resolve_datasource_id(datasource_id)
     if not datasource_id:
         return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
     session_id = _get_session_id(datasource_id, conversation_id)
 
     # 安全检查

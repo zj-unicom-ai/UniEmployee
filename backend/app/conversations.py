@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     title        TEXT DEFAULT '',
     preview      TEXT DEFAULT '',
     message_count INTEGER DEFAULT 0,
+    model        TEXT,
     created_at   TEXT,
     updated_at   TEXT
 );
@@ -85,6 +86,9 @@ def _migrate(con):
         con.execute("ALTER TABLE channels ADD COLUMN config TEXT DEFAULT '{}'")
     if "enabled" not in ch_cols:
         con.execute("ALTER TABLE channels ADD COLUMN enabled INTEGER DEFAULT 1")
+    # 会话级模型绑定：补 model 列
+    if "model" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
     con.commit()
 
 
@@ -99,16 +103,25 @@ def _channel_row(row) -> dict:
 
 
 def create(conv_id: str, employee_id: str, title: str = "", preview: str = "",
-           count: int = 0, user_id: str = "default", channel_id: str | None = None):
+           count: int = 0, user_id: str = "default", channel_id: str | None = None,
+           model: str | None = None):
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with _conn() as con:
         con.execute(
             "INSERT INTO conversations "
-            "(conv_id, employee_id, user_id, channel_id, title, preview, message_count, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?) "
+            "(conv_id, employee_id, user_id, channel_id, title, preview, message_count, model, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(conv_id) DO UPDATE SET deleted_at=NULL, updated_at=excluded.updated_at",
-            (conv_id, employee_id, user_id, channel_id, title, preview, count, now, now),
+            (conv_id, employee_id, user_id, channel_id, title, preview, count, model, now, now),
         )
+
+
+def set_model(conv_id: str, model: str | None):
+    """绑定/解绑会话使用的模型。"""
+    with _conn() as con:
+        con.execute(
+            "UPDATE conversations SET model=? WHERE conv_id=?",
+            (model, conv_id))
 
 
 def exists(conv_id: str) -> bool:

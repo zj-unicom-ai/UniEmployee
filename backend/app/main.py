@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.11.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.12.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -59,6 +59,7 @@ async def lifespan(app):
     catalog.seed_admin_if_empty()
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()
+    catalog.seed_default_model_if_empty()
     ontology.init()
     ontology.seed_schema_if_empty()
     ontology.backfill_schema_types()

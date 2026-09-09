@@ -178,7 +178,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text, attachments = [], dataSource = null) {
+  async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '') {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachments.length) return
@@ -209,7 +209,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify({ message: trimmed, attachments }),
+        body: JSON.stringify({ message: trimmed, attachments, model: model || '' }),
         signal: controller.signal,
       })
       await readStream(resp, botIdx)

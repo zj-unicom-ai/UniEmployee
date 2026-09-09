@@ -23,8 +23,17 @@
           :value="currentEmp"
           :options="empOptions"
           size="small"
-          style="width:240px"
+          style="width:200px"
           @update:value="selectEmployee"
+        />
+        <n-select
+          v-if="aiModels.length"
+          :value="currentModel"
+          :options="modelOptions"
+          size="small"
+          placeholder="选择模型"
+          style="width:160px"
+          @update:value="(v) => currentModel = v"
         />
         <span class="emp-meta">{{ empMeta }}</span>
         <n-button size="small" @click="openTrace">🔎 执行过程</n-button>
@@ -79,6 +88,13 @@ const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
 
+/* ---------- 模型选择 ---------- */
+const aiModels = ref([])
+const currentModel = ref('')  // base_model 名
+const modelOptions = computed(() =>
+  aiModels.value.map(m => ({ label: m.name, value: m.base_model }))
+)
+
 const HINTS = {
   xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
 }
@@ -125,7 +141,7 @@ async function onSend(text, files = []) {
     uploading.value = false
     if (!attachments.length) return
   }
-  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments)
+  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments, null, currentModel.value)
   await loadHistory(currentEmp.value)
 }
 
@@ -172,6 +188,8 @@ async function openConversation(cid) {
     convId.value = cid
     currentEmp.value = data.employee_id
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
+    // 恢复会话绑定的模型；未绑定时用列表中的默认模型
+    currentModel.value = data.model || defaultModelBase()
     messages.value = []
     stream.resetPipeline()
     for (const t of (data.turns || [])) {
@@ -199,6 +217,8 @@ async function openConversation(cid) {
 async function selectEmployee(empId) {
   currentEmp.value = empId
   hint.value = HINTS[empId] || '向数字员工提问吧。'
+  // 切换员工时重置为默认模型
+  currentModel.value = defaultModelBase()
   try {
     const { data } = await api.post(`/employees/${empId}/conversations`)
     convId.value = data.conversation_id
@@ -207,6 +227,18 @@ async function selectEmployee(empId) {
   stream.resetPipeline()
   empMeta.value = '已切换到该员工（记忆跨会话保留）'
   await loadHistory(empId)
+}
+
+function defaultModelBase() {
+  const d = aiModels.value.find(m => m.default_model)
+  return d ? d.base_model : (aiModels.value[0]?.base_model || '')
+}
+
+async function loadAiModels() {
+  try {
+    const { data } = await api.get('/ai-models')
+    aiModels.value = Array.isArray(data) ? data : []
+  } catch {}
 }
 
 function newConv() {
@@ -230,6 +262,7 @@ import { renderMd } from '../composables/useChatStream.js'
 /* ---------- 初始化 ---------- */
 onMounted(async () => {
   try {
+    await loadAiModels()
     const { data } = await api.get('/employees')
     employees.value = data
     data.forEach(e => { empNames[e.id] = e.name })

@@ -271,10 +271,12 @@ onMounted(async () => {
   background: #fff;
 }
 .config-nav {
-  padding: 8px 16px 0;
+  padding: 8px 16px;
   border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
-.config-nav :deep(.n-button) { margin-bottom: 4px; }
 .ex-body {
   flex: 1;
   overflow-y: auto;
