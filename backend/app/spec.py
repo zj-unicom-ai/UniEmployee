@@ -15,7 +15,10 @@ class EmployeeSpec(BaseModel):
     tools: list[str] = []
     mcp_servers: dict = {}
     interrupt_on: dict = {}
-    backend: str = "state"  # 默认 StateBackend；分析师类员工用 "local_shell" 拿到 execute/read_file/ls/write_file
+    # state=StateBackend（无 shell）；local_shell=宿主机 LocalShellBackend；
+    # sandbox=OpenSandbox 沙箱（execute/fs 工具进沙箱容器，按会话路由；
+    #   SANDBOX_ENABLED 未置 1 时回退 local_shell，见 app/sandbox_mgr.py）
+    backend: str = "state"
     sop: str = ""  # SOP 说明：追加到 system_prompt，并用于"加载 SOP"阶段展示
     # ---- 目录库（catalog.db）驱动的新字段 ----
     kbs: list[str] = []          # 选中的知识库 id

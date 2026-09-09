@@ -26,3 +26,6 @@ cryptography==45.0.5
 # 表格问答（上传 Excel/CSV → DuckDB 查询）
 duckdb==1.5.5
 openpyxl==3.1.5
+# OpenSandbox 沙箱执行环境（backend=sandbox 员工；SANDBOX_ENABLED=1 启用）
+opensandbox==0.1.16
+langchain-sandbox-opensandbox==0.1.2

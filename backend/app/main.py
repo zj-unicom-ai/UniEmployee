@@ -152,12 +152,21 @@ async def health():
             dbs[name] = "ok"
         except Exception as e:
             dbs[name] = f"error: {e}"
-    all_ok = all(v == "ok" for v in dbs.values())
+    # OpenSandbox 沙箱服务探活（未启用时 disabled，不影响整体状态）
+    sandbox_status = "disabled"
+    try:
+        from app import sandbox_mgr
+        if sandbox_mgr.enabled():
+            sandbox_status = "ok" if sandbox_mgr.manager.ping() else "error: unreachable"
+    except Exception as e:
+        sandbox_status = f"error: {type(e).__name__}: {e}"
+    all_ok = all(v == "ok" for v in dbs.values()) and not sandbox_status.startswith("error")
     return {
         "status": "ok" if all_ok else "degraded",
         "version": APP_VERSION,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "databases": dbs,
+        "sandbox": sandbox_status,
     }
 
 

@@ -131,6 +131,9 @@ def init():
     # AI 模型配置表幂等建表，复用同一连接
     from .ai_models import init_tables as _ai_models_init
     _ai_models_init(con)
+    # 沙箱会话映射表（sandbox_mgr）幂等建表，复用同一连接
+    from ..sandbox_mgr import init_tables as _sandbox_init
+    _sandbox_init(con)
     con.close()
 
 
