@@ -23,6 +23,8 @@ SQLAlchemy==2.0.41
 jieba==0.42.1
 rank-bm25==0.2.2
 cryptography==45.0.5
+# SQL AST 解析：execute_query 只读校验，防多语句/CTE 改写 DML/危险函数绕过
+sqlglot==26.29.0
 # 表格问答（上传 Excel/CSV → DuckDB 查询）
 duckdb==1.5.5
 openpyxl==3.1.5

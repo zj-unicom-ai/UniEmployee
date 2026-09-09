@@ -280,12 +280,19 @@ async def preview_table_data(ds_id: str, table_name: str, limit: int = 10,
                              user: dict = Depends(auth.get_current_user)):
     """预览表数据：返回前 N 行数据，用于库表配置页确认字段含义（使用权限：owner/管理员/公共源可读）。
 
-    复用 datasource.manager.execute_query 跑 SELECT * LIMIT N。
+    安全：table_name 来自 URL 路径参数，不再直接 f-string 拼接到 SQL（防注入）。
+    先用 is_table_readable 在数据源元数据中做白名单校验（不存在即 404，
+    不区分"不存在"与"无权限"，避免越权探测），再用方言 identifier_preparer
+    引用标识符拼 SQL；下游 execute_query 仍会走 AST 校验作为第三道闸。
     """
     _require_usable(ds_id, user)
     try:
-        # 不同数据库的 LIMIT 语法不同，manager.execute_query 已对结果做了 limit 截断
-        sql = f"SELECT * FROM {table_name}"
+        if not ds_manager.is_table_readable(ds_id, table_name):
+            # 表不存在或 table_name 含注入字符，统一 404（不暴露存在性差异）
+            raise HTTPException(404, f"表 {table_name} 不存在")
+        # 白名单已通过，再用方言 identifier_preparer 加引号（双保险）
+        quoted = ds_manager.quote_table_identifier(ds_id, table_name)
+        sql = f"SELECT * FROM {quoted}"
         result = ds_manager.execute_query(ds_id, sql, limit=limit)
         return {
             "table_name": table_name,
