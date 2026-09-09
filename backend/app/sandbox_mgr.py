@@ -110,6 +110,17 @@ def _drop_session(thread_id: str) -> None:
         con.close()
 
 
+def _clear_sessions() -> None:
+    """清空 sandbox_sessions 表（启动孤儿清扫后调用：重启后旧映射全部失效）。"""
+    from .catalog.db import _conn
+    con = _conn()
+    try:
+        con.execute("DELETE FROM sandbox_sessions")
+        con.commit()
+    finally:
+        con.close()
+
+
 def _connection_config():
     """构造 OpenSandbox 连接配置（延迟导入 opensandbox）。"""
     from opensandbox.config.connection_sync import ConnectionConfigSync
@@ -118,6 +129,16 @@ def _connection_config():
         protocol=_env("SANDBOX_PROTOCOL", "http"),
         api_key=_env("SANDBOX_API_KEY") or None,
     )
+
+
+def _sandbox_service():
+    """构造 SandboxesSync 服务（不依赖具体沙箱实例，供 list/kill 全局操作）。
+
+    用于孤儿清扫：list_sandboxes 按 metadata 过滤本应用创建的所有沙箱，
+    逐个 kill_sandbox（按 sandbox_id，不需要 connect 沙箱实例）。
+    """
+    from opensandbox.sync.adapters.factory import AdapterFactorySync
+    return AdapterFactorySync(_connection_config()).create_sandbox_service()
 
 
 class _Entry:
@@ -150,6 +171,15 @@ class SandboxManager:
     @property
     def image(self) -> str:
         return _env("SANDBOX_IMAGE", "uniemployee/sandbox:py312-data")
+
+    @property
+    def max_concurrent(self) -> int:
+        """单进程并发沙箱上限（按会话计，cache 命中不占新槽位）。
+
+        环境变量 SANDBOX_MAX_CONCURRENT，默认 20。超限抛 RuntimeError，
+        避免单进程内存膨胀 / server 端容器数失控。
+        """
+        return int(_env("SANDBOX_MAX_CONCURRENT", "20") or "20")
 
     # -- 对外接口 --
 
@@ -195,6 +225,12 @@ class SandboxManager:
                           f"{type(e).__name__}: {e}")
                     _drop_session(thread_id)
             if sandbox is None:
+                # 并发上限：cache 命中（renew 成功）不占新槽位，仅新建时检查。
+                # 防止单进程沙箱数膨胀 / server 端容器数失控。
+                if len(self._cache) >= self.max_concurrent:
+                    raise RuntimeError(
+                        f"沙箱并发上限已达 {self.max_concurrent}（会话数），"
+                        "请稍后重试或联系管理员调整 SANDBOX_MAX_CONCURRENT。")
                 sandbox = self._create(uid=uid, thread_id=thread_id)
                 _save_session(thread_id, sandbox.id, uid)
                 print(f"[sandbox] 会话 {thread_id} 新建沙箱 {sandbox.id}（uid={uid}）")
@@ -215,6 +251,50 @@ class SandboxManager:
                 print(f"[sandbox] kill {thread_id} 失败（忽略，TTL 兜底）："
                       f"{type(e).__name__}: {e}")
         _drop_session(thread_id)
+
+    def sweep_orphans(self) -> int:
+        """启动时清扫本应用残留的孤儿沙箱（不阻塞启动）。
+
+        服务异常退出后重启，旧沙箱可能仍在 server 端跑（TTL 未到期）。
+        按 metadata.app=uniemployee 列出所有本应用创建的沙箱，逐个 kill，
+        并清空 sandbox_sessions 表（重启后旧 thread_id 不会再被命中）。
+
+        返回清扫数量。任何异常仅日志，不抛出，不阻断服务启动。
+        """
+        if not enabled():
+            return 0
+        killed = 0
+        try:
+            svc = _sandbox_service()
+            from opensandbox.models.sandboxes import SandboxFilter
+            page = 1
+            while True:
+                flt = SandboxFilter(metadata={"app": "uniemployee"},
+                                    page_size=100, page=page)
+                result = svc.list_sandboxes(flt)
+                infos = result.sandbox_infos if result else []
+                if not infos:
+                    break
+                for info in infos:
+                    sid = info.id
+                    try:
+                        svc.kill_sandbox(sid)
+                        killed += 1
+                    except Exception as e:
+                        print(f"[sandbox] 清扫孤儿 {sid} 失败（忽略）："
+                              f"{type(e).__name__}: {e}")
+                # 翻页：不足一页说明到尾
+                if len(infos) < 100:
+                    break
+                page += 1
+            # 清空 sessions 表：重启后旧映射全部失效
+            _clear_sessions()
+            if killed:
+                print(f"[sandbox] 启动清扫：{killed} 个孤儿沙箱已销毁")
+        except Exception as e:
+            print(f"[sandbox] 启动清扫失败（忽略，TTL 兜底）："
+                  f"{type(e).__name__}: {e}")
+        return killed
 
     def ping(self) -> bool:
         """探活 OpenSandbox server（短超时，供 /health）。未启用返回 False。"""
