@@ -32,6 +32,14 @@ CONNECTOR_SEEDS = [
               "DOTENV_CONFIG_QUIET": "true"},
       # cwd 用无 .env 的中立目录，避免 dotenvx 把 banner 打到 stdout 污染 MCP 通道
       "cwd": "/tmp"}),
+    # Playwright 浏览器自动化连接器（官方 @playwright/mcp，npx 型 stdio）。
+    # 提供 navigate/click/fill/screenshot/extract 等浏览器操作工具，让员工能操作
+    # 无 API 的老旧系统、采集网页信息、自动化填报。默认 headless + isolated 模式。
+    # 首次使用需预装浏览器：npx playwright install --with-deps chromium
+    ("playwright", "Playwright 浏览器连接器", "浏览器自动化 MCP（npx，headless）",
+     {"transport": "stdio", "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+      "cwd": "/tmp"}),
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
