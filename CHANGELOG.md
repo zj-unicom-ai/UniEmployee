@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.2 (2026-09-10)
+
+### 新增：Playwright MCP 浏览器自动化连接器
+
+- 接入官方 `@playwright/mcp`（npx 型 stdio MCP 连接器），为数字员工提供 24 个浏览器操作工具：`browser_navigate` / `browser_navigate_back` / `browser_click` / `browser_type` / `browser_fill_form` / `browser_snapshot`（无障碍树）/ `browser_take_screenshot` / `browser_find` / `browser_evaluate` / `browser_network_requests` / `browser_file_upload` 等。员工可操作无开放 API 的老旧政务/运维系统、采集网页信息、自动化填报查询。
+- 连接器默认以 `--headless --isolated`（无头 + 内存态 profile，不落盘）启动，`cwd=/tmp` 避免项目根 .env 污染 stdio 通道；与其他 MCP 连接器一致，初始化失败自动降级不拖垮服务，`MCP_DISABLED=1` 可整体跳过。
+- 首批发给 net-ops（小网·算网运营专家），用于老旧运维系统操作与网页信息采集；其他员工默认不指派，管理员在资源中心按需授权（复用现有 MCP 工具护栏白名单裁剪体系）。
+- 老库由 `backfill_connectors()` 幂等补齐连接器登记与指派，无需清库。
+
+### 验证
+
+- 连接器配置结构校验通过；`test_catalog.py` 9 项全部通过，无新增回归
+- MCP 实连验证：成功拉起 Playwright MCP 并返回 24 个工具
+- 端到端 demo：打开中国政府网 → 页面快照抓到完整无障碍树（导航栏/搜索框/链接列表，含 ref 编号）→ 截图 450KB 真实页面 → `browser_find` 搜索"国务院"命中 11 处
+- 数据库确认：`playwright -> net-ops` 连接器授权已通过 backfill 写入 catalog 库
+
 ## 0.13.1 (2026-09-09)
 
 ### 修复：数据分析 SQL 只读校验从字符串级升级为 AST 级
