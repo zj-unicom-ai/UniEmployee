@@ -43,7 +43,8 @@ CONNECTOR_SEEDS = [
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
-CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"]}
+CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"],
+                    "playwright": ["net-ops"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
