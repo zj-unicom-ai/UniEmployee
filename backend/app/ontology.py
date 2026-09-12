@@ -829,6 +829,133 @@ def delete_relation(tenant_id: str, id_: int) -> None:
     con.close()
 
 
+def seed_crm_demo_if_empty():
+    """客户经理演示种子（浙江联通×吉利汽车）：default 租户无吉利实体时播种（幂等）。
+
+    与 scripts/generate_xiaoxiao_data.py 的合同/商机台账、examples/demo-geely 客户档案
+    严格对齐。演示主线（多跳关系查询价值）：
+      王工 -maintain→ 合同 -include→ 产品（技术对接人视角的产品清单）
+      极氪二期 -correspond_to→ 一期合同（商机与存量合同的联动）
+      吉利/零跑 各自合同 -include→ 联通云（跨客户共同产品能力）
+      李总监 -decide→ 合同/商机（决策链影响分析）
+    """
+    con = _conn()
+    has_geely = con.execute(
+        "SELECT 1 FROM entities WHERE entity_type='customer' AND name='吉利汽车' "
+        "AND tenant_id='default' AND deleted_at IS NULL"
+    ).fetchone()
+    if has_geely:
+        con.close()
+        return
+    now = _now()
+    ids: dict[tuple, int] = {}
+
+    def add(type_, name, props):
+        ids[(type_, name)] = dblayer.insert_returning_id(
+            con,
+            "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (type_, name, json.dumps(props, ensure_ascii=False), "default", now, now))
+
+    def link(frm, to, rel, props=None):
+        con.execute(
+            "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (frm, to, rel, json.dumps(props or {}, ensure_ascii=False), "default", now, now))
+
+    # ---- 实体 ----
+    add("customer", "吉利汽车", {
+        "industry": "汽车制造（新能源）", "level": "战略VIP", "region": "宁波杭州湾",
+        "intro": "浙江联通战略客户，2023-06 起合作，年通信支出约 600 万元。"})
+    add("customer", "零跑汽车", {
+        "industry": "汽车制造（新能源）", "level": "VIP", "region": "杭州",
+        "intro": "浙江联通政企客户，另有智博会新线索在跟进。"})
+    add("contact", "李总监", {
+        "company": "吉利汽车", "title": "数字化中心总监",
+        "role": "集团数字化转型决策链核心，管 ICT 预算与供应商准入"})
+    add("contact", "王工", {
+        "company": "吉利汽车", "title": "信息化部网络运维主管",
+        "role": "联通服务日常技术接口人，要求 P1 故障 15 分钟响应"})
+    add("contact", "陈经理", {
+        "company": "零跑汽车", "title": "数字化部经理", "role": "对接人"})
+    add("employee", "万仁刚", {
+        "title": "客户经理（解决方案顾问）", "department": "政企客户部"})
+
+    for code, props in {
+        "HT-2025-0031": {"product": "5G 专网（杭州湾制造基地）", "amount_wan": 320.0,
+                          "expire_date": "2026-10-05", "status": "服务中"},
+        "HT-2025-0044": {"product": "联通云（车联网数据平台承载）", "amount_wan": 150.0,
+                          "expire_date": "2026-11-20", "status": "服务中"},
+        "HT-2026-0012": {"product": "MPLS-VPN 专线（全国 9 个基地互联）", "amount_wan": 96.0,
+                          "expire_date": "2027-03-31", "status": "服务中"},
+        "HT-2026-0033": {"product": "物联网芯模服务（车联网前装模组）", "amount_wan": 58.0,
+                          "expire_date": "2027-06-30", "status": "服务中"},
+        "HT-2025-0089": {"product": "SD-WAN 智选专线", "amount_wan": 42.0,
+                          "expire_date": "2026-09-28", "status": "服务中"},
+        "HT-2026-0007": {"product": "联通云（研发桌面云）", "amount_wan": 75.0,
+                          "expire_date": "2027-05-31", "status": "服务中"},
+    }.items():
+        add("contract", code, props)
+
+    for name, props in {
+        "极氪工厂 5G 专网二期": {"stage": "方案报价", "amount_wan": 260.0,
+                              "note": "一期扩容，与一期续约联动上数字化委员会"},
+        "车联网数据合规平台": {"stage": "需求确认", "amount_wan": 88.0,
+                          "note": "数据出境合规是核心诉求"},
+        "视频云园区安防扩容": {"stage": "商务谈判", "amount_wan": 46.0,
+                          "note": "报价已确认，待供应商准入"},
+    }.items():
+        add("project", name, props)
+
+    for name, props in {
+        "5G 专网": {"category": "连接通信", "scene": "产线 AGV 调度 / 视觉质检回传"},
+        "联通云": {"category": "计算服务", "scene": "车联网数据平台 / 研发桌面云承载"},
+        "MPLS-VPN 专线": {"category": "组网", "scene": "多基地互联"},
+        "物联网芯模服务": {"category": "物联网", "scene": "车联网前装模组"},
+        "SD-WAN 智选专线": {"category": "组网", "scene": "分支互联"},
+        "视频云": {"category": "融合应用", "scene": "园区安防 AI 分析"},
+    }.items():
+        add("product", name, props)
+
+    # ---- 关系 ----
+    # 联系人 ↔ 客户
+    link(ids[("contact", "李总监")], ids[("customer", "吉利汽车")], "belongs_to")
+    link(ids[("contact", "王工")], ids[("customer", "吉利汽车")], "belongs_to")
+    link(ids[("contact", "陈经理")], ids[("customer", "零跑汽车")], "belongs_to")
+    # 客户经理跟进
+    link(ids[("employee", "万仁刚")], ids[("customer", "吉利汽车")], "follow_up")
+    link(ids[("employee", "万仁刚")], ids[("customer", "零跑汽车")], "follow_up")
+    # 签约：客户 → 合同
+    for contract in ("HT-2025-0031", "HT-2025-0044", "HT-2026-0012", "HT-2026-0033"):
+        link(ids[("customer", "吉利汽车")], ids[("contract", contract)], "sign")
+    for contract in ("HT-2025-0089", "HT-2026-0007"):
+        link(ids[("customer", "零跑汽车")], ids[("contract", contract)], "sign")
+    # 合同 → 产品（包含）
+    link(ids[("contract", "HT-2025-0031")], ids[("product", "5G 专网")], "include")
+    link(ids[("contract", "HT-2025-0044")], ids[("product", "联通云")], "include")
+    link(ids[("contract", "HT-2026-0012")], ids[("product", "MPLS-VPN 专线")], "include")
+    link(ids[("contract", "HT-2026-0033")], ids[("product", "物联网芯模服务")], "include")
+    link(ids[("contract", "HT-2025-0089")], ids[("product", "SD-WAN 智选专线")], "include")
+    link(ids[("contract", "HT-2026-0007")], ids[("product", "联通云")], "include")
+    # 角色：联系人 → 合同/商机（决策 vs 技术对接）
+    link(ids[("contact", "李总监")], ids[("contract", "HT-2025-0031")], "decide",
+         {"role": "预算与签约决策"})
+    link(ids[("contact", "李总监")], ids[("project", "极氪工厂 5G 专网二期")], "decide",
+         {"role": "立项决策"})
+    link(ids[("contact", "王工")], ids[("contract", "HT-2025-0031")], "maintain",
+         {"role": "技术对接人"})
+    link(ids[("contact", "王工")], ids[("contract", "HT-2025-0044")], "maintain",
+         {"role": "技术对接人"})
+    # 商机 → 客户 / 存量合同
+    for proj in ("极氪工厂 5G 专网二期", "车联网数据合规平台", "视频云园区安防扩容"):
+        link(ids[("project", proj)], ids[("customer", "吉利汽车")], "serve")
+    link(ids[("project", "极氪工厂 5G 专网二期")],
+         ids[("contract", "HT-2025-0031")], "correspond_to")
+
+    con.commit()
+    con.close()
+
+
 # ---------------- 运行时查询（供 ontology_* 闭包工具调用） ----------------
 
 def find_entities(tenant_id: str, entity_type: str | None = None,

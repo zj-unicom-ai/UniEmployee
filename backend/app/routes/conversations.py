@@ -86,6 +86,8 @@ async def get_conv(conv_id: str, user: dict = Depends(auth.get_current_user_or_f
         "message_count": meta["message_count"],
         "model": meta.get("model") or "",
         "turns": reconstruct(msgs),
+        # 回合产物文件清单（file 事件为即时推送，历史恢复从这里取）
+        "files": conversations.list_files(conv_id),
     }
 
 

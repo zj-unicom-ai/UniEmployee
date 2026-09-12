@@ -57,6 +57,7 @@ async def lifespan(app):
     catalog.backfill_xiaoshu_skills()
     catalog.backfill_netops_upgrade()
     catalog.backfill_sandbox_backend()
+    catalog.backfill_ticket_approval()
     # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
     # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
     catalog.backfill_workspace_paths()
@@ -78,6 +79,7 @@ async def lifespan(app):
     ontology.seed_demo_if_empty()
     ontology.seed_netops_demo_if_empty()
     ontology.seed_netops_resources_if_empty()
+    ontology.seed_crm_demo_if_empty()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

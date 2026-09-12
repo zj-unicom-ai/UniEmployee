@@ -158,8 +158,8 @@ EMPLOYEE_SEEDS = {
         ]),
         kbs=[], sops=[]),
     "xiaoxiao": dict(
-        skills=["enterprise-sales"],
-        tools=_tools_with_ontology(["kb_search", "bocha_search"]),
+        skills=["enterprise-sales", "customer-360", "renewal-scan"],
+        tools=_tools_with_ontology(["kb_search", "bocha_search", "create_ticket"]),
         kbs=[]),
     "hrbp": dict(
         skills=["hr-assistant"],
@@ -202,7 +202,8 @@ def seed_if_empty():
     # --- tools（本地工具注册表）---
     tools = [
         ("kb_search", "知识库检索", "基于 RAGFlow 向量检索知识库", "local", None),
-        ("create_ticket", "工单登记", "登记客服工单", "local", None),
+        ("create_ticket", "工单登记", "登记客服工单（需人工审批）", "local",
+         json.dumps(["approve", "reject"])),
         ("start_refund", "退款流程", "发起退款（需人工审批）", "local",
          json.dumps(["approve", "reject"])),
         ("bocha_search", "联网搜索", "联网搜索实时信息（博查）", "local", None),
@@ -337,6 +338,25 @@ def backfill_ontology_tools():
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    con.commit()
+    con.close()
+
+
+def backfill_ticket_approval():
+    """老库补齐 create_ticket 的审批标记（幂等）。
+
+    轻量工单审批依赖 tools.needs_approval（运行时由 _build_interrupt_on 推导
+    interrupt_on）。历史种子把 create_ticket 的 needs_approval 记为 NULL，
+    导致全新库中 create_ticket 不被拦截、审批卡不出现，与文档行为不符。
+    这里仅对未配置审批策略的记录补默认值 ["approve","reject"]，
+    不覆盖管理员在资源中心自定义的策略。
+    """
+    con = _conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE tools SET needs_approval=? "
+        "WHERE id='create_ticket' AND (needs_approval IS NULL OR needs_approval='')",
+        (json.dumps(["approve", "reject"]),))
     con.commit()
     con.close()
 
@@ -679,7 +699,7 @@ def backfill_ragflow_knowledge_bases():
 # 内置员工知识库指派：按 RAGFlow 数据集名称绑定（dataset id 随环境变化，
 # 名称是稳定约定；只在数据集存在时补绑，不覆盖管理员手动增删）。
 EMPLOYEE_KB_ASSIGN = {
-    "xiaoxiao": ["自研产品Wiki", "产品知识库", "客户档案"],
+    "xiaoxiao": ["浙江联通自研产品Wiki", "产品知识库", "客户档案"],
     "unicom-presale": ["浙江联通业务知识库"],
 }
 

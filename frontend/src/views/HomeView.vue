@@ -117,6 +117,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
+import { routeNameForEmployee } from '../utils/employeeRoutes.js'
 import api from '../api.js'
 
 defineOptions({ name: 'HomeView' })
@@ -172,8 +173,9 @@ async function loadData() {
   } catch {} finally { loading.value = false }
 }
 
-function startChat(empId) {
-  router.push({ name: 'chat', query: { emp: empId } })
+// 定制型员工（如 xiaoshu）有专属工作台路由，编排型进统一聊天页
+function startChat(emp) {
+  router.push({ name: routeNameForEmployee(emp.id), query: { emp: emp.id } })
 }
 
 onMounted(loadData)

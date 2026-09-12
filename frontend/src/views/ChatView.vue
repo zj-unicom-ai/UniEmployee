@@ -190,10 +190,21 @@ async function openConversation(cid) {
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
+    // 产物文件按归属轮次（turn_no）挂到生成它的那条回答消息上；
+    // 无轮次信息的旧数据挂到最后一 条回答。实时生成走 file 事件直接进 msg.files。
+    const filesByTurn = {}
+    for (const f of (data.files || [])) {
+      const t = f.turn_no || 0
+      ;(filesByTurn[t] = filesByTurn[t] || []).push(f)
+    }
     messages.value = []
     stream.resetPipeline()
+    let userTurn = 0
+    let lastBot = null
+    const turnLastBot = {}
     for (const t of (data.turns || [])) {
       if (t.role === 'user') {
+        userTurn++
         messages.value.push({ role: 'user', content: t.content, time: fmtNow() })
       } else {
         const msg = { role: 'bot', content: '', html: renderMd(t.content || ''), _md: t.content || '', trace: [], time: fmtNow() }
@@ -207,6 +218,17 @@ async function openConversation(cid) {
           }))
         }
         messages.value.push(msg)
+        lastBot = msg
+        turnLastBot[userTurn] = msg
+      }
+    }
+    for (const group of Object.values(filesByTurn)) {
+      for (const f of group) {
+        const target = turnLastBot[f.turn_no] || lastBot
+        if (target) {
+          if (!target.files) target.files = []
+          if (!target.files.some(x => x.path === f.path)) target.files.push(f)
+        }
       }
     }
     scrollToBottom()
@@ -273,7 +295,9 @@ onMounted(async () => {
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
       if (!convId.value && data.length) await selectEmployee(data[0].id)
     } else if (data.length) {
-      await selectEmployee(data[0].id)
+      // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
+      const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
+      await selectEmployee(target ? target.id : data[0].id)
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message
