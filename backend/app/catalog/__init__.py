@@ -56,7 +56,7 @@ from .seeds import (
     backfill_employees_if_missing, backfill_analyst_sql_tools,
     backfill_xiaoshu_skills, backfill_netops_upgrade,
     backfill_sandbox_backend, backfill_workspace_paths,
-    backfill_ticket_approval,
+    backfill_ticket_approval, backfill_market_intel_v2,
     seed_assignments_if_empty, seed_admin_if_empty, flag_default_admin_password,
 )
 
@@ -97,7 +97,7 @@ __all__ = [
     "backfill_employees_if_missing", "backfill_analyst_sql_tools",
     "backfill_xiaoshu_skills", "backfill_netops_upgrade",
     "backfill_sandbox_backend", "backfill_workspace_paths",
-    "backfill_ticket_approval",
+    "backfill_ticket_approval", "backfill_market_intel_v2",
     "seed_assignments_if_empty", "seed_admin_if_empty", "flag_default_admin_password",
     # ai_models
     "ai_models_init", "list_models", "get_model", "create_model",

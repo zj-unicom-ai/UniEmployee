@@ -58,6 +58,7 @@ async def lifespan(app):
     catalog.backfill_netops_upgrade()
     catalog.backfill_sandbox_backend()
     catalog.backfill_ticket_approval()
+    catalog.backfill_market_intel_v2()
     # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
     # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
     catalog.backfill_workspace_paths()
@@ -83,6 +84,9 @@ async def lifespan(app):
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )
+    # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
+    from app import automations as _automations
+    _automations.backfill_seeds()
     # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）

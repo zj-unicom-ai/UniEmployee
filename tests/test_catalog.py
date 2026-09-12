@@ -205,3 +205,60 @@ def test_skill_upsert_and_delete():
     assert catalog.get_skill("sk1")["dir"] == "skills-custom/sk1"
     catalog.delete_skill("sk1")
     assert catalog.get_skill("sk1") is None
+
+
+# ---- 市场情报 V2：发布审批工具 ----
+
+def test_backfill_market_intel_publish_tool():
+    """publish_briefing 登记 + market-intel 指派，needs_approval 派生审批中断。"""
+    catalog.init()
+    catalog.seed_if_empty()
+    catalog.backfill_market_intel_v2()
+
+    con = sqlite3.connect(str(catalog.db.DB))
+    row = con.execute(
+        "SELECT needs_approval FROM tools WHERE id='publish_briefing'").fetchone()
+    con.close()
+    assert row, "publish_briefing 必须登记进 tools 表"
+    assert json.loads(row[0]) == ["approve", "reject"]
+
+    cfg = catalog.get_employee_config("market-intel")
+    assert "publish_briefing" in cfg["tools"]
+    # 编译层据此自动派生 interrupt_on（发布前挂人工审批）
+    assert cfg["interrupt_on"].get("publish_briefing") == {
+        "allowed_decisions": ["approve", "reject"]}
+
+    # 模拟老库（工具未登记/未指派）→ backfill 幂等补回
+    con = sqlite3.connect(str(catalog.db.DB))
+    con.execute("DELETE FROM employee_tools WHERE employee_id='market-intel'"
+                " AND tool_id='publish_briefing'")
+    con.execute("DELETE FROM tools WHERE id='publish_briefing'")
+    con.commit()
+    con.close()
+    catalog.backfill_market_intel_v2()
+    cfg = catalog.get_employee_config("market-intel")
+    assert "publish_briefing" in cfg["tools"]
+
+
+def test_publish_briefing_archives_html(tmp_path, monkeypatch):
+    """发布归档：写用户 briefings 目录、文件名清洗、HTML 兜底包装。"""
+    from app.tools import publish_tools
+    monkeypatch.setattr(publish_tools, "DATA_DIR", tmp_path)
+
+    # 片段 HTML 自动包装成可打开的完整文档
+    p1 = publish_tools.write_briefing("u1", "每日简报 · 2026/09/12", "<div>看板</div>")
+    assert p1.exists() and p1.parent.name == "briefings"
+    text = p1.read_text(encoding="utf-8")
+    assert "<!DOCTYPE html>" in text and "<div>看板</div>" in text and "每日简报" in text
+
+    # 完整 HTML 原样归档；文件名非法字符被清洗
+    full = '<!DOCTYPE html><html lang="zh-CN"><body>完整看板</body></html>'
+    p2 = publish_tools.write_briefing("u1", '竞品对标:声湃/X1?', full)
+    assert "/" not in p2.name and ":" not in p2.name and "?" not in p2.name
+    assert p2.read_text(encoding="utf-8") == full
+
+
+def test_publish_briefing_registered_in_compiler():
+    """编译层注册表必须包含 publish_briefing（员工按名挑选的前提）。"""
+    from app.compiler import ALL_LOCAL_TOOLS
+    assert "publish_briefing" in ALL_LOCAL_TOOLS

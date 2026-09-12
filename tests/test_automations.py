@@ -169,3 +169,31 @@ def test_render_prompt_appends_payload_when_no_placeholder():
 def test_render_prompt_without_payload():
     out = automations.render_prompt("生成 {{now}} 的日报")
     assert "{{now}}" not in out
+
+
+# ---- 市场情报值守种子任务（V2） ----
+
+def test_backfill_seeds_market_intel_tasks():
+    """值守任务模板幂等补种：默认停用、字段正确、重复执行不重复。"""
+    automations.backfill_seeds()
+    rows = {a["id"]: a for a in automations.list_all() if a["id"].startswith("auto_seed_market")}
+
+    daily = rows.get("auto_seed_market_daily_brief")
+    assert daily and daily["trigger_type"] == "cron"
+    assert daily["cron_expr"] == "30 8 * * 1-5"
+    assert daily["employee_id"] == "market-intel"
+    assert daily["enabled"] is False
+    assert daily["next_fire_at"] is None          # 停用不排期
+    assert "publish_briefing" in daily["prompt"]  # 收尾必须走发布审批
+    assert "{{now}}" in daily["prompt"]
+
+    alert = rows.get("auto_seed_market_alert_event")
+    assert alert and alert["trigger_type"] == "event"
+    assert alert["event_key"] == "market-signal"
+    assert alert["enabled"] is False
+    assert "{{payload}}" in alert["prompt"]
+
+    # 幂等：管理员即使开启后重启，种子也不覆盖/不重置
+    automations.update("auto_seed_market_daily_brief", name="管理员改过的名字")
+    automations.backfill_seeds()
+    assert automations.get("auto_seed_market_daily_brief")["name"] == "管理员改过的名字"
