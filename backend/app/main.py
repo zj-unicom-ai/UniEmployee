@@ -79,6 +79,7 @@ async def lifespan(app):
     ontology.seed_demo_if_empty()
     ontology.seed_netops_demo_if_empty()
     ontology.seed_netops_resources_if_empty()
+    ontology.seed_crm_demo_if_empty()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

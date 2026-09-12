@@ -12,6 +12,8 @@ description: 客户 360 画像技能。当用户询问某个客户的综合情�
 - 用户问某客户"什么情况"、"怎么样"、"盘一下"、"介绍一下"
 - 用户问某客户的合作状态、历史消费、已购产品、联系人、商机、合同
 - 用户要求做客户盘点或拜访前的客户背景调查
+- 用户问客户/联系人/合同/商机/产品之间的关系：某商机对应哪份合同、
+  某产品用在哪些客户、某联系人是对决策人还是技术对接人
 
 ## 执行步骤（按顺序执行）
 
@@ -22,10 +24,13 @@ description: 客户 360 画像技能。当用户询问某个客户的综合情�
 - 再查 `客户名 + 拜访记录`（近期沟通与客户偏好）
 
 ### 步骤 2：查业务本体关系
-用本体工具查客户的结构化关系（知识库是叙述性材料，本体是权威关系数据）：
-- `ontology_find_entities(entity_type="客户", keyword="客户名")` 定位客户实体
+用本体工具查客户的结构化关系（知识库是叙述性材料，本体是权威关系数据，
+实体类型用英文代码 customer/contact/product/project/contract）：
+- `ontology_find_entities(entity_type="customer", keyword="客户名关键词")` 定位客户实体
 - `ontology_query_relations(entity_id=客户实体id, direction="any")` 获取
-  该客户的联系人 / 商机 / 合同 / 订单等关系
+  该客户的签约合同（sign）/ 在途项目（serve）/ 联系人（belongs_to）等关系
+- 定位客户联系人用 `entity_type="contact"`；沿合同继续查 `include` 关系可得产品清单，
+  沿商机查 `correspond_to` 可得关联存量合同
 
 ### 步骤 3：CRM 补充
 以下情况调用 CRM 连接器补充：
