@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from app import runtime, traces, catalog, approvals, conversations, guard
 from app import db as dblayer
 from app.compiler import _init_model
+from app.paths import WORKSPACE_DATA
 # 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
 # 并在 sql_db_query 完成时取出结构化结果，翻译成 chart/sql SSE 事件。
 # 延迟 import 失败时退化为无操作，避免分析师模块异常拖垮其他员工流。
@@ -319,6 +320,61 @@ def first_message_text(input_) -> str:
         return ""
 
 
+class _WorkspaceFileWatcher:
+    """探测 workspace/data 下回合内新增/修改的产物文件，供 SSE 推 file 事件。
+
+    数字员工经 execute/write_file 生成的 Word/纪要/CSV 等产物，此前只以文本路径
+    出现在回答里，前端无法下载或预览。快照-对比目录（排除 uploads/ 与隐藏文件、
+    超大与超量截断），由 _stream_run 在文件型工具完成后推 {"type":"file", ...}，
+    前端渲染为可下载/可预览的文件卡片。
+    """
+    EXCLUDE_PARTS = {"uploads"}
+    MAX_FILE_SIZE = 100 * 1024 * 1024   # 超过 100MB 的文件不推卡片
+    MAX_PER_TURN = 10                    # 单回合最多推送 10 个文件
+
+    def __init__(self):
+        self._seen: dict[str, float] = {}
+        self.snapshot()
+
+    def _scan(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        try:
+            for p in WORKSPACE_DATA.rglob("*"):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(WORKSPACE_DATA)
+                if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
+                    continue
+                try:
+                    out[rel.as_posix()] = p.stat().st_mtime
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        return out
+
+    def snapshot(self) -> None:
+        self._seen = self._scan()
+
+    def diff(self) -> list[dict]:
+        """返回相对上次快照新增/修改的文件信息列表，并滚动快照。"""
+        cur = self._scan()
+        fresh = [k for k, m in cur.items()
+                 if k not in self._seen or m > self._seen[k] + 1e-6]
+        self._seen = cur
+        infos = []
+        for rel in fresh[: self.MAX_PER_TURN]:
+            p = WORKSPACE_DATA / rel
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_size > self.MAX_FILE_SIZE:
+                continue
+            infos.append({"name": p.name, "path": rel, "size": st.st_size})
+        return infos
+
+
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
                       datasource_id: str = "", data_source: str = "",
                       model_override: str = ""):
@@ -371,6 +427,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                                     input_preview=input_preview, kind=kind)
     tracer = traces.TraceHandler(trace_run_id)
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
+    file_watcher = _WorkspaceFileWatcher()
 
     config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id},
               "callbacks": [tracer]}
@@ -468,6 +525,12 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name in ("sql_db_query", "file_table_query") and _ANALYST_HOOK:
                             for item in analyst_pop_query_results(conv_id):
                                 yield sse({"type": "sql", "sql": item.get("sql", "")})
+                        # 产物文件探测：write_file/execute/edit_file/run_python 之后
+                        # 对比 workspace/data 快照，把新增/修改的产物推 file 事件，
+                        # 前端渲染成可下载卡片（此前只以文本路径出现在回答里，无法下载）。
+                        if name in ("write_file", "execute", "edit_file", "run_python"):
+                            for f in file_watcher.diff():
+                                yield sse({"type": "file", **f})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,

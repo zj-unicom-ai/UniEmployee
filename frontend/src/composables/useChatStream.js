@@ -122,6 +122,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.sql) msg.sql = ev.sql || ''
       else if (ev.sql) msg.sql += '\n;\n' + ev.sql
       touch()
+    } else if (ev.type === 'file') {
+      // 数字员工产物文件（Word 方案/纪要/CSV 等）：渲染成可下载/可预览的文件卡片
+      if (!msg.files) msg.files = []
+      if (!msg.files.some(f => f.path === ev.path)) {
+        msg.files.push({ name: ev.name, path: ev.path, size: ev.size })
+      }
+      touch()
     } else if (ev.type === 'subagent') {
       if (!msg.subagents) msg.subagents = []
       let sa = msg.subagents.find(s => s.name === ev.name)

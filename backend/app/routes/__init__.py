@@ -24,6 +24,7 @@ from .audit import router as audit_router
 from .automations import router as automation_router
 from .analyst import router as analyst_router
 from .ai_models import router as ai_models_router, public_router as ai_models_public_router
+from .workspace import router as workspace_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -41,3 +42,4 @@ router.include_router(automation_router)
 router.include_router(analyst_router)
 router.include_router(ai_models_router)
 router.include_router(ai_models_public_router)
+router.include_router(workspace_router)
