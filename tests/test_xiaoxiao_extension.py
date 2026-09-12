@@ -78,16 +78,16 @@ def test_generator_outputs_and_storylines(tmp_path, monkeypatch):
     assert opps and set(opps[0].keys()) == {
         "opp_id", "customer", "company", "product", "stage",
         "amount_wan", "last_follow_up", "note"}
-    # 客户名与 CRM 连接器演示客户对齐
+    # 客户名为演示案例客户（吉利汽车/零跑汽车为浙江联通政企客户背景）
     companies = {c["company"] for c in contracts} | {o["company"] for o in opps}
-    assert {"华强电子", "鼎新科技", "阳光中学", "先锋设计院"} <= companies
+    assert {"吉利汽车", "零跑汽车"} <= companies
 
     cutoff = gen.TODAY
-    # 故事线 A/B：至少两条临期合同（≤30 天），含大额的华强电子
+    # 故事线 A/B：至少两条临期合同（≤30 天），含大额的吉利汽车 5G 专网
     expiring = [c for c in contracts
                 if 0 <= (datetime.strptime(c["expire_date"], "%Y-%m-%d") - cutoff).days <= 30]
     assert len(expiring) >= 2
-    assert any(c["company"] == "华强电子" for c in expiring)
+    assert any(c["company"] == "吉利汽车" for c in expiring)
     # 故事线 C/D：至少两条停滞商机（活跃且 >14 天未跟进）
     stalled = [o for o in opps
                if o["stage"] not in ("赢单", "输单")

@@ -699,7 +699,7 @@ def backfill_ragflow_knowledge_bases():
 # 内置员工知识库指派：按 RAGFlow 数据集名称绑定（dataset id 随环境变化，
 # 名称是稳定约定；只在数据集存在时补绑，不覆盖管理员手动增删）。
 EMPLOYEE_KB_ASSIGN = {
-    "xiaoxiao": ["自研产品Wiki", "产品知识库", "客户档案"],
+    "xiaoxiao": ["浙江联通自研产品Wiki", "产品知识库", "客户档案"],
     "unicom-presale": ["浙江联通业务知识库"],
 }
 
