@@ -42,7 +42,21 @@ PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
 
 ## 新增数字员工 / 技能 / 工具
 
-新增员工 = `backend/employees/*.yaml` + `catalog/seeds.py` 注册 + 重启；新工具在 `app/tools/` 定义后登记进 `compiler.ALL_LOCAL_TOOLS`。
+平台的核心扩展方式是"编排"：员工 = 人设 + 技能规程 + 工具 + 连接器的组合，多数扩展不需要动编译层。实操手册：
+
+- [新增数字员工指南](docs/guide/add-employee.md)——yaml 字段表、种子注册、老库幂等补缺、四个必踩坑位
+- [技能规程（SKILL.md）编写规范](docs/guide/skill-authoring.md)——结构模板、触发条件提取规则、看板输出约定
+- [自定义工具开发](docs/guide/custom-tools.md)——三处登记、人工审批标记、运行时上下文、产物文件推送
+
+一份改动如果新增了种子（员工/工具/连接器/自动化任务模板），请新增或更新对应的 `tests/test_catalog.py` 用例（含老库 backfill 幂等回归）。
+
+## 发布流程（维护者）
+
+版本号遵循语义化直觉：功能新增进位小数点后第二位（0.14.0 → 0.14.1 可承载完整新员工），修复进第三位。
+
+1. 更新 `CHANGELOG.md`（新增版本小节，按「新增 / 修复 / 升级说明」分块）与版本号四处：`backend/app/main.py` 的 `APP_VERSION`、`frontend/package.json`、两份 README 的 APP_VERSION 表；
+2. 提交 `chore(release): vX.Y.Z 版本号 + CHANGELOG` 随功能分支合入 main；
+3. squash 合并后在 main 上打 tag 并创建 Release：`gh release create vX.Y.Z --target main --title "vX.Y.Z：一句话" --notes <CHANGELOG 小节改写>`。
 
 ## 行为准则
 
