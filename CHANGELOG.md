@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.14.0 (2026-09-12)
+
+### 新增：客户经理数字员工升级全生命周期经营 + 浙江联通×吉利汽车演示案例
+
+- xiaoxiao（客户经理·解决方案顾问）从签前方案顾问升级为全生命周期客户经理：
+  - 新技能 **customer-360**：知识库 → 业务本体 → CRM 三源汇总的客户画像，结论先行、标注来源、风险显性化
+  - 新技能 **renewal-scan**：合同临期（≤30 天）/预警（≤90 天）/商机停滞（>14 天）扫描，基于 workspace/datasets 台账 execute 真实跑数
+  - **enterprise-sales** 补「拜访后纪要」规程：口述纪要结构化落档 + 偏好写入跨会话记忆 + 升级红线
+  - persona 重构：签前+签后双线、技能路由段、审批升级红线（投诉/折扣/赔偿/超 SLA 必须 create_ticket 人工审批）
+  - 工具追加 create_ticket 与业务本体关系查询；本体演示数据启动自动播种（`ontology.seed_crm_demo_if_empty`：吉利/零跑客户、联系人、合同、商机、产品及 sign/include/decide/maintain/correspond_to 关系边）
+
+### 修复：create_ticket 工单审批在全新库不生效
+
+- 运行时 interrupt_on 由工具表 needs_approval 自动推导（`_build_interrupt_on`），历史种子把 create_ticket 记为 NULL → 全新库中轻量工单审批不出审批卡
+- 种子补默认策略 `["approve","reject"]`；新增 `backfill_ticket_approval()` 启动幂等补老库（不覆盖管理员自定义策略）
+
+### 新增：数字员工产物文件可下载/预览
+
+- 新增 `GET /api/workspace/file`：以 workspace/data 为受控根，路径归一（相对//data/ 虚拟路径/绝对路径）+ resolve 防穿越 + uid 目录用户隔离
+- SSE 流内 `_WorkspaceFileWatcher` 快照-对比探测产物（write_file/execute/edit_file/run_python 后），推 file 事件并落库 conversation_files（含归属轮次 turn_no，同回合单文件去重）
+- 前端 FileCard 文件卡片（下载 + 文本预览）：实时挂在生成它的回答下方，历史会话按轮次恢复；此前产物只以文本路径出现，服务器文件系统外无法获取
+
+### 新增：演示物料（examples/demo-geely/）
+
+- `generate_xiaoxiao_data.py` 换为浙江联通×吉利汽车背景（零跑汽车对照），产品名对齐联通政企产品线，内嵌四条可扫描故事线
+- 演示手册六场景 + 按数字员工绑定的话术速查卡；场景 6「本体价值 A/B」真机实测——无本体=台账推断且自承无法回答，有本体=correspond_to 关系路径直达
+- CRM mock 追加吉利/零跑客户与订单（保留原演示数据）
+
+### 修复：首页员工卡片按定制型/编排型分流
+
+- 首页卡片写死 chat 路由，点击定制型员工（xiaoshu）进入编排型聊天页；改用 `routeNameForEmployee` 分流，并补齐 ChatView `?emp=` 预选
+
+### 其他
+
+- gen_solution.js：docx 全局模块回退解析（修复无法独立运行）、方案优势/售后模板改政企服务风格
+- seeds 知识库绑定修正：`自研产品Wiki` → 实际存在的 `浙江联通自研产品Wiki`
+- customer-360 本体环节改用英文类型代码；ontology_tools 文档补 contact 类型与 sign/decide 动词
+- agent 编译缓存特性记档：get_agent 结果不随配置热更新，资源中心改工具/persona 需重启服务
+
+### 验证
+
+- 新增 tests/test_xiaoxiao_extension.py（5 项）与 tests/test_workspace_files.py（6 项）全部通过；全量 pytest 回归失败集与 main 基线一致（33 项存量环境问题，零新增）
+- E2E 实测（deepseek-v4-flash + 真实 PG/RAGFlow/CRM）：客户 360 / 续约扫描 / 投诉审批闭环（工单 T0912102010、T0912103003）/ 方案 Word（下载 200、穿越 403）/ 拜访纪要 / 本体 A/B 全部通过
+- 前端 vite build 通过
+
 ## 0.13.2 (2026-09-10)
 
 ### 新增：Playwright MCP 浏览器自动化连接器
