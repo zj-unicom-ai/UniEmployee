@@ -51,7 +51,7 @@ export function extractReport(md) {
   return { reportHtml: html, cleanedMd }
 }
 
-export function useChatStream({ stageStates, stageDetail, messages, scrollToBottom }) {
+export function useChatStream({ stageStates, stageDetail, messages, scrollToBottom, onFile }) {
   const sending = ref(false)
   let activeController = null
 
@@ -128,6 +128,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.files.some(f => f.path === ev.path)) {
         msg.files.push({ name: ev.name, path: ev.path, size: ev.size })
       }
+      onFile?.(ev)
       touch()
     } else if (ev.type === 'subagent') {
       if (!msg.subagents) msg.subagents = []

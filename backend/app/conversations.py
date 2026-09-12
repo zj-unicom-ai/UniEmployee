@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS channel_members (
     sort_order INTEGER DEFAULT 0,
     PRIMARY KEY(channel_id, employee_id)
 );
+CREATE TABLE IF NOT EXISTS conversation_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conv_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size INTEGER DEFAULT 0,
+    created_at TEXT,
+    UNIQUE(conv_id, path)
+);
 """
 
 
@@ -226,6 +235,35 @@ def get(conv_id: str) -> dict | None:
     with _conn() as con:
         r = con.execute("SELECT * FROM conversations WHERE conv_id=? AND deleted_at IS NULL", (conv_id,)).fetchone()
     return dict(r) if r else None
+
+
+def add_file(conv_id: str, name: str, path: str, size: int = 0) -> None:
+    """登记回合产物文件（SSE file 事件同步落库，历史会话恢复时可见）。
+
+    UNIQUE(conv_id, path) 幂等：同一会话同一文件不重复登记，重跑覆盖产物不产生冗余行。
+    落库失败不抛出（产物登记失败不应影响对话流）。
+    """
+    try:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with _conn() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,created_at) "
+                "VALUES(?,?,?,?,?)", (conv_id, name, path, size, now))
+            con.commit()
+    except Exception:
+        pass
+
+
+def list_files(conv_id: str) -> list[dict]:
+    """列出会话的全部产物文件（按登记时间倒序）。"""
+    try:
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT name,path,size,created_at FROM conversation_files "
+                "WHERE conv_id=? ORDER BY id DESC", (conv_id,)).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 
 def delete(conv_id: str) -> bool:

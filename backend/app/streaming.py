@@ -528,8 +528,11 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 产物文件探测：write_file/execute/edit_file/run_python 之后
                         # 对比 workspace/data 快照，把新增/修改的产物推 file 事件，
                         # 前端渲染成可下载卡片（此前只以文本路径出现在回答里，无法下载）。
+                        # 同步落库 conversation_files：file 事件是即时推送，
+                        # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python"):
                             for f in file_watcher.diff():
+                                conversations.add_file(conv_id, f["name"], f["path"], f.get("size", 0))
                                 yield sse({"type": "file", **f})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)

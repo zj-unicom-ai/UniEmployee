@@ -39,6 +39,12 @@
         <n-button size="small" @click="openTrace">🔎 执行过程</n-button>
       </div>
 
+      <!-- 会话产物文件（实时新增 + 历史恢复，可下载/预览） -->
+      <div v-if="convFiles.length" class="conv-files">
+        <span class="conv-files-title">会话产物</span>
+        <FileCard v-for="f in convFiles" :key="f.path" :file="f" />
+      </div>
+
       <div class="msgs" ref="msgsRef">
         <ChatMessage
           v-for="(msg, idx) in messages" :key="idx"
@@ -69,6 +75,7 @@ import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
 import PipelineSidebar from '../components/chat/PipelineSidebar.vue'
 import ChatMessage from '../components/chat/ChatMessage.vue'
 import InputBar from '../components/chat/InputBar.vue'
+import FileCard from '../components/chat/FileCard.vue'
 import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'ChatView' })
@@ -82,6 +89,7 @@ const currentEmp = ref(null)
 const convId = ref(null)
 const convList = ref([])
 const messages = ref([])
+const convFiles = ref([])   // 会话产物文件清单（历史恢复 + 实时新增）
 const empMeta = ref('')
 const hint = ref('向数字员工提问吧。')
 const msgsRef = ref(null)
@@ -114,7 +122,15 @@ function scrollToBottom() {
 }
 
 /* ---------- SSE 流 ---------- */
-const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
+const stream = useChatStream({
+  stageStates, stageDetail, messages, scrollToBottom,
+  // 产物文件实时加入会话产物区（历史恢复的清单在 openConversation 里赋值）
+  onFile: (ev) => {
+    if (!convFiles.value.some(f => f.path === ev.path)) {
+      convFiles.value.push({ name: ev.name, path: ev.path, size: ev.size })
+    }
+  },
+})
 
 /* ---------- 发送 / 审批 ---------- */
 const uploading = ref(false)
@@ -190,6 +206,8 @@ async function openConversation(cid) {
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
+    // 恢复会话产物文件清单（file 事件为即时推送，历史从这里取）
+    convFiles.value = data.files || []
     messages.value = []
     stream.resetPipeline()
     for (const t of (data.turns || [])) {
@@ -242,6 +260,7 @@ async function loadAiModels() {
 }
 
 function newConv() {
+  convFiles.value = []
   if (currentEmp.value) selectEmployee(currentEmp.value)
 }
 
@@ -273,7 +292,9 @@ onMounted(async () => {
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
       if (!convId.value && data.length) await selectEmployee(data[0].id)
     } else if (data.length) {
-      await selectEmployee(data[0].id)
+      // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
+      const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
+      await selectEmployee(target ? target.id : data[0].id)
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message
@@ -301,4 +322,20 @@ onBeforeUnmount(() => {
 }
 .emp-meta { font-size: 12px; color: #64748b; flex: 1; }
 .msgs { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.conv-files {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+.conv-files-title {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 44px;
+  flex-shrink: 0;
+}
+.conv-files :deep(.file-card) { width: 300px; margin: 0; background: #ffffff; }
 </style>
