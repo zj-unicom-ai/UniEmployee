@@ -98,6 +98,40 @@ def test_backfill_employees_if_missing_adds_netops():
     catalog.backfill_employees_if_missing()
 
 
+def test_backfill_employees_if_missing_adds_market_intel():
+    """老库补种：market-intel 员工缺失时由 backfill 补回（含技能/工具/连接器指派）。"""
+    catalog.init()
+    catalog.seed_if_empty()  # 新库播种已含 market-intel
+    cfg = catalog.get_employee_config("market-intel")
+    assert cfg["name"] == "小察"
+    assert "market-daily-brief" in cfg["skills"]
+
+    # 模拟老库（无 market-intel）：硬删相关行后 backfill 应补回
+    con = sqlite3.connect(str(catalog.db.DB))
+    for tbl in ("employee_skills", "employee_tools", "employee_kbs",
+                "employee_sops", "employee_connectors"):
+        con.execute(f"DELETE FROM {tbl} WHERE employee_id='market-intel'")
+    con.execute("DELETE FROM user_employee_assignments WHERE employee_id='market-intel'")
+    con.execute("DELETE FROM employees WHERE id='market-intel'")
+    con.commit()
+    con.close()
+    assert catalog.get_employee_config("market-intel") is None
+
+    catalog.backfill_employees_if_missing()
+    catalog.backfill_connectors()
+    cfg = catalog.get_employee_config("market-intel")
+    assert cfg is not None and cfg["name"] == "小察"
+    assert set(cfg["skills"]) >= {"market-daily-brief", "competitor-deep-dive",
+                                  "market-alert-triage"}
+    assert "bocha_search" in cfg["tools"]
+    assert "ontology_find_entities" in cfg["tools"]
+    # 连接器指派：newsnow + playwright
+    assert set(cfg.get("connectors") or []) >= {"newsnow", "playwright"}
+    # 幂等：再跑一次不重复
+    catalog.backfill_employees_if_missing()
+    catalog.backfill_connectors()
+
+
 # ---- 知识库（RAGFlow 映射） ----
 
 def test_kb_crud_only_tracks_ragflow_dataset_mapping():

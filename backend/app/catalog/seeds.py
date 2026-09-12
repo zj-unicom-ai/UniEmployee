@@ -43,8 +43,8 @@ CONNECTOR_SEEDS = [
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
-CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"],
-                    "playwright": ["net-ops"]}
+CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-intel"],
+                    "playwright": ["net-ops", "market-intel"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
@@ -176,6 +176,10 @@ EMPLOYEE_SEEDS = {
         tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
+    "market-intel": dict(
+        skills=["market-daily-brief", "competitor-deep-dive", "market-alert-triage"],
+        tools=_tools_with_ontology(["kb_search", "bocha_search", "get_current_time"]),
+        kbs=[], sops=[], cons=["newsnow", "playwright"]),
     "unicom-presale": dict(
         skills=["unicom-presale-faq"],
         tools=["kb_search", "create_ticket"],
