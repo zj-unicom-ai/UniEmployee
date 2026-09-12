@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS conversation_files (
     name TEXT NOT NULL,
     path TEXT NOT NULL,
     size INTEGER DEFAULT 0,
+    turn_no INTEGER,
     created_at TEXT,
     UNIQUE(conv_id, path)
 );
@@ -98,6 +99,10 @@ def _migrate(con):
     # 会话级模型绑定：补 model 列
     if "model" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
+    # 会话产物文件：turn_no 归属轮次（老表补列）
+    fcols = dblayer.table_columns(con, "conversation_files")
+    if fcols and "turn_no" not in fcols:
+        con.execute("ALTER TABLE conversation_files ADD COLUMN turn_no INTEGER")
     con.commit()
 
 
@@ -237,9 +242,11 @@ def get(conv_id: str) -> dict | None:
     return dict(r) if r else None
 
 
-def add_file(conv_id: str, name: str, path: str, size: int = 0) -> None:
+def add_file(conv_id: str, name: str, path: str, size: int = 0,
+             turn_no: int | None = None) -> None:
     """登记回合产物文件（SSE file 事件同步落库，历史会话恢复时可见）。
 
+    turn_no 为归属的用户轮次（1-based），历史恢复时把文件挂回生成它的那条回答。
     UNIQUE(conv_id, path) 幂等：同一会话同一文件不重复登记，重跑覆盖产物不产生冗余行。
     落库失败不抛出（产物登记失败不应影响对话流）。
     """
@@ -247,8 +254,8 @@ def add_file(conv_id: str, name: str, path: str, size: int = 0) -> None:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with _conn() as con:
             con.execute(
-                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,created_at) "
-                "VALUES(?,?,?,?,?)", (conv_id, name, path, size, now))
+                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,turn_no,created_at) "
+                "VALUES(?,?,?,?,?,?)", (conv_id, name, path, size, turn_no, now))
             con.commit()
     except Exception:
         pass
@@ -259,7 +266,7 @@ def list_files(conv_id: str) -> list[dict]:
     try:
         with _conn() as con:
             rows = con.execute(
-                "SELECT name,path,size,created_at FROM conversation_files "
+                "SELECT name,path,size,turn_no,created_at FROM conversation_files "
                 "WHERE conv_id=? ORDER BY id DESC", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     except Exception:

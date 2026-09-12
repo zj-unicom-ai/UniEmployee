@@ -105,10 +105,10 @@ def test_workspace_file_watcher_diff(monkeypatch, tmp_path):
     info = got[0]
     assert info["path"] == "汇报.md" and info["size"] == len("# hi".encode())
 
-    # 无新变更不重复推送；已有文件内容更新会再次推送
+    # 无新变更不重复推送；同回合内同一文件重复触碰也不重复推送
     assert w.diff() == []
     _make_file(tmp_path, "汇报.md", "# updated")
-    assert [f["name"] for f in w.diff()] == ["汇报.md"]
+    assert w.diff() == []
 
 
 # ---------- 会话产物落库与历史恢复 ----------
@@ -117,11 +117,14 @@ def test_conversation_files_persist_and_dedupe():
     from app import conversations
     conversations.create("c_files_demo", "xiaoxiao", title="t", preview="p",
                          count=1, user_id="u_admin")
-    conversations.add_file("c_files_demo", "方案.docx", "方案.docx", 100)
-    conversations.add_file("c_files_demo", "方案.docx", "方案.docx", 100)  # 幂等去重
-    conversations.add_file("c_files_demo", "纪要.md", "纪要.md", 50)
+    conversations.add_file("c_files_demo", "方案.docx", "方案.docx", 100, turn_no=3)
+    conversations.add_file("c_files_demo", "方案.docx", "方案.docx", 100, turn_no=3)  # 幂等去重
+    conversations.add_file("c_files_demo", "纪要.md", "纪要.md", 50, turn_no=5)
 
     files = conversations.list_files("c_files_demo")
     assert len(files) == 2  # UNIQUE(conv_id, path) 去重
     assert {f["name"] for f in files} == {"方案.docx", "纪要.md"}
     assert files[0]["name"] == "纪要.md"  # 按登记时间倒序
+    by_name = {f["name"]: f for f in files}
+    assert by_name["方案.docx"]["turn_no"] == 3
+    assert by_name["纪要.md"]["turn_no"] == 5

@@ -334,6 +334,7 @@ class _WorkspaceFileWatcher:
 
     def __init__(self):
         self._seen: dict[str, float] = {}
+        self._emitted: set[str] = set()   # 本回合已推送过的文件，重复触碰不再推送
         self.snapshot()
 
     def _scan(self) -> dict[str, float]:
@@ -357,13 +358,18 @@ class _WorkspaceFileWatcher:
         self._seen = self._scan()
 
     def diff(self) -> list[dict]:
-        """返回相对上次快照新增/修改的文件信息列表，并滚动快照。"""
+        """返回相对上次快照新增/修改的文件信息列表，并滚动快照。
+
+        同一回合内同一文件只推送一次（后续触碰不再重复emit，前端/DB 均按 path 去重）。
+        """
         cur = self._scan()
         fresh = [k for k, m in cur.items()
                  if k not in self._seen or m > self._seen[k] + 1e-6]
         self._seen = cur
         infos = []
         for rel in fresh[: self.MAX_PER_TURN]:
+            if rel in self._emitted:
+                continue
             p = WORKSPACE_DATA / rel
             try:
                 st = p.stat()
@@ -371,6 +377,7 @@ class _WorkspaceFileWatcher:
                 continue
             if st.st_size > self.MAX_FILE_SIZE:
                 continue
+            self._emitted.add(rel)
             infos.append({"name": p.name, "path": rel, "size": st.st_size})
         return infos
 
@@ -431,6 +438,16 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
 
     config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id},
               "callbacks": [tracer]}
+    # 当前用户轮次（1-based）= checkpoint 中已有 HumanMessage 数 + 1。
+    # 产物文件按轮次落库（conversation_files.turn_no），历史恢复时挂回生成它的那条回答；
+    # 审批恢复路径 checkpoint 已含本轮 HumanMessage，U+1 仍指向同一轮。
+    turn_no = None
+    try:
+        pre_states = [s async for s in agent.aget_state_history(config, limit=1)]
+        pre_msgs = pre_states[0].values.get("messages", []) if pre_states else []
+        turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)) + 1
+    except Exception:
+        turn_no = None
     skill_stage_on = False
     bot_text = ""
 
@@ -532,8 +549,9 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python"):
                             for f in file_watcher.diff():
-                                conversations.add_file(conv_id, f["name"], f["path"], f.get("size", 0))
-                                yield sse({"type": "file", **f})
+                                conversations.add_file(conv_id, f["name"], f["path"],
+                                                       f.get("size", 0), turn_no)
+                                yield sse({"type": "file", **f, "turn_no": turn_no})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,

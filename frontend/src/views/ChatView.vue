@@ -39,12 +39,6 @@
         <n-button size="small" @click="openTrace">🔎 执行过程</n-button>
       </div>
 
-      <!-- 会话产物文件（实时新增 + 历史恢复，可下载/预览） -->
-      <div v-if="convFiles.length" class="conv-files">
-        <span class="conv-files-title">会话产物</span>
-        <FileCard v-for="f in convFiles" :key="f.path" :file="f" />
-      </div>
-
       <div class="msgs" ref="msgsRef">
         <ChatMessage
           v-for="(msg, idx) in messages" :key="idx"
@@ -75,7 +69,6 @@ import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
 import PipelineSidebar from '../components/chat/PipelineSidebar.vue'
 import ChatMessage from '../components/chat/ChatMessage.vue'
 import InputBar from '../components/chat/InputBar.vue'
-import FileCard from '../components/chat/FileCard.vue'
 import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'ChatView' })
@@ -89,7 +82,6 @@ const currentEmp = ref(null)
 const convId = ref(null)
 const convList = ref([])
 const messages = ref([])
-const convFiles = ref([])   // 会话产物文件清单（历史恢复 + 实时新增）
 const empMeta = ref('')
 const hint = ref('向数字员工提问吧。')
 const msgsRef = ref(null)
@@ -122,15 +114,7 @@ function scrollToBottom() {
 }
 
 /* ---------- SSE 流 ---------- */
-const stream = useChatStream({
-  stageStates, stageDetail, messages, scrollToBottom,
-  // 产物文件实时加入会话产物区（历史恢复的清单在 openConversation 里赋值）
-  onFile: (ev) => {
-    if (!convFiles.value.some(f => f.path === ev.path)) {
-      convFiles.value.push({ name: ev.name, path: ev.path, size: ev.size })
-    }
-  },
-})
+const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
 /* ---------- 发送 / 审批 ---------- */
 const uploading = ref(false)
@@ -206,12 +190,21 @@ async function openConversation(cid) {
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
-    // 恢复会话产物文件清单（file 事件为即时推送，历史从这里取）
-    convFiles.value = data.files || []
+    // 产物文件按归属轮次（turn_no）挂到生成它的那条回答消息上；
+    // 无轮次信息的旧数据挂到最后一 条回答。实时生成走 file 事件直接进 msg.files。
+    const filesByTurn = {}
+    for (const f of (data.files || [])) {
+      const t = f.turn_no || 0
+      ;(filesByTurn[t] = filesByTurn[t] || []).push(f)
+    }
     messages.value = []
     stream.resetPipeline()
+    let userTurn = 0
+    let lastBot = null
+    const turnLastBot = {}
     for (const t of (data.turns || [])) {
       if (t.role === 'user') {
+        userTurn++
         messages.value.push({ role: 'user', content: t.content, time: fmtNow() })
       } else {
         const msg = { role: 'bot', content: '', html: renderMd(t.content || ''), _md: t.content || '', trace: [], time: fmtNow() }
@@ -225,6 +218,17 @@ async function openConversation(cid) {
           }))
         }
         messages.value.push(msg)
+        lastBot = msg
+        turnLastBot[userTurn] = msg
+      }
+    }
+    for (const group of Object.values(filesByTurn)) {
+      for (const f of group) {
+        const target = turnLastBot[f.turn_no] || lastBot
+        if (target) {
+          if (!target.files) target.files = []
+          if (!target.files.some(x => x.path === f.path)) target.files.push(f)
+        }
       }
     }
     scrollToBottom()
@@ -260,7 +264,6 @@ async function loadAiModels() {
 }
 
 function newConv() {
-  convFiles.value = []
   if (currentEmp.value) selectEmployee(currentEmp.value)
 }
 
@@ -322,20 +325,4 @@ onBeforeUnmount(() => {
 }
 .emp-meta { font-size: 12px; color: #64748b; flex: 1; }
 .msgs { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
-.conv-files {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 16px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
-}
-.conv-files-title {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 44px;
-  flex-shrink: 0;
-}
-.conv-files :deep(.file-card) { width: 300px; margin: 0; background: #ffffff; }
 </style>
