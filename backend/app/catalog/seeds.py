@@ -43,8 +43,8 @@ CONNECTOR_SEEDS = [
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
-CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"],
-                    "playwright": ["net-ops"]}
+CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-intel"],
+                    "playwright": ["net-ops", "market-intel"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
@@ -176,6 +176,11 @@ EMPLOYEE_SEEDS = {
         tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
+    "market-intel": dict(
+        skills=["market-daily-brief", "competitor-deep-dive", "market-alert-triage"],
+        tools=_tools_with_ontology(["kb_search", "bocha_search", "get_current_time",
+                                    "publish_briefing"]),
+        kbs=[], sops=[], cons=["newsnow", "playwright"]),
     "unicom-presale": dict(
         skills=["unicom-presale-faq"],
         tools=["kb_search", "create_ticket"],
@@ -207,6 +212,9 @@ def seed_if_empty():
         ("start_refund", "退款流程", "发起退款（需人工审批）", "local",
          json.dumps(["approve", "reject"])),
         ("bocha_search", "联网搜索", "联网搜索实时信息（博查）", "local", None),
+        ("publish_briefing", "发布市场简报",
+         "把生成的市场简报看板提交发布（需人工审批，批准后归档为 HTML 文件并外发）", "local",
+         json.dumps(["approve", "reject"])),
         ("get_my_id", "获取用户ID", "返回当前登录用户的 ID", "local", None),
         ("get_current_time", "获取当前时间", "获取当前真实日期时间（东八区）", "local", None),
         ("generate_solution_doc", "生成方案文档",
@@ -338,6 +346,26 @@ def backfill_ontology_tools():
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    con.commit()
+    con.close()
+
+
+def backfill_market_intel_v2():
+    """老库补齐 market-intel V2 能力：publish_briefing 发布审批工具（幂等）。
+
+    对新库由 seed_if_empty 写入；对已存在的库用 INSERT OR IGNORE 补缺。
+    needs_approval 使编译层自动派生 interrupt_on，简报发布前挂人工审批。
+    不覆盖管理员在资源中心的自定义改动。"""
+    con = _conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+        "VALUES(?,?,?,?,?)",
+        ("publish_briefing", "发布市场简报",
+         "把生成的市场简报看板提交发布（需人工审批，批准后归档为 HTML 文件并外发）",
+         "local", json.dumps(["approve", "reject"])))
+    if cur.execute("SELECT 1 FROM employees WHERE id='market-intel' AND deleted_at IS NULL").fetchone():
+        cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('market-intel','publish_briefing')")
     con.commit()
     con.close()
 

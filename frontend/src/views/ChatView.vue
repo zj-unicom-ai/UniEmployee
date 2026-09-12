@@ -97,6 +97,7 @@ const modelOptions = computed(() =>
 
 const HINTS = {
   xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
+  'market-intel': '试试：\n① 最近有什么值得关注的行业动态？出一份今日简报\n② 声湃科技把 Mini3 降到 299 了，出个对标分析\n③ 刷到消息说光屿智能融资了 3 个亿，要不要紧？\n④ 简报好了，归档发布（走人工审批）',
 }
 
 // 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
@@ -207,7 +208,11 @@ async function openConversation(cid) {
         userTurn++
         messages.value.push({ role: 'user', content: t.content, time: fmtNow() })
       } else {
-        const msg = { role: 'bot', content: '', html: renderMd(t.content || ''), _md: t.content || '', trace: [], time: fmtNow() }
+        // 历史消息同样抽取 REPORT_HTML 包裹的看板/报告（与流式 useChatStream 行为一致），
+        // markdown 渲染的是去掉报告段后的剩余文本
+        const { reportHtml, cleanedMd } = extractReport(t.content || '')
+        const msg = { role: 'bot', content: '', html: renderMd(cleanedMd), _md: t.content || '', trace: [], time: fmtNow() }
+        if (reportHtml) msg.reportHtml = reportHtml
         if (t.tool_calls && t.tool_calls.length) {
           msg.trace = t.tool_calls.map(tc => ({
             type: 'tool',
@@ -279,7 +284,7 @@ function fmtNow() {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
 }
 
-import { renderMd } from '../composables/useChatStream.js'
+import { renderMd, extractReport } from '../composables/useChatStream.js'
 
 /* ---------- 初始化 ---------- */
 onMounted(async () => {

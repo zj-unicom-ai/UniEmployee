@@ -266,6 +266,62 @@ def mark_result(aid: str, status: str, error: str = "", conv_id: str = "") -> No
 
 
 # ---------------------------------------------------------------------------
+# 市场情报员工 V2 值守种子任务（幂等，默认停用——管理员在自动化任务页开启）
+# ---------------------------------------------------------------------------
+
+AUTOMATION_SEEDS = [
+    {
+        "id": "auto_seed_market_daily_brief",
+        "name": "每日市场简报（小察）",
+        "trigger_type": "cron",
+        "cron_expr": "30 8 * * 1-5",
+        "event_key": "",
+        "secret": "",
+        # 无人值守提示词：直接按默认监测范围执行，收尾必须走发布审批
+        "prompt": ("【自动化值守】现在是 {{now}}。请按 market-daily-brief 技能规程"
+                   "生成今日市场简报看板：完整执行采集→筛选→成文流程，"
+                   "不要向用户提问（无人值守，直接按默认监测范围执行），"
+                   "完成后调用 publish_briefing 提交发布审批。"),
+        "run_as": "u_admin",
+        "channel_id": "",
+    },
+    {
+        "id": "auto_seed_market_alert_event",
+        "name": "市场信号预警研判（小察）",
+        "trigger_type": "event",
+        "cron_expr": "",
+        "event_key": "market-signal",
+        "secret": "",
+        "prompt": ("【自动化值守】收到外部市场信号，请按 market-alert-triage 技能规程"
+                   "先核实后分级，产出预警简卡（无人值守，检索不到佐证时如实标注），"
+                   "信号内容如下：\n{{payload}}"),
+        "run_as": "u_admin",
+        "channel_id": "",
+    },
+]
+
+
+def backfill_seeds():
+    """幂等补种市场情报员工的值守任务模板（仅缺行时插入，默认停用）。
+
+    不覆盖已有行：管理员开启/修改后重启不会被种子重置。默认 enabled=0，
+    避免部署即开始消耗模型调用；启用与调度（含审批流）在自动化任务页完成。"""
+    now = time.strftime(TS_FULL)
+    with _conn() as con:
+        for s in AUTOMATION_SEEDS:
+            con.execute(
+                "INSERT OR IGNORE INTO automations"
+                "(id, name, trigger_type, cron_expr, event_key, secret, employee_id,"
+                " prompt, run_as, channel_id, enabled, next_fire_at, created_by,"
+                " created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,0,NULL,'seed',?,?)",
+                (s["id"], s["name"], s["trigger_type"], s["cron_expr"], s["event_key"],
+                 s["secret"], "market-intel", s["prompt"], s["run_as"], s["channel_id"],
+                 now, now))
+        con.commit()
+
+
+# ---------------------------------------------------------------------------
 # 执行引擎：复用 _stream_run，结果落会话 + 可选推送
 # ---------------------------------------------------------------------------
 

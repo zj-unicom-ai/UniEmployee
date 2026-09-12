@@ -27,6 +27,8 @@ emit: rated(msg, rating, reason)
       <div class="msg bot">
         <div v-if="msg.html" class="md" v-html="msg.html"></div>
         <div v-else-if="msg.content" class="md">{{ msg.content }}</div>
+        <!-- 报告/看板 HTML（REPORT_HTML_START/END 抽取通道），iframe 沙箱渲染 + 下载/新窗口 -->
+        <ReportViewer v-if="msg.reportHtml" :html="msg.reportHtml" style="margin: 8px 0 4px" />
         <div v-if="msg.error" class="msg-error">⚠ {{ msg.error }}</div>
         <div v-if="!msg.html && !msg.content && !msg.error" class="msg-loading">
           <span class="loading-dot">.</span>
@@ -129,6 +131,7 @@ emit: rated(msg, rating, reason)
 import { ref } from 'vue'
 import ReasonPopover from './ReasonPopover.vue'
 import FileCard from './FileCard.vue'
+import ReportViewer from '../agent/analyst/ReportViewer.vue'
 
 const props = defineProps({
   msg: { type: Object, required: true },

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.14.1 (2026-09-12)
+
+### 新增：市场情报数字员工「小察」（market-intel）
+
+- 第七个内置员工：值守式情报岗（区别于 biz-analyzer 内按需问答的 market-intelligence 技能），持续监测行业/竞品/政策 → HTML 在线看板输出
+- 员工配置：composed/state 后端（看板走对话内 HTML 通道，无文件系统），intel-scouter 只读检索子代理（≥3 次检索委派采集），newsnow/playwright 连接器指派；老库经 `backfill_employees_if_missing` / `backfill_connectors` 幂等补种
+- 三个技能（SKILL.md 播种进 Store，运行时 read_file）：
+  - **market-daily-brief**：多源采集→筛选核实→每日简报看板（纯 CSS：预警横幅/头条/竞品卡墙/政策/建议关注/来源汇总，每条强制来源+日期标注）
+  - **competitor-deep-dive**：竞品档案附录（声湃/光屿/极映）+ 联网核实 + 对标看板（对比总表/SWOT/ECharts 价格带图）
+  - **market-alert-triage**：先核实后分级的 P0/P1/P2 预警简卡
+- 看板统一走 `REPORT_HTML_START/END` 分隔符作为消息文本输出（复用小数报告通道），persona/规程写明禁落盘红线
+
+### 新增：主聊天看板渲染
+
+- ChatMessage 挂载现成 ReportViewer（iframe 沙箱 + 下载/新窗口，此前仅小数工作台渲染）
+- ChatView 历史会话恢复补 `extractReport` 抽取，与流式行为一致
+
+### 新增（V2）：自动值守闭环——定时简报 + 发布人工审批 + 预警事件触发
+
+- **publish_briefing 发布审批工具**：tools.needs_approval=["approve","reject"] 派生 interrupt_on，发布前挂人工审批卡，批准前内容不外发；批准后归档 HTML 至 `workspace/data/<uid>/briefings/`（产物文件卡可下载），`MARKET_INTEL_PUBLISH_WEBHOOK` 可选外推
+- streaming 产物文件探测加入 publish_briefing，归档即时出文件卡
+- **值守任务模板**（`automations.backfill_seeds()`，幂等、默认停用、不覆盖管理员改动）：
+  - `auto_seed_market_daily_brief`：工作日 08:30 cron 生成每日简报，无人值守不反问，收尾强制走发布审批
+  - `auto_seed_market_alert_event`：外部系统 POST `/api/automations/events/market-signal`（payload 注入 {{payload}}）触发预警研判
+- 技能规程补值守模式与发布审批流程；P0/P1 预警外发同走审批闸门
+- ChatView 增加小察引导提示
+
+### 测试
+
+- 新增 market-intel 补种、publish_briefing 登记/审批派生/归档包装、值守种子任务幂等共 10 个用例；全量 pytest 失败清单与 0.14.0 基线一致
+
 ## 0.14.0 (2026-09-12)
 
 ### 新增：客户经理数字员工升级全生命周期经营 + 浙江联通×吉利汽车演示案例
