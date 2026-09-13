@@ -83,6 +83,18 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 - [企业落地技术支撑](#企业落地技术支撑)
 - [许可证](#许可证)
 
+## 文档导航
+
+| 我想要 | 去哪里 |
+|---|---|
+| 部署 / 备份 / 排障 | [docs/guide/deployment.md](docs/guide/deployment.md) |
+| 全部环境变量说明 | [docs/guide/configuration.md](docs/guide/configuration.md) |
+| 新增一个数字员工 | [docs/guide/add-employee.md](docs/guide/add-employee.md) |
+| 编写技能规程（SKILL.md） | [docs/guide/skill-authoring.md](docs/guide/skill-authoring.md) |
+| 开发自定义工具 | [docs/guide/custom-tools.md](docs/guide/custom-tools.md) |
+| 参与贡献 / 发布流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 平台原理深度解读（8 篇系列） | [docs/articles](docs/articles/README.md) |
+
 ## 快速开始
 
 ### 环境要求
@@ -229,6 +241,7 @@ UniEmployee/
 │   └── skills/               # 内置技能（SKILL.md + frontmatter）
 ├── frontend/                 # Vue 3 + Vite + Naive UI + Pinia 管理后台
 ├── tests/                    # pytest（夹具强制 sqlite 临时库，不碰真实数据）
+├── docs/                     # 技术文档：guide/（实操手册）+ articles/（原理解读系列）
 ├── scripts/init_postgres.sql # 建库 SQL（docker 首次启动自动执行）
 ├── scripts/init_postgres.sh  # 幂等建库脚本（已有 PG 实例用）
 └── scripts/backup.sh         # 数据库备份（pg_dump）
