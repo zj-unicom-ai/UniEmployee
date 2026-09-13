@@ -3,7 +3,11 @@
 设计要点：
 - 通用 schema：类型表存元结构（attrs 为 JSON 数组），实例表存 JSON 属性，不预判业务字段。
 - 两层隔离：schema 层 system 租户预置 + 各租户可自定义；data 层按 tenant_id 隔离。
-- 运行时工具（ontology_find_entities / ontology_query_relations）只做业务事实查询。
+- 运行时工具：ontology_find_entities / ontology_query_relations 只读查询，
+  ontology_write 为对话写回（仅授权员工装配，见 tools/ontology_tools.py）。
+- 数据溯源：entities/relations 的 source 列区分来源
+  （seed=系统种子 / admin=管理端录入 / chat=对话写回 / import=文档导入），
+  source_ref 记录来源会话等引用，created_by 记录操作人，配合审计日志追溯。
 """
 
 import json
@@ -16,6 +20,12 @@ from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent.parent  # backend/
 DB = db_path("ontology.db")
+
+# 数据来源标记
+SOURCE_SEED = "seed"
+SOURCE_ADMIN = "admin"
+SOURCE_CHAT = "chat"
+SOURCE_IMPORT = "import"
 
 
 def _conn():
@@ -64,6 +74,9 @@ def init():
       name TEXT NOT NULL,
       props TEXT DEFAULT '{}',
       tenant_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'seed',
+      source_ref TEXT,
+      created_by TEXT,
       created_at TEXT, updated_at TEXT, deleted_at TEXT);
     CREATE TABLE IF NOT EXISTS relations(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,14 +85,34 @@ def init():
       relation_type TEXT NOT NULL,
       props TEXT DEFAULT '{}',
       tenant_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'seed',
+      source_ref TEXT,
+      created_by TEXT,
       created_at TEXT, updated_at TEXT, deleted_at TEXT);
     CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
     CREATE INDEX IF NOT EXISTS idx_entities_tenant ON entities(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_id);
     CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_id);
     """)
+    _migrate_source_columns(con)
     con.commit()
     con.close()
+
+
+def _migrate_source_columns(con):
+    """老库补 source/source_ref/created_by 三列（数据溯源，幂等）。
+
+    存量数据统一视为 seed（系统种子/历史录入），新增写回数据才标 chat/admin。
+    """
+    for table in ("entities", "relations"):
+        cols = dblayer.table_columns(con, table)
+        if "source" not in cols:
+            con.execute(
+                f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'seed'")
+        if "source_ref" not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN source_ref TEXT")
+        if "created_by" not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN created_by TEXT")
 
 
 # ---------------- 种子数据 ----------------
@@ -720,7 +753,8 @@ def get_entity(tenant_id: str, id_: int) -> dict | None:
     return _row_to_dict(row) if row else None
 
 
-def create_entity(tenant_id: str, data: dict) -> int:
+def create_entity(tenant_id: str, data: dict, *, source: str = SOURCE_ADMIN,
+                  source_ref: str | None = None, created_by: str | None = None) -> int:
     type_, name = (data.get("entity_type") or "").strip(), (data.get("name") or "").strip()
     if not type_ or not name:
         raise ValueError("entity_type 与 name 必填")
@@ -733,26 +767,92 @@ def create_entity(tenant_id: str, data: dict) -> int:
     try:
         rid = dblayer.insert_returning_id(
             con,
-            "INSERT INTO entities(entity_type,name,props,tenant_id,created_at,updated_at)"
-            " VALUES(?,?,?,?,?,?)",
-            (type_, name, props, tenant_id, now, now))
+            "INSERT INTO entities(entity_type,name,props,tenant_id,source,source_ref,"
+            "created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (type_, name, props, tenant_id, source, source_ref, created_by, now, now))
         con.commit()
         return rid
     finally:
         con.close()
 
 
-def update_entity(tenant_id: str, id_: int, data: dict) -> None:
+def update_entity(tenant_id: str, id_: int, data: dict, *, source: str = SOURCE_ADMIN,
+                  source_ref: str | None = None, created_by: str | None = None) -> None:
     props = json.dumps(data.get("props") or {}, ensure_ascii=False)
     con = _conn()
     if not _type_visible(con, "entity_types", data.get("entity_type") or "", tenant_id):
         con.close()
         raise ValueError(f"实体类型 {data.get('entity_type')} 不存在")
     con.execute(
-        "UPDATE entities SET entity_type=?, name=?, props=?, updated_at=? WHERE id=? AND tenant_id=?",
-        (data.get("entity_type"), data.get("name"), props, _now(), id_, tenant_id))
+        "UPDATE entities SET entity_type=?, name=?, props=?, source=?, source_ref=?, "
+        "created_by=?, updated_at=? WHERE id=? AND tenant_id=?",
+        (data.get("entity_type"), data.get("name"), props, source, source_ref,
+         created_by, _now(), id_, tenant_id))
     con.commit()
     con.close()
+
+
+def resolve_entity(tenant_id: str, entity_type: str, name: str) -> dict:
+    """按名称解析唯一实体（对话写回时用名称指定端点）：
+
+    - 精确同名优先；
+    - 无精确命中时做唯一包含匹配（忽略大小写），命中多个则歧义报错；
+    - 0 个或多个候选均抛 ValueError，由调用方把候选反馈给模型/用户。
+    """
+    name = (name or "").strip()
+    type_ = (entity_type or "").strip()
+    if not type_ or not name:
+        raise ValueError("entity_type 与 name 必填")
+    con = _conn()
+    exact = con.execute(
+        "SELECT * FROM entities WHERE tenant_id=? AND entity_type=? AND name=? "
+        "AND deleted_at IS NULL", (tenant_id, type_, name)).fetchall()
+    if len(exact) == 1:
+        con.close()
+        return _row_to_dict(exact[0])
+    rows = con.execute(
+        "SELECT * FROM entities WHERE tenant_id=? AND entity_type=? AND deleted_at IS NULL "
+        "AND LOWER(name) LIKE ? ORDER BY id",
+        (tenant_id, type_, f"%{name.lower()}%")).fetchall()
+    con.close()
+    if len(rows) == 1:
+        return _row_to_dict(rows[0])
+    if not rows:
+        raise ValueError(f"未找到 {type_} 类型中名为「{name}」的实体，请先用 ontology_find_entities 确认")
+    names = "、".join(r["name"] for r in rows[:10])
+    raise ValueError(f"名称「{name}」匹配到多个 {type_}（{names}），请改用实体 id 指定")
+
+
+def patch_entity(tenant_id: str, id_: int, props: dict | None = None,
+                 name: str | None = None, *, source: str = SOURCE_CHAT,
+                 source_ref: str | None = None,
+                 created_by: str | None = None) -> tuple[dict, dict]:
+    """对话写回专用的增量更新：props 与现有属性浅合并（None 值删除该键），
+    name 非空才改名。返回 (更新前, 更新后) 行快照供审计。
+
+    与管理端 update_entity 的整包覆盖语义不同：聊天里"记一下王工的电话"
+    不应抹掉他原有的职位等属性。
+    """
+    before = get_entity(tenant_id, id_)
+    if not before:
+        raise ValueError(f"实体 id={id_} 不存在或不属于当前租户")
+    merged = dict(before.get("props") or {})
+    for k, v in (props or {}).items():
+        if v is None:
+            merged.pop(k, None)
+        else:
+            merged[k] = v
+    new_name = (name or "").strip() or before["name"]
+    con = _conn()
+    con.execute(
+        "UPDATE entities SET name=?, props=?, source=?, source_ref=?, created_by=?, "
+        "updated_at=? WHERE id=? AND tenant_id=?",
+        (new_name, json.dumps(merged, ensure_ascii=False), source, source_ref,
+         created_by, _now(), id_, tenant_id))
+    con.commit()
+    con.close()
+    after = get_entity(tenant_id, id_)
+    return before, after
 
 
 def delete_entity(tenant_id: str, id_: int) -> None:
@@ -780,7 +880,18 @@ def list_relations(tenant_id: str, entity_id: int | None = None) -> list[dict]:
     return out
 
 
-def create_relation(tenant_id: str, data: dict) -> int:
+def create_relation(tenant_id: str, data: dict, *, source: str = SOURCE_ADMIN,
+                    source_ref: str | None = None, created_by: str | None = None) -> int:
+    return create_relation_ex(
+        tenant_id, data, source=source, source_ref=source_ref,
+        created_by=created_by)[0]
+
+
+def create_relation_ex(tenant_id: str, data: dict, *, source: str = SOURCE_ADMIN,
+                       source_ref: str | None = None,
+                       created_by: str | None = None) -> tuple[int, bool]:
+    """同 create_relation，额外返回 created 标记：同类型重边命中时 (既有id, False)，
+    真正新建时 (新id, True)。供对话写回区分 no-op，避免幂等重记审计。"""
     from_id, to_id = data.get("from_id"), data.get("to_id")
     rel = (data.get("relation_type") or "").strip()
     if not from_id or not to_id or not rel:
@@ -806,17 +917,25 @@ def create_relation(tenant_id: str, data: dict) -> int:
         raise ValueError(
             f"关系 {rel} 要求 {rt['from_type']} → {rt['to_type']}，"
             f"实际 {from_e['entity_type']} → {to_e['entity_type']}")
+    # 同类型关系边幂等：两两端点已存在同类型未删除边则直接返回既有 id，
+    # 避免对话中重复"记一下"造成重边。
+    existed = con.execute(
+        "SELECT id FROM relations WHERE from_id=? AND to_id=? AND relation_type=? "
+        "AND tenant_id=? AND deleted_at IS NULL",
+        (from_id, to_id, rel, tenant_id)).fetchone()
+    if existed:
+        con.close()
+        return existed["id"], False
     now = _now()
-    con = _conn()
     try:
         rid = dblayer.insert_returning_id(
             con,
-            "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,created_at,updated_at)"
-            " VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO relations(from_id,to_id,relation_type,props,tenant_id,source,"
+            "source_ref,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (from_id, to_id, rel, json.dumps(data.get("props") or {}, ensure_ascii=False),
-             tenant_id, now, now))
+             tenant_id, source, source_ref, created_by, now, now))
         con.commit()
-        return rid
+        return rid, True
     finally:
         con.close()
 

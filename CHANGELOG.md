@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.15.0 (2026-09-13)
+
+### 新增：企业业务本体对话写回（ontology_write）——本体深化阶段 1 第一项
+
+- **对话即录入**：新增闭包工具 `ontology_write`，员工可在对话中把用户明确陈述的业务事实写回企业本体（全企业共享），支持三种操作：
+  - `create_entity` 新增实体（同名查重，已存在则提示走更新，不重复建）
+  - `update_entity` 增量更新（props 按 key 浅合并不抹其他字段，区别于管理端整包覆盖）
+  - `create_relation` 建立关系边（端点可用 id 或「类型+名称」指定，名称自动解析、歧义报错；复用既有 schema 两端类型校验；同类型重边幂等去重）
+- **授权红线**：写回是独立工具授权，未在资源中心勾选的员工编译时根本不注入该工具（模型无法调用）；system prompt 的写回规程也按授权挂载。默认仅授权 xiaoxiao（客户事实）与 hrbp（员工事实），老库由 `backfill_ontology_tools()` 幂等补登记/补指派，其余内置员工不补
+- **数据溯源 + 审计**：entities/relations 新增 `source`（seed/admin/chat/import）、`source_ref`（来源会话 id，取自运行时 thread_id）、`created_by`（操作人）三列，老库启动幂等 ALTER 补列、存量数据标 seed；每次写回写 catalog 审计日志（chat_create_entity/chat_update_entity/chat_create_relation，含 before/after 快照），幂等重边不重复审计
+- 管理端既有 CRUD 的写入默认标 source=admin；资源中心工具列表自动出现「企业本体写回」开关，无需前端改动
+- 招牌演示：对 HRBP 说「记一下，王工升职为信息化部副总监」→ 下一轮问「王工什么职位」，答案来自本体而非模型记忆
+
+### 测试
+
+- 新增 7 个用例：迁移幂等与 seed 溯源默认值、props 合并更新与溯源落标、名称解析（精确/模糊唯一/歧义/未命中）、关系写回去重、工具授权闸门、工具级全流程（新增→查重拒绝→合并更新→按名建边→schema 拒绝→审计齐全）、跨租户写回隔离
+- 编译器接线冒烟：授权员工实际装配 ontology_write 且 system prompt 挂写回规程，未授权员工不注入
+- 全量 pytest：新增用例全绿，失败清单与 main 基线一致（均为既有登录 401/429、playwright 类环境失败）
+
 ## 0.14.1 (2026-09-12)
 
 ### 新增：市场情报数字员工「小察」（market-intel）
