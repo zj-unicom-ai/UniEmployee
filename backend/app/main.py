@@ -15,6 +15,13 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import dotenv
+
+# Channel SDK 必须在 uvicorn 事件循环启动前导入；其 WebSocket 客户端会缓存
+# 事件循环，若首次在 lifespan 内导入，后台 start() 会误判为 loop 已运行。
+try:
+    import lark_channel  # noqa: F401
+except ImportError:
+    lark_channel = None
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
