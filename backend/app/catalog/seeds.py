@@ -49,6 +49,12 @@ CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
 
+# 本体写回工具（对话中增改实体/建立关系）：独立授权，默认只给掌握业务事实
+# 录入职责的员工（xiaoxiao 客户事实 / hrbp 员工事实）；资源中心可开关，
+# 未授权员工编译时不注入该工具。
+ONTOLOGY_WRITE_TOOL = "ontology_write"
+ONTOLOGY_WRITE_EMPLOYEES = ("xiaoxiao", "hrbp")
+
 # 数据分析专家 xiaoshu 的 SQL 工具集（agent/analyst 模块定义，登记进 tools 表
 # 后资源中心可见可开关；老库由 backfill_analyst_sql_tools 幂等补缺）
 ANALYST_SQL_TOOLS = {
@@ -73,9 +79,15 @@ ANALYST_FILE_TOOLS = {
 }
 
 
-def _tools_with_ontology(tools: list[str]) -> list[str]:
-    """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。"""
-    return tools + list(ONTOLOGY_TOOLS)
+def _tools_with_ontology(tools: list[str], write: bool = False) -> list[str]:
+    """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。
+
+    write=True 时再追加 ontology_write（对话写回），仅业务事实录入岗使用。
+    """
+    out = tools + list(ONTOLOGY_TOOLS)
+    if write:
+        out.append(ONTOLOGY_WRITE_TOOL)
+    return out
 
 
 # 算网运营 SOP 种子（seed_if_empty 全量播种 / backfill_netops_upgrade 老库补缺共用）
@@ -159,11 +171,11 @@ EMPLOYEE_SEEDS = {
         kbs=[], sops=[]),
     "xiaoxiao": dict(
         skills=["enterprise-sales", "customer-360", "renewal-scan"],
-        tools=_tools_with_ontology(["kb_search", "bocha_search", "create_ticket"]),
+        tools=_tools_with_ontology(["kb_search", "bocha_search", "create_ticket"], write=True),
         kbs=[]),
     "hrbp": dict(
         skills=["hr-assistant"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"]),
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"], write=True),
         kbs=[]),
     "biz-analyzer": dict(
         skills=["business-overview", "root-cause-analysis",
@@ -227,6 +239,9 @@ def seed_if_empty():
          "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）", "local", None),
         ("ontology_query_relations", "企业本体关系查询",
          "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）", "local", None),
+        ("ontology_write", "企业本体写回",
+         "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）",
+         "local", None),
         # 数据分析专家 SQL 工具集（与 ANALYST_SQL_TOOLS 常量保持一致）
         ("sql_db_smart_search", "智能表检索",
          "BM25 检索最相关的表并返回 schema（数据分析首选工具）", "local", None),
@@ -334,8 +349,10 @@ def backfill_ontology_tools():
                                    "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）"),
         "ontology_query_relations": ("企业本体关系查询",
                                      "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）"),
+        ONTOLOGY_WRITE_TOOL: ("企业本体写回",
+                              "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）"),
     }
-    for tid in ONTOLOGY_TOOLS:
+    for tid in (*ONTOLOGY_TOOLS, ONTOLOGY_WRITE_TOOL):
         name, desc = _ONTOLOGY_DESC[tid]
         cur.execute(
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
@@ -346,6 +363,13 @@ def backfill_ontology_tools():
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    # 写回是独立授权：只给业务事实录入岗（xiaoxiao/hrbp），其余内置员工不补。
+    for e in ONTOLOGY_WRITE_EMPLOYEES:
+        if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
+                       (e,)).fetchone():
+            cur.execute(
+                "INSERT OR IGNORE INTO employee_tools VALUES(?,?)",
+                (e, ONTOLOGY_WRITE_TOOL))
     con.commit()
     con.close()
 

@@ -181,12 +181,12 @@ def _build_sop_routing(sops: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_ontology_routing() -> str:
-    """企业业务本体使用指引：所有员工都具备 ontology_* 查询工具。
+def _build_ontology_routing(write_enabled: bool = False) -> str:
+    """企业业务本体使用指引：员工具备 ontology_* 工具时拼进 system_prompt。
 
     本体的价值是让数字员工基于真实业务关系作答（谁负责哪个项目、
-    哪个客户下过哪些订单），而不是靠模型猜测。拼进 system_prompt，
-    确保模型在用户问业务事实时先查本体。
+    哪个客户下过哪些订单），而不是靠模型猜测。
+    write_enabled=True 时额外挂载写回规程（仅授权 ontology_write 的员工）。
     """
     lines = [
         "",
@@ -197,8 +197,19 @@ def _build_ontology_routing() -> str:
         "- 查关系：ontology_query_relations（如谁负责某项目、某客户下过哪些订单、某订单包含哪些产品）",
         "查询链路：先 ontology_find_entities 拿到实体 id，再 ontology_query_relations 沿关系展开。",
         "例如用户问「李晓芳负责哪些项目」：先查员工李晓芳，再用她的 id 查询 manage 关系。",
-        "",
     ]
+    if write_enabled:
+        lines += [
+            "",
+            "### 业务事实写回（ontology_write，谨慎使用）",
+            "用户明确要求「记一下/记录/更新/新增/把…录到本体/建立…关系」时，把确认无误的事实写回本体——",
+            "本体是全企业共享的结构化事实，其他数字员工都会读到，写入纪律：",
+            "1. 只写用户亲口陈述、语义明确的事实；禁止推测补全，信息不全先追问确认后再写；",
+            "2. 写前先 ontology_find_entities 查重：已存在的实体用 update_entity（属性合并），不要重复新建；",
+            "3. 关系端点优先用名称+类型让工具自动解析，解析歧义时按返回的候选列表向用户确认；",
+            "4. 写回成功后明确告知用户「已记录」及具体内容；工具返回 ok=false 时不得谎称成功。",
+        ]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -306,11 +317,18 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             tools.append(ALL_LOCAL_TOOLS[g])
 
     # --- 企业业务本体闭包工具：spec.tools 声明了 ontology_* 才注入（按用户 tenant 隔离）。
-    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一即注入两个，
-    #     配合使用（find 拿 id → query_relations 展开）。资源中心可对员工开关。---
+    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一查询工具即注入
+    #     两个只读工具（find 拿 id → query_relations 展开）。
+    #     ontology_write（企业本体写回）是独立授权：只有 spec.tools 显式声明才注入，
+    #     未授权员工的工具集里不存在该工具（资源中心开关即授权）；授权写回时连带
+    #     保证只读工具在场（写之前需要 find 定位实体）。---
     from app.tools.ontology_tools import make_ontology_tools
-    if any(n in ("ontology_find_entities", "ontology_query_relations") for n in spec.tools):
-        for t in make_ontology_tools(user_id):
+    onto_reads = any(n in ("ontology_find_entities", "ontology_query_relations")
+                     for n in spec.tools)
+    onto_write = "ontology_write" in spec.tools
+    if onto_reads or onto_write:
+        for t in make_ontology_tools(user_id, include_reads=onto_reads or onto_write,
+                                     include_write=onto_write):
             if t.name not in have:
                 tools.append(t)
 
@@ -514,8 +532,10 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     system_prompt += _build_user_context(user_id)
     system_prompt += _build_skill_routing(skill_summaries)
     system_prompt += _build_sop_routing(sop_summaries)
-    if any(n in ("ontology_find_entities", "ontology_query_relations") for n in spec.tools):
-        system_prompt += _build_ontology_routing()
+    if any(n in ("ontology_find_entities", "ontology_query_relations", "ontology_write")
+           for n in spec.tools):
+        system_prompt += _build_ontology_routing(
+            write_enabled="ontology_write" in spec.tools)
     system_prompt += _build_subagent_routing(subagents)
     if spec.subagent_policy:
         system_prompt += "\n" + spec.subagent_policy.strip()
