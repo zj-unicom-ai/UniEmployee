@@ -88,6 +88,7 @@ async def lifespan(app):
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）
     async with AsyncExitStack() as stack:
+        im_supervisor = None
         if dblayer.is_pg():
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
             from langgraph.store.postgres import AsyncPostgresStore
@@ -111,9 +112,15 @@ async def lifespan(app):
         runtime.set_store(store)
         await runtime.warmup_all()
         await recover_conversations()
+        from app.im.supervisor import from_environment as im_from_environment
+        im_supervisor = im_from_environment()
+        if im_supervisor is not None:
+            await im_supervisor.start()
         scheduler.start()
         log.info("启动完成，开始接收请求")
         yield
+        if im_supervisor is not None:
+            await im_supervisor.stop()
         await scheduler.stop()
         await runtime.shutdown_mcp()
         if dblayer.is_pg():
