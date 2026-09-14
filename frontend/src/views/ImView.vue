@@ -12,7 +12,7 @@
     <n-modal v-model:show="showForm" preset="card" :title="editing ? '编辑频道' : '新建频道'" style="width:520px"><n-form>
       <n-form-item label="名称"><n-input v-model:value="form.name" /></n-form-item><n-form-item label="描述"><n-input v-model:value="form.description" /></n-form-item>
         <n-form-item label="类型"><n-select v-model:value="form.provider" :options="providerOptions" :disabled="!!editing" /></n-form-item><n-form-item label="启用"><n-switch v-model:value="form.enabled" /></n-form-item>
-      <template v-if="form.provider === 'feishu'"><n-divider>飞书凭证</n+      </n-divider><n-form-item label="App ID"><n-input v-model:value="form.app_id" /></n-form-item><n-form-item label="App Secret"><n-input v-model:value="form.app_secret" type="password" show-password-on="click" /></n-form-item><n-form-item label="Tenant Key"><n-input v-model:value="form.tenant_key" /></n-form-item></template>
+      <template v-if="form.provider === 'feishu'"><n-divider>飞书凭证</n-divider><n-form-item label="App ID"><n-input v-model:value="form.app_id" /></n-form-item><n-form-item label="App Secret"><n-input v-model:value="form.app_secret" type="password" show-password-on="click" /></n-form-item><n-form-item label="Tenant Key"><n-input v-model:value="form.tenant_key" /></n-form-item></template>
     </n-form><template #footer><n-button @click="showForm=false">取消</n-button><n-button type="primary" :loading="saving" @click="save">保存</n-button></template></n-modal>
   </div>
 </template>
