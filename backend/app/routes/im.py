@@ -9,7 +9,7 @@ import json
 import time
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app import auth, conversations, runtime
@@ -17,6 +17,7 @@ from app.models import (
     ImChannelCreate, ImChannelUpdate, ImConversationCreate, ImIncomingMessage, MessageIn,
 )
 from app.streaming import _stream_run, reconstruct, conv_emp_map, conv_owner_map
+from app.im import jobs as im_jobs
 
 router = APIRouter(prefix="/api/im", tags=["im"])
 
@@ -55,6 +56,8 @@ def _channel_item(ch: dict, user: dict) -> dict:
         item["inbound_url"] = f"/api/im/channels/{ch['id']}/incoming"
     if user.get("role") == "admin":
         item["config"] = ch.get("config") or {}
+        if item["provider"] == "feishu":
+            item["config"] = {**item["config"], **(im_jobs.credential_summary(ch["id"]) or {"configured": False})}
     return item
 
 
@@ -138,6 +141,34 @@ async def update_channel(channel_id: str, body: ImChannelUpdate,
     if not ch:
         raise HTTPException(404, "频道不存在")
     return ch
+
+
+@router.get("/channels/{channel_id}/credentials")
+async def credential_summary(channel_id: str, user: dict = Depends(auth.get_current_user_or_fallback)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可查看频道凭证状态")
+    if not conversations.get_channel(channel_id):
+        raise HTTPException(404, "频道不存在")
+    return im_jobs.credential_summary(channel_id) or {"channel_id": channel_id, "configured": False}
+
+
+@router.put("/channels/{channel_id}/credentials")
+async def put_credentials(channel_id: str, body: dict = Body(...), user: dict = Depends(auth.get_current_user_or_fallback)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可修改频道凭证")
+    channel = conversations.get_channel(channel_id)
+    if not channel:
+        raise HTTPException(404, "频道不存在")
+    if channel.get("provider") != "feishu":
+        raise HTTPException(400, "当前仅支持配置飞书凭证")
+    required = ("app_id", "app_secret", "tenant_key")
+    if any(not str(body.get(k, "")).strip() for k in required):
+        raise HTTPException(400, "app_id、app_secret、tenant_key 均不能为空")
+    im_jobs.put_credential(
+        channel_id=channel_id, app_id=str(body["app_id"]).strip(),
+        app_secret=str(body["app_secret"]), tenant_key=str(body["tenant_key"]).strip(),
+    )
+    return im_jobs.credential_summary(channel_id)
 
 
 @router.delete("/channels/{channel_id}")

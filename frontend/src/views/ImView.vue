@@ -11,7 +11,8 @@
       </n-card></n-gi></n-grid></n-spin>
     <n-modal v-model:show="showForm" preset="card" :title="editing ? '编辑频道' : '新建频道'" style="width:520px"><n-form>
       <n-form-item label="名称"><n-input v-model:value="form.name" /></n-form-item><n-form-item label="描述"><n-input v-model:value="form.description" /></n-form-item>
-      <n-form-item label="类型"><n-select v-model:value="form.provider" :options="providerOptions" :disabled="!!editing" /></n-form-item><n-form-item label="启用"><n-switch v-model:value="form.enabled" /></n-form-item>
+        <n-form-item label="类型"><n-select v-model:value="form.provider" :options="providerOptions" :disabled="!!editing" /></n-form-item><n-form-item label="启用"><n-switch v-model:value="form.enabled" /></n-form-item>
+      <template v-if="form.provider === 'feishu'"><n-divider>飞书凭证</n+      </n-divider><n-form-item label="App ID"><n-input v-model:value="form.app_id" /></n-form-item><n-form-item label="App Secret"><n-input v-model:value="form.app_secret" type="password" show-password-on="click" /></n-form-item><n-form-item label="Tenant Key"><n-input v-model:value="form.tenant_key" /></n-form-item></template>
     </n-form><template #footer><n-button @click="showForm=false">取消</n-button><n-button type="primary" :loading="saving" @click="save">保存</n-button></template></n-modal>
   </div>
 </template>
@@ -19,13 +20,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import api from '../api.js'
 const items=ref([]), loading=ref(false), saving=ref(false), error=ref(''), showForm=ref(false), editing=ref(null)
-const form=reactive({name:'',description:'',provider:'web',enabled:true})
+const form=reactive({name:'',description:'',provider:'web',enabled:true,app_id:'',app_secret:'',tenant_key:''})
 const providerOptions=[{label:'Web',value:'web'},{label:'飞书',value:'feishu'},{label:'钉钉',value:'dingtalk'},{label:'企业微信',value:'wecom'}]
 const isAdmin=computed(()=>JSON.parse(localStorage.getItem('user')||'{}').role==='admin')
 async function load(){loading.value=true;try{items.value=(await api.get('/im/channels')).data.items||[]}catch(e){error.value=e.response?.data?.detail||'频道加载失败'}finally{loading.value=false}}
-function openCreate(){editing.value=null;Object.assign(form,{name:'',description:'',provider:'web',enabled:true});showForm.value=true}
-function edit(i){editing.value=i;Object.assign(form,{name:i.name,description:i.description||'',provider:i.provider,enabled:i.enabled});showForm.value=true}
-async function save(){if(!form.name.trim())return;saving.value=true;try{const u=editing.value?`/im/channels/${editing.value.id}`:'/im/channels';await api[editing.value?'put':'post'](u,{...form});showForm.value=false;await load()}catch(e){error.value=e.response?.data?.detail||'保存失败'}finally{saving.value=false}}
+function openCreate(){editing.value=null;Object.assign(form,{name:'',description:'',provider:'web',enabled:true,app_id:'',app_secret:'',tenant_key:''});showForm.value=true}
+function edit(i){editing.value=i;Object.assign(form,{name:i.name,description:i.description||'',provider:i.provider,enabled:i.enabled,app_id:'',app_secret:'',tenant_key:''});showForm.value=true}
+async function save(){if(!form.name.trim())return;saving.value=true;try{const u=editing.value?`/im/channels/${editing.value.id}`:'/im/channels';const saved=await api[editing.value?'put':'post'](u,{name:form.name,description:form.description,provider:form.provider,enabled:form.enabled});const channelId=editing.value?.id||saved.data.id;if(form.provider==='feishu'&&form.app_id&&form.app_secret&&form.tenant_key)await api.put(`/im/channels/${channelId}/credentials`,{app_id:form.app_id,app_secret:form.app_secret,tenant_key:form.tenant_key});showForm.value=false;await load()}catch(e){error.value=e.response?.data?.detail||'保存失败'}finally{saving.value=false}}
 async function toggle(i){try{await api.put(`/im/channels/${i.id}`,{enabled:!i.enabled});await load()}catch(e){error.value=e.response?.data?.detail||'更新失败'}}
 onMounted(load)
 </script>
