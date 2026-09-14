@@ -81,6 +81,9 @@ async def lifespan(app):
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )
+    # 外部 IM 的身份映射与持久队列：仅执行幂等建表，不会启动任何频道连接。
+    from app.im import jobs as im_jobs
+    im_jobs.init()
     # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）

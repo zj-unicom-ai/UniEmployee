@@ -8,6 +8,7 @@ os.environ["DB_BACKEND"] = "sqlite"
 import pytest
 
 from app import approvals, catalog, conversations, ontology
+from app.im import jobs as im_jobs
 
 
 @pytest.fixture(autouse=True)
@@ -16,5 +17,6 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(conversations, "DB", tmp_path / "conversations.db")
     monkeypatch.setattr(approvals, "DB", tmp_path / "approvals.db")
     monkeypatch.setattr(ontology, "DB", tmp_path / "ontology.db")
+    monkeypatch.setattr(im_jobs, "DB", tmp_path / "conversations.db")
     catalog.init()  # 建目录库表（conversations._conn 会自动建会话表）
     yield

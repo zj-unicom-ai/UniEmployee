@@ -3,7 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: uniemployee-pg
     ports:
-      - "5432:5432"
+      # 宿主机 5432 由本机 PostgreSQL 18 占用；容器内部仍监听 5432。
+      - "15432:5432"
     environment:
       # 与 .env 的 POSTGRES_USER / POSTGRES_PASSWORD 保持一致；
       # 首次启动（数据目录为空）时自动执行 init_postgres.sql 建 7 个业务库。
@@ -33,8 +34,12 @@ services:
       # 仅放非密钥的运行参数；密钥（OPENAI_API_KEY / JWT_SECRET 等）全部来自下方 env_file: .env
       - PORT=8787
       - LOG_LEVEL=INFO
+      # 生产容器统一使用 Compose 提供的 PostgreSQL；避免回退到容器内不存在目录的 SQLite。
+      - DB_BACKEND=postgres
       # 容器网络内连 db 服务（数据库统一走 PostgreSQL，不再使用 SQLite）
       - POSTGRES_HOST=db
+      # .env 的 POSTGRES_PORT 面向宿主机测试；容器间连接使用 db:5432。
+      - POSTGRES_PORT=5432
     env_file:
       # .env 里已含 OPENAI_API_KEY / OPENAI_BASE_URL / MODEL_NAME / JWT_SECRET，
       # 由 env_file 注入容器（.env 不进镜像、不提交仓库）。
@@ -51,7 +56,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/health', timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3
