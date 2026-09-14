@@ -52,12 +52,13 @@ class FeishuProvider:
 
     def _build_channel(self) -> Any:
         try:
-            from lark_channel import FeishuChannel, PolicyConfig, TransportConfig
+            from lark_channel import FeishuChannel, LogLevel, PolicyConfig, TransportConfig
         except ImportError as exc:  # pragma: no cover - 部署依赖检查
             raise RuntimeError("未安装 lark-channel-sdk") from exc
         return FeishuChannel(
             app_id=self.credential.app_id,
             app_secret=self.credential.app_secret,
+            log_level=LogLevel.WARNING,
             transport=TransportConfig(kind="ws", trust_env_proxy=False),
             policy=PolicyConfig(
                 dm_policy="open", group_policy="open", require_mention=True,
