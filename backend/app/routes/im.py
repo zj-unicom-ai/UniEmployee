@@ -161,12 +161,12 @@ async def put_credentials(channel_id: str, body: dict = Body(...), user: dict = 
         raise HTTPException(404, "频道不存在")
     if channel.get("provider") != "feishu":
         raise HTTPException(400, "当前仅支持配置飞书凭证")
-    required = ("app_id", "app_secret", "tenant_key")
+    required = ("app_id", "app_secret")
     if any(not str(body.get(k, "")).strip() for k in required):
-        raise HTTPException(400, "app_id、app_secret、tenant_key 均不能为空")
+        raise HTTPException(400, "app_id、app_secret 均不能为空")
     im_jobs.put_credential(
         channel_id=channel_id, app_id=str(body["app_id"]).strip(),
-        app_secret=str(body["app_secret"]), tenant_key=str(body["tenant_key"]).strip(),
+        app_secret=str(body["app_secret"]), tenant_key=str(body.get("tenant_key", "")).strip(),
     )
     return im_jobs.credential_summary(channel_id)
 

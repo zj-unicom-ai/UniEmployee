@@ -28,9 +28,12 @@ def normalize_message(message: Any, *, channel_id: str, app_id: str,
     sender_id = getattr(message, "sender_id", None)
     if not all((message_id, chat_id, sender_id)):
         return None
+    resolved_tenant = getattr(message, "tenant_key", None) or tenant_key
+    if not resolved_tenant:
+        return None
     return NormalizedInbound(
         provider="feishu", channel_id=channel_id, app_id=app_id,
-        tenant_key=tenant_key, event_id=getattr(message, "event_id", None) or message_id,
+        tenant_key=resolved_tenant, event_id=getattr(message, "event_id", None) or message_id,
         message_id=message_id, chat_id=chat_id, chat_type=chat_type,
         sender_open_id=sender_id, text=str(getattr(message, "content_text", "") or ""),
         root_id=getattr(message, "root_id", None),

@@ -59,15 +59,14 @@ def from_environment(*, on_message=None) -> ImSupervisor | None:
     """从环境变量构造 Supervisor；未显式启用时绝不连接飞书。"""
     if os.environ.get("FEISHU_ENABLED", "0").strip() != "1":
         return None
-    required = ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_TENANT_KEY",
-                "FEISHU_CHANNEL_ID", "FEISHU_EMPLOYEE_ID")
+    required = ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CHANNEL_ID", "FEISHU_EMPLOYEE_ID")
     missing = [name for name in required if not os.environ.get(name, "").strip()]
     if missing:
         raise RuntimeError("FEISHU_ENABLED=1 但缺少配置: " + ", ".join(missing))
     channel_id = os.environ["FEISHU_CHANNEL_ID"]
     credential = ChannelCredential(
         channel_id=channel_id, app_id=os.environ["FEISHU_APP_ID"],
-        tenant_key=os.environ["FEISHU_TENANT_KEY"],
+        tenant_key=os.environ.get("FEISHU_TENANT_KEY", ""),
         app_secret=os.environ["FEISHU_APP_SECRET"],
     )
     callback = on_message
@@ -81,4 +80,3 @@ def from_environment(*, on_message=None) -> ImSupervisor | None:
     if on_message is None:
         supervisor.provider.on_message = supervisor._on_message
     return supervisor
-
