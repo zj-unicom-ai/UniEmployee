@@ -103,6 +103,25 @@ async def list_relations(entity_id: int | None = None,
     return {"items": ontology.list_relations(_tenant(admin), entity_id)}
 
 
+@router.get("/graph")
+async def expand_graph(entity_id: int, depth: int = 2,
+                       relation_types: list[str] | None = None, limit: int = 80,
+                       admin: dict = Depends(auth.require_admin)):
+    return _ok(ontology.expand_entity, _tenant(admin), entity_id,
+               depth=depth, relation_types=relation_types, limit=limit)
+
+
+@router.get("/paths")
+async def find_paths(source_id: int, target_id: int | None = None,
+                     target_type: str | None = None, max_depth: int = 3,
+                     relation_types: list[str] | None = None, limit: int = 10,
+                     admin: dict = Depends(auth.require_admin)):
+    return {"items": _ok(
+        ontology.find_paths, _tenant(admin), source_id,
+        target_id=target_id, target_type=target_type, max_depth=max_depth,
+        relation_types=relation_types, limit=limit)}
+
+
 @router.post("/relations")
 async def create_relation(body: dict, admin: dict = Depends(auth.require_admin)):
     return {"id": _ok(ontology.create_relation, _tenant(admin), body)}
@@ -117,3 +136,15 @@ async def delete_relation(relation_id: int, admin: dict = Depends(auth.require_a
 @router.get("/stats")
 async def get_stats(admin: dict = Depends(auth.require_admin)):
     return ontology.stats(_tenant(admin))
+
+
+@router.get("/scenarios/customer-360")
+async def customer_360(customer_name: str,
+                       admin: dict = Depends(auth.require_admin)):
+    return _ok(ontology.customer_360, _tenant(admin), customer_name)
+
+
+@router.get("/scenarios/fault-impact")
+async def fault_impact(station_name: str,
+                       admin: dict = Depends(auth.require_admin)):
+    return _ok(ontology.fault_impact, _tenant(admin), station_name)

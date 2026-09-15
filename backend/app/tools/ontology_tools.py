@@ -3,10 +3,15 @@
 与 kb_search 同类：不在 ALL_LOCAL_TOOLS 静态登记，由 compiler._assemble_tools
 按用户动态生成，保证读写只落在当前租户的业务数据上。
 
-三个工具：
+只读工具：
   ontology_find_entities    按实体类型/关键词查业务实体
   ontology_query_relations  沿实体关系走一跳，返回关联对象
-  ontology_write            对话写回（新增/更新实体、建立关系）
+  ontology_expand           从实体出发做有限深度关系展开
+  ontology_find_paths       查找实体之间/到某类实体的有限业务路径
+  ontology_customer_360     客户全景关系场景（按客户读取）
+  ontology_fault_impact     故障影响场景（按基站读取）
+写回工具：
+  ontology_write            新增/更新实体、建立关系（独立授权）
 
 装配红线：ontology_write 只有员工在资源中心显式勾选「企业本体写回」时才注入
 （include_write=True）；未授权员工的工具集里根本不存在该工具，模型无法调用。
@@ -23,11 +28,14 @@ from app import audit, catalog, ontology
 
 
 def make_ontology_tools(user_id: str | None, include_reads: bool = True,
-                        include_write: bool = False) -> list:
+                        include_write: bool = False,
+                        include_customer_360: bool = False,
+                        include_fault_impact: bool = False) -> list:
     """按用户视角动态生成 ontology_* 工具（按 tenant 隔离）。
 
-    include_reads: 员工声明了任一查询工具时为真，注入两个只读工具。
+    include_reads: 员工声明任一通用查询工具时为真，注入四个通用只读工具。
     include_write: 仅当员工显式声明 ontology_write 时为真，注入写回工具。
+    include_customer_360 / include_fault_impact: 场景化只读工具的独立授权。
     """
     tenant = "default"
     username = ""
@@ -37,10 +45,10 @@ def make_ontology_tools(user_id: str | None, include_reads: bool = True,
             tenant = u.get("tenant_id") or "default"
             username = u.get("username") or ""
 
-    def _fmt(items: list) -> str:
-        if not items:
+    def _fmt(value) -> str:
+        if not value:
             return "（未找到相关记录）"
-        return json.dumps(items, ensure_ascii=False, indent=1)
+        return json.dumps(value, ensure_ascii=False, indent=1)
 
     tools = []
 
@@ -87,7 +95,72 @@ def make_ontology_tools(user_id: str | None, include_reads: bool = True,
             )
             return _fmt(rows)
 
-        tools += [ontology_find_entities, ontology_query_relations]
+        @tool
+        def ontology_expand(entity_id: int, depth: int = 2,
+                            relation_types: Optional[list[str]] = None,
+                            limit: int = 60) -> str:
+            """【企业业务本体关系展开】从实体出发做有限深度查询，返回节点、边和证据路径。
+
+            适合需要一次了解实体周边上下文、或连续调用 ontology_query_relations
+            多次仍不稳定时使用。depth 默认 2（最多 4），limit 默认 60（最多 200）。
+            relation_types 可选，按关系 code 过滤，例如 ["sign", "include"]。
+            entity_id 必须先用 ontology_find_entities 获取。
+            """
+            return _fmt(ontology.expand_entity(
+                tenant, entity_id, depth=depth,
+                relation_types=relation_types, limit=limit))
+
+        @tool
+        def ontology_find_paths(source_id: int, target_id: int = 0,
+                                target_type: str = "", max_depth: int = 3,
+                                relation_types: Optional[list[str]] = None,
+                                limit: int = 10) -> str:
+            """【企业业务本体路径查询】查找两个实体之间，或起点到某类实体的业务路径。
+
+            用于回答“怎么关联起来”“通过哪些关系影响到了谁”等多跳问题。
+            target_id 与 target_type 至少提供一个；同时提供时两者都要匹配。
+            max_depth 默认 3（最多 5），limit 默认 10（最多 50）。
+            relation_types 可选，按关系 code 过滤。返回值包含中文路径文本与每一步证据。
+            """
+            return _fmt(ontology.find_paths(
+                tenant, source_id, target_id=target_id or None,
+                target_type=target_type.strip() or None, max_depth=max_depth,
+                relation_types=relation_types, limit=limit))
+
+        tools += [
+            ontology_find_entities,
+            ontology_query_relations,
+            ontology_expand,
+            ontology_find_paths,
+        ]
+
+    if include_customer_360:
+        @tool
+        def ontology_customer_360(customer_name: str) -> str:
+            """【企业业务本体客户 360】一次展开客户全景关系。
+
+            返回客户实体、跟进人、联系人、项目/商机、合同、订单、产品、
+            中文关系路径与建议动作。适合客户盘点、拜访准备、续约和交叉销售分析。
+            customer_name 可为客户全名或唯一名称片段；歧义或未命中会明确报错。
+            本工具只读，不替代 CRM 的订单履约状态和知识库的沟通记录。
+            """
+            return _fmt(ontology.customer_360(tenant, customer_name.strip()))
+
+        tools.append(ontology_customer_360)
+
+    if include_fault_impact:
+        @tool
+        def ontology_fault_impact(station_name: str) -> str:
+            """【企业业务本体故障影响】一次展开基站的覆盖与责任关系。
+
+            返回基站、覆盖片区、受影响客户、重点/VIP 客户、装维人员、
+            回传链路、中文关系路径与建议动作。适合基站退服/割接前的本体侧影响评估。
+            station_name 可为基站全名、编号或唯一名称片段。
+            告警等级、故障时长与根因仍须结合告警数据集核实，本工具只提供本体事实。
+            """
+            return _fmt(ontology.fault_impact(tenant, station_name.strip()))
+
+        tools.append(ontology_fault_impact)
 
     if include_write:
         def _conv_id() -> str:

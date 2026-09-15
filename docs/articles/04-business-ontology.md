@@ -27,14 +27,14 @@ UniEmployee 的本体存储分成两层：
 - **Schema 层**：定义有哪些实体类型和关系类型；
 - **Data 层**：存放真实的业务实例和实例间关系。
 
-Schema 层当前预置了 9 个实体类型：
+Schema 层当前预置了 15 个实体类型，其中核心业务域包括：
 
 ```text
 org（组织）/ department（部门）/ position（岗位）/ employee（员工）/
 customer（客户）/ product（产品）/ project（项目）/ contract（合同）/ order（订单）
 ```
 
-以及 9 个关系类型：
+以及 16 个关系类型，其中核心关系包括：
 
 ```text
 belong_to（部门隶属于组织）
@@ -47,6 +47,11 @@ correspond_to（项目对应合同）
 place_order（客户下单）
 include（订单包含产品）
 ```
+
+在此基础上还扩展了 `contact（客户联系人）/ station（基站）/ area（片区）/
+datacenter（机房）/ compute_node（算力节点）/ link（传输链路）` 等实体类型，
+以及 `sign（签约）/ decide（决策）/ cover（覆盖）/ maintain（维护）/
+located_in（居住于）/ deploy_in（部署于）/ backhaul（回传）` 等关系类型。
 
 实体和关系的属性都是 JSON，schema 中的类型定义也会被管理界面动态渲染成表单。这意味着新增一个业务类型不需要改表结构，扩展成本很低。
 
@@ -65,7 +70,7 @@ include（订单包含产品）
 
 ## 04 运行时怎么用
 
-平台给数字员工注入两个本体工具：
+平台给具备本体读权限的数字员工注入四个通用工具：
 
 ```text
 ontology_find_entities(entity_type, keyword)
@@ -73,7 +78,16 @@ ontology_find_entities(entity_type, keyword)
 
 ontology_query_relations(entity_id, relation_type, direction)
   -> 沿关系走一跳，返回关联实体和关系信息
+
+ontology_expand(entity_id, depth, relation_types)
+  -> 从一个实体出发做有限深度展开，返回节点、边和证据路径
+
+ontology_find_paths(source_id, target_id/target_type, max_depth)
+  -> 查找两个实体之间，或实体到某类实体的业务路径
 ```
+
+xiaoxiao 额外获得 `ontology_customer_360`，net-ops 额外获得 `ontology_fault_impact`，
+把高频场景的多跳关系一次汇总，同时保留通用工具供模型追证。
 
 system_prompt 中还有一段"企业业务本体（必须优先查询）"路由，要求模型回答涉及具体业务事实时先查本体，禁止编造。
 
@@ -90,12 +104,14 @@ system_prompt 中还有一段"企业业务本体（必须优先查询）"路由�
 
 ## 05 管理界面
 
-前端提供独立的业务本体页面，包含四个视图：
+前端提供独立的业务本体页面，包含五个视图：
 
 - 业务实体：按类型筛选、关键词搜索、增删改查；
 - 业务关系：表格化维护实体间关系；
+- 关系图谱：力导向展示全量实体与关系；
+- 路径查询：选择起点、目标实体或目标类型，查看多跳证据路径；
 - 类型定义：维护实体类型和关系类型；
-- 统计：展示实体总数、关系总数和按类型的分布。
+- 页面顶部展示实体总数、关系总数和按类型的分布。
 
 系统预置类型不可被租户删除，租户自定义类型可以自由维护，避免把公共 schema 改坏。
 
@@ -118,7 +134,7 @@ UniEmployee 的本体现在处于语义契约层的起步阶段。实践中建�
 需要如实说明：
 
 - 当前内置的"星云科技"是演示数据，接入真实企业时需要从 CRM、组织系统、项目系统导入；
-- 9 类实体、9 类关系覆盖的是高频场景，真实企业需要扩展更多类型和属性；
+- 15 类实体、16 类关系覆盖的是高频场景，真实企业需要扩展更多类型和属性；
 - 指标口径、数据源契约、工具参数契约仍在规划中，这是本体走向"可行动"的关键一步；
 - 管理界面已经可用，但"从文档自动抽取本体"还没有做成自动化流水线。
 

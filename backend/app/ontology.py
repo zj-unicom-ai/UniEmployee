@@ -117,7 +117,7 @@ def _migrate_source_columns(con):
 
 # ---------------- 种子数据 ----------------
 
-# 模式层预置：9 个实体类型（system 租户，全局共享）
+# 模式层预置实体类型（system 租户，全局共享）
 SCHEMA_ENTITY_TYPES = [
     ("org", "组织", "企业/公司本体，业务世界的根节点", "🏢", [
         {"key": "industry", "name": "所属行业", "type": "text"},
@@ -146,6 +146,11 @@ SCHEMA_ENTITY_TYPES = [
         {"key": "grade", "name": "客户等级", "type": "text"},
         {"key": "contact", "name": "联系人", "type": "text"},
         {"key": "intro", "name": "简介", "type": "textarea"},
+    ]),
+    ("contact", "客户联系人", "客户侧联系人及其决策/技术角色", "🧑‍💼", [
+        {"key": "company", "name": "所属客户", "type": "text"},
+        {"key": "title", "name": "职务", "type": "text"},
+        {"key": "role", "name": "角色定位", "type": "textarea"},
     ]),
     ("product", "产品", "企业提供的产品/服务", "📦", [
         {"key": "category", "name": "品类", "type": "text"},
@@ -200,13 +205,15 @@ SCHEMA_ENTITY_TYPES = [
     ]),
 ]
 
-# 模式层预置：9 个关系类型（system 租户，全局共享）
+# 模式层预置关系类型（system 租户，全局共享）
 SCHEMA_RELATION_TYPES = [
     ("belong_to", "隶属于", "org", "department", "1:n", "部门属于组织"),
     ("belongs_to", "属于", "employee", "department", "n:1", "员工属于某部门"),
     ("hold_position", "担任", "employee", "position", "n:1", "员工担任某岗位"),
     ("manage", "负责", "employee", "project", "n:n", "员工负责某项目"),
     ("follow_up", "跟进", "employee", "customer", "n:n", "员工跟进某客户"),
+    ("sign", "签约", "customer", "contract", "1:n", "客户签署某合同"),
+    ("decide", "决策", "contact", "contract", "n:n", "联系人参与合同决策"),
     ("serve", "服务", "project", "customer", "n:1", "项目服务某客户"),
     ("correspond_to", "对应", "project", "contract", "1:1", "项目对应某合同"),
     ("place_order", "下单", "customer", "order", "1:n", "客户下达订单"),
@@ -793,33 +800,38 @@ def update_entity(tenant_id: str, id_: int, data: dict, *, source: str = SOURCE_
 
 
 def resolve_entity(tenant_id: str, entity_type: str, name: str) -> dict:
-    """按名称解析唯一实体（对话写回时用名称指定端点）：
+    """按名称或业务标识解析唯一实体（对话写回/场景工具用于指定实体）：
 
-    - 精确同名优先；
-    - 无精确命中时做唯一包含匹配（忽略大小写），命中多个则歧义报错；
+    - 精确同名优先，其次精确匹配 props 中的编号等业务标识；
+    - 无精确命中时做唯一包含匹配（名称或属性，忽略大小写），命中多个则歧义报错；
     - 0 个或多个候选均抛 ValueError，由调用方把候选反馈给模型/用户。
     """
     name = (name or "").strip()
     type_ = (entity_type or "").strip()
     if not type_ or not name:
         raise ValueError("entity_type 与 name 必填")
-    con = _conn()
-    exact = con.execute(
-        "SELECT * FROM entities WHERE tenant_id=? AND entity_type=? AND name=? "
-        "AND deleted_at IS NULL", (tenant_id, type_, name)).fetchall()
+    rows = list_entities(tenant_id, entity_type=type_, limit=500)
+    exact = [r for r in rows if r["name"] == name]
     if len(exact) == 1:
-        con.close()
-        return _row_to_dict(exact[0])
-    rows = con.execute(
-        "SELECT * FROM entities WHERE tenant_id=? AND entity_type=? AND deleted_at IS NULL "
-        "AND LOWER(name) LIKE ? ORDER BY id",
-        (tenant_id, type_, f"%{name.lower()}%")).fetchall()
-    con.close()
-    if len(rows) == 1:
-        return _row_to_dict(rows[0])
-    if not rows:
+        return exact[0]
+
+    needle = name.lower()
+
+    def prop_text(row: dict) -> str:
+        return " ".join(str(v) for v in (row.get("props") or {}).values()).lower()
+
+    exact_prop = [r for r in rows if needle in {
+        str(v).strip().lower() for v in (r.get("props") or {}).values()
+    }]
+    if len(exact_prop) == 1:
+        return exact_prop[0]
+
+    matched = [r for r in rows if needle in r["name"].lower() or needle in prop_text(r)]
+    if len(matched) == 1:
+        return matched[0]
+    if not matched:
         raise ValueError(f"未找到 {type_} 类型中名为「{name}」的实体，请先用 ontology_find_entities 确认")
-    names = "、".join(r["name"] for r in rows[:10])
+    names = "、".join(r["name"] for r in matched[:10])
     raise ValueError(f"名称「{name}」匹配到多个 {type_}（{names}），请改用实体 id 指定")
 
 
@@ -1093,7 +1105,18 @@ def find_entities(tenant_id: str, entity_type: str | None = None,
 def query_relations(tenant_id: str, entity_id: int, relation_type: str | None = None,
                     direction: str = "any") -> list[dict]:
     """关系查询：沿边走一跳，返回对端实体与关系信息。direction: any/out/in。"""
+    direction = (direction or "any").strip().lower()
+    if direction not in ("any", "out", "in"):
+        raise ValueError("direction 仅支持 any/out/in")
     con = _conn()
+    # 先确认当前实体属于该租户。仅靠关系表过滤不足以防止跨租户 id 探测，
+    # 因为关系端点也可能被伪造或历史上存在脏数据。
+    if not con.execute(
+        "SELECT 1 FROM entities WHERE id=? AND tenant_id=? AND deleted_at IS NULL",
+        (entity_id, tenant_id),
+    ).fetchone():
+        con.close()
+        return []
     rel_filter = ""
     args: list = []
     if relation_type:
@@ -1103,13 +1126,15 @@ def query_relations(tenant_id: str, entity_id: int, relation_type: str | None = 
     for sql, label in [
         (f"SELECT r.id rid, r.relation_type, r.props rprops, e.id eid, e.entity_type, e.name, e.props"
          f" FROM relations r JOIN entities e ON e.id=r.to_id"
-         f" WHERE r.from_id=? AND r.deleted_at IS NULL AND e.deleted_at IS NULL{rel_filter}", "out"),
+         f" WHERE r.from_id=? AND r.tenant_id=? AND e.tenant_id=?"
+         f" AND r.deleted_at IS NULL AND e.deleted_at IS NULL{rel_filter}", "out"),
         (f"SELECT r.id rid, r.relation_type, r.props rprops, e.id eid, e.entity_type, e.name, e.props"
          f" FROM relations r JOIN entities e ON e.id=r.from_id"
-         f" WHERE r.to_id=? AND r.deleted_at IS NULL AND e.deleted_at IS NULL{rel_filter}", "in"),
+         f" WHERE r.to_id=? AND r.tenant_id=? AND e.tenant_id=?"
+         f" AND r.deleted_at IS NULL AND e.deleted_at IS NULL{rel_filter}", "in"),
     ]:
         if direction in ("any", label):
-            for r in con.execute(sql, [entity_id] + args):
+            for r in con.execute(sql, [entity_id, tenant_id, tenant_id] + args):
                 eprops = json.loads(r["props"]) if r["props"] else {}
                 out.append({
                     "relation_id": r["rid"], "relation_type": r["relation_type"],
@@ -1119,6 +1144,317 @@ def query_relations(tenant_id: str, entity_id: int, relation_type: str | None = 
                 })
     con.close()
     return out
+
+
+def _compact_entity(e: dict | None) -> dict | None:
+    """场景查询返回用的紧凑实体：保留 id/type/name，并展开 props 方便模型阅读。"""
+    if not e:
+        return None
+    if "props" in e:
+        props = e.get("props") or {}
+    else:
+        # query_relations 已把业务属性展开到实体顶层；排除标识字段后原样保留，
+        # 使 _compact_entity 对“原始行”和“已展开实体”都可重复调用。
+        props = {
+            k: v for k, v in e.items()
+            if k not in ("id", "entity_type", "name", "props")
+        }
+    return {
+        "id": e["id"],
+        "entity_type": e["entity_type"],
+        **props,
+        "name": e["name"],
+    }
+
+
+def _relation_names(tenant_id: str) -> dict[str, str]:
+    schema = list_schema(tenant_id)
+    return {r["code"]: r["name"] for r in schema.get("relation_types", [])}
+
+
+def _path_text(path: list[dict]) -> str:
+    if not path:
+        return ""
+    parts = [path[0]["source"]["name"]]
+    for step in path:
+        rel = step.get("relation_name") or step["relation_type"]
+        arrow = f"-{rel}->" if step["direction"] == "out" else f"<-{rel}-"
+        parts.append(f"{arrow} {step['target']['name']}")
+    return " ".join(parts)
+
+
+def _public_path(path: list[dict]) -> list[dict]:
+    """去掉 BFS 内部字段，只返回可展示/可审计的路径步骤。"""
+    return [
+        {k: v for k, v in step.items() if k != "next"}
+        for step in path
+    ]
+
+
+def _neighbor_steps(tenant_id: str, entity: dict, relation_types: set[str] | None = None,
+                    rel_names: dict[str, str] | None = None) -> list[dict]:
+    rel_names = rel_names or _relation_names(tenant_id)
+    steps = []
+    for r in query_relations(tenant_id, entity["id"], direction="any"):
+        if relation_types and r["relation_type"] not in relation_types:
+            continue
+        target = r["target"]
+        if r["direction"] == "out":
+            frm, to = entity, target
+        else:
+            frm, to = target, entity
+        steps.append({
+            "relation_id": r["relation_id"],
+            "relation_type": r["relation_type"],
+            "relation_name": rel_names.get(r["relation_type"], r["relation_type"]),
+            "direction": r["direction"],
+            # source/target 始终表示本次遍历的起点/终点；from/to 保留 schema
+            # 声明方向，便于图谱按真实边方向渲染。
+            "from": _compact_entity(frm),
+            "to": _compact_entity(to),
+            "source": _compact_entity(entity),
+            "target": _compact_entity(target),
+            "next": _compact_entity(target),
+        })
+    return steps
+
+
+def expand_entity(tenant_id: str, entity_id: int, depth: int = 2,
+                  relation_types: list[str] | None = None,
+                  limit: int = 80) -> dict:
+    """从一个实体出发做有限深度关系展开。
+
+    这是场景化本体能力的底层读接口：返回节点、边和逐跳证据路径。
+    depth 默认 2，避免把整张图谱倒给模型。
+    """
+    depth = max(1, min(int(depth or 2), 4))
+    limit = max(1, min(int(limit or 80), 200))
+    start = get_entity(tenant_id, entity_id)
+    if not start:
+        raise ValueError(f"实体 id={entity_id} 不存在或不属于当前租户")
+    allowed = set(relation_types or []) or None
+    rel_names = _relation_names(tenant_id)
+    nodes = {start["id"]: _compact_entity(start)}
+    edges: dict[int, dict] = {}
+    paths: list[list[dict]] = []
+    path_keys: set[tuple] = set()
+    queue: list[tuple[dict, int, list[dict], set[int]]] = [(start, 0, [], {start["id"]})]
+    while queue and len(edges) < limit:
+        cur, dist, path, seen = queue.pop(0)
+        if dist >= depth:
+            continue
+        for step in _neighbor_steps(tenant_id, cur, allowed, rel_names):
+            if len(edges) >= limit:
+                break
+            next_entity = step["next"]
+            nodes[next_entity["id"]] = next_entity
+            edges.setdefault(step["relation_id"], {
+                "id": step["relation_id"],
+                "relation_type": step["relation_type"],
+                "relation_name": step["relation_name"],
+                "from": step["from"],
+                "to": step["to"],
+            })
+            next_path = path + [step]
+            path_key = tuple(
+                (s["relation_id"], s["source"]["id"], s["target"]["id"])
+                for s in next_path
+            )
+            if path_key not in path_keys:
+                path_keys.add(path_key)
+                paths.append(next_path)
+            if next_entity["id"] not in seen:
+                queue.append((next_entity, dist + 1, next_path, seen | {next_entity["id"]}))
+    return {
+        "center": _compact_entity(start),
+        "depth": depth,
+        "limit": limit,
+        "truncated": len(edges) >= limit,
+        "nodes": list(nodes.values()),
+        "edges": list(edges.values()),
+        "relation_paths": [
+            {"text": _path_text(p), "steps": _public_path(p)} for p in paths
+        ],
+    }
+
+
+def find_paths(tenant_id: str, source_id: int, target_id: int | None = None,
+               target_type: str | None = None, max_depth: int = 3,
+               relation_types: list[str] | None = None,
+               limit: int = 10) -> list[dict]:
+    """查找两个实体之间，或某实体到某类实体之间的有限业务路径。"""
+    if not target_id and not target_type:
+        raise ValueError("target_id 或 target_type 至少提供一个")
+    max_depth = max(1, min(int(max_depth or 3), 5))
+    limit = max(1, min(int(limit or 10), 50))
+    source = get_entity(tenant_id, source_id)
+    if not source:
+        raise ValueError(f"源实体 id={source_id} 不存在或不属于当前租户")
+    if target_id and not get_entity(tenant_id, target_id):
+        raise ValueError(f"目标实体 id={target_id} 不存在或不属于当前租户")
+    allowed = set(relation_types or []) or None
+    rel_names = _relation_names(tenant_id)
+    out: list[dict] = []
+    path_keys: set[tuple] = set()
+    visits = 0
+    max_visits = max(200, limit * 50)
+    queue: list[tuple[dict, int, list[dict], set[int]]] = [(source, 0, [], {source_id})]
+    while queue and len(out) < limit and visits < max_visits:
+        cur, dist, path, seen = queue.pop(0)
+        visits += 1
+        if dist >= max_depth:
+            continue
+        for step in _neighbor_steps(tenant_id, cur, allowed, rel_names):
+            nxt = step["next"]
+            if nxt["id"] in seen:
+                continue
+            next_path = path + [step]
+            matched = True
+            if target_id:
+                matched = matched and nxt["id"] == target_id
+            if target_type:
+                matched = matched and nxt["entity_type"] == target_type
+            if matched:
+                path_key = tuple(
+                    (s["relation_id"], s["source"]["id"], s["target"]["id"])
+                    for s in next_path
+                )
+                if path_key not in path_keys:
+                    path_keys.add(path_key)
+                    out.append({
+                        "text": _path_text(next_path),
+                        "hops": len(next_path),
+                        "target": nxt,
+                        "steps": _public_path(next_path),
+                    })
+                if len(out) >= limit:
+                    break
+            queue.append((nxt, dist + 1, next_path, seen | {nxt["id"]}))
+    return out
+
+
+def _targets(rows: list[dict], entity_type: str | None = None) -> list[dict]:
+    items = [_compact_entity(r["target"]) for r in rows]
+    if entity_type:
+        items = [x for x in items if x and x.get("entity_type") == entity_type]
+    return list({x["id"]: x for x in items if x}.values())
+
+
+def customer_360(tenant_id: str, customer_name: str) -> dict:
+    """客户 360 场景：客户 -> 跟进人/联系人/合同/项目/订单/产品。"""
+    customer = resolve_entity(tenant_id, "customer", customer_name)
+    cid = customer["id"]
+    owners = _targets(query_relations(tenant_id, cid, "follow_up", "in"), "employee")
+    contacts = _targets(query_relations(tenant_id, cid, "belongs_to", "in"), "contact")
+    projects = _targets(query_relations(tenant_id, cid, "serve", "in"), "project")
+    contracts = _targets(query_relations(tenant_id, cid, "sign", "out"), "contract")
+    orders = _targets(query_relations(tenant_id, cid, "place_order", "out"), "order")
+
+    product_map: dict[int, dict] = {}
+    relation_paths: list[dict] = []
+    for owner in owners:
+        relation_paths.append({"text": f"{owner['name']} -跟进-> {customer['name']}"})
+    for contact in contacts:
+        relation_paths.append({"text": f"{contact['name']} -属于-> {customer['name']}"})
+        for r in query_relations(tenant_id, contact["id"], "decide", "out"):
+            relation_paths.append({"text": f"{contact['name']} -决策-> {r['target']['name']}"})
+        for r in query_relations(tenant_id, contact["id"], "maintain", "out"):
+            relation_paths.append({"text": f"{contact['name']} -维护-> {r['target']['name']}"})
+    for project in projects:
+        relation_paths.append({"text": f"{project['name']} -服务-> {customer['name']}"})
+        for r in query_relations(tenant_id, project["id"], "correspond_to", "out"):
+            contract = _compact_entity(r["target"])
+            contracts.append(contract)
+            relation_paths.append({"text": f"{project['name']} -对应-> {contract['name']}"})
+    for contract in contracts:
+        if not contract:
+            continue
+        for r in query_relations(tenant_id, contract["id"], "include", "out"):
+            product = _compact_entity(r["target"])
+            product_map[product["id"]] = product
+            relation_paths.append({"text": f"{customer['name']} -签约-> {contract['name']} -包含-> {product['name']}"})
+    for order in orders:
+        relation_paths.append({"text": f"{customer['name']} -下单-> {order['name']}"})
+        for r in query_relations(tenant_id, order["id"], "include", "out"):
+            product = _compact_entity(r["target"])
+            product_map[product["id"]] = product
+            relation_paths.append({"text": f"{customer['name']} -下单-> {order['name']} -包含-> {product['name']}"})
+
+    contracts = list({c["id"]: c for c in contracts if c}.values())
+    products = list(product_map.values())
+    summary = (
+        f"{customer['name']}关联{len(owners)}名跟进人、{len(contacts)}名联系人、"
+        f"{len(projects)}个项目/商机、{len(contracts)}份合同、"
+        f"{len(orders)}张订单、{len(products)}个产品。"
+    )
+    return {
+        "scenario": "customer_360",
+        "customer": _compact_entity(customer),
+        "summary": summary,
+        "account_owners": owners,
+        "contacts": contacts,
+        "projects": projects,
+        "contracts": contracts,
+        "orders": orders,
+        "products": products,
+        "relation_paths": relation_paths,
+        "recommended_actions": [
+            "基于合同/产品清单识别续约和交叉销售机会",
+            "拜访前优先确认决策人、技术对接人和存量合同关系",
+            "对外承诺价格、赔偿或超标准 SLA 前先走审批留痕",
+        ],
+    }
+
+
+def fault_impact(tenant_id: str, station_name: str) -> dict:
+    """故障影响场景：基站 -> 片区 -> 客户，同时补维护人和回传链路。"""
+    station = resolve_entity(tenant_id, "station", station_name)
+    sid = station["id"]
+    areas = _targets(query_relations(tenant_id, sid, "cover", "out"), "area")
+    maintainers = _targets(query_relations(tenant_id, sid, "maintain", "in"), "employee")
+    backhaul_links = _targets(query_relations(tenant_id, sid, "backhaul", "out"), "link")
+
+    customer_map: dict[int, dict] = {}
+    relation_paths: list[dict] = []
+    for area in areas:
+        relation_paths.append({"text": f"{station['name']} -覆盖-> {area['name']}"})
+        for r in query_relations(tenant_id, area["id"], "located_in", "in"):
+            customer = _compact_entity(r["target"])
+            customer_map[customer["id"]] = customer
+            relation_paths.append({"text": f"{station['name']} -覆盖-> {area['name']} <-位于- {customer['name']}"})
+    for maintainer in maintainers:
+        relation_paths.append({"text": f"{maintainer['name']} -维护-> {station['name']}"})
+    for link in backhaul_links:
+        relation_paths.append({"text": f"{station['name']} -回传-> {link['name']}"})
+
+    customers = list(customer_map.values())
+
+    def is_vip(c: dict) -> bool:
+        text = " ".join(str(c.get(k, "")) for k in ("grade", "level", "priority", "intro"))
+        return any(x in text for x in ("VIP", "A级", "战略", "政企", "重点"))
+
+    vip_customers = [c for c in customers if is_vip(c)]
+    summary = (
+        f"{station['name']}关联{len(areas)}个覆盖片区、{len(customers)}个受影响客户，"
+        f"其中{len(vip_customers)}个为重点/VIP客户；"
+        f"维护人员{len(maintainers)}名，回传链路{len(backhaul_links)}条。"
+    )
+    return {
+        "scenario": "fault_impact",
+        "station": _compact_entity(station),
+        "summary": summary,
+        "areas": areas,
+        "affected_customers": customers,
+        "vip_customers": vip_customers,
+        "maintainers": maintainers,
+        "backhaul_links": backhaul_links,
+        "relation_paths": relation_paths,
+        "recommended_actions": [
+            "优先通知维护人员确认接单",
+            "涉及 VIP/重点客户时按重大故障升级规则处理",
+            "结合告警流水和 KPI 数据核实影响时长与 SLA 风险",
+        ],
+    }
 
 
 def stats(tenant_id: str) -> dict:

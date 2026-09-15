@@ -94,7 +94,7 @@ subagent_policy: |
     kbs=[], sops=[], cons=["newsnow", "playwright"]),
 ```
 
-- `tools`：只能填已登记进 `ALL_LOCAL_TOOLS`（`backend/app/compiler.py`）的 id；`_tools_with_ontology()` 是内置员工的统一包装，追加两个本体查询工具；
+- `tools`：只能填已登记进 `ALL_LOCAL_TOOLS`（`backend/app/compiler.py`）的 id；`_tools_with_ontology()` 是内置员工的统一包装，追加四个通用本体查询工具；客户 360、故障影响等场景工具单独加入工具列表并按岗位授权；
 - `cons`：MCP 连接器 id，必须在 `CONNECTOR_SEEDS` 里存在；
 - `sops`：刚性 SOP 的 id（内容定义在同一文件的 `NETOPS_SOPS` 式列表里）。
 

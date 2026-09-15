@@ -191,13 +191,30 @@ def test_assemble_kb_search_closure_injected(monkeypatch):
 
 
 def test_assemble_ontology_tools_injected(monkeypatch):
-    """声明 ontology_find_entities 或 ontology_query_relations → 两个都注入。"""
+    """声明任一通用本体查询工具 → 四个通用只读工具都注入。"""
     guard.set_setting("admin_only_tools", "")
     spec = _spec(["ontology_find_entities"], id="ont_emp")
     tools, _ = asyncio.run(_assemble_tools(spec, user_id=None))
     names = {t.name for t in tools}
     assert "ontology_find_entities" in names
     assert "ontology_query_relations" in names
+    assert "ontology_expand" in names
+    assert "ontology_find_paths" in names
+    assert "ontology_customer_360" not in names
+    assert "ontology_fault_impact" not in names
+
+
+def test_assemble_ontology_scenario_tools_injected(monkeypatch):
+    """场景化本体工具独立授权，并在声明时连带注入通用读工具。"""
+    guard.set_setting("admin_only_tools", "")
+    spec = _spec(["ontology_customer_360", "ontology_fault_impact"], id="ont_scene")
+    tools, _ = asyncio.run(_assemble_tools(spec, user_id=None))
+    names = {t.name for t in tools}
+    assert {
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+        "ontology_customer_360", "ontology_fault_impact",
+    } <= names
 
 
 # ---------- ALL_LOCAL_TOOLS 注册表完整性 ----------
