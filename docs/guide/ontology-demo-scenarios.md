@@ -1,6 +1,6 @@
 # 企业业务本体演示问题清单
 
-> 适用版本：UniEmployee v0.15.0  
+> 适用版本：UniEmployee v0.16.0  
 > 验证日期：2026-09-14  
 > 验证入口：`http://localhost:8787`
 
