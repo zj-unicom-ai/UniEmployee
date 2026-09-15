@@ -93,6 +93,9 @@ def test_backfill_employees_if_missing_adds_netops():
     cfg = catalog.get_employee_config("net-ops")
     assert cfg is not None and cfg["name"] == "小网"
     assert "ontology_find_entities" in cfg["tools"]
+    assert "ontology_expand" in cfg["tools"]
+    assert "ontology_find_paths" in cfg["tools"]
+    assert "ontology_fault_impact" in cfg["tools"]
     assert "fault-impact-analysis" in cfg["skills"]
     # 幂等：再跑一次不重复
     catalog.backfill_employees_if_missing()
@@ -125,11 +128,42 @@ def test_backfill_employees_if_missing_adds_market_intel():
                                   "market-alert-triage"}
     assert "bocha_search" in cfg["tools"]
     assert "ontology_find_entities" in cfg["tools"]
+    assert "ontology_expand" in cfg["tools"]
+    assert "ontology_find_paths" in cfg["tools"]
     # 连接器指派：newsnow + playwright
     assert set(cfg.get("connectors") or []) >= {"newsnow", "playwright"}
     # 幂等：再跑一次不重复
     catalog.backfill_employees_if_missing()
     catalog.backfill_connectors()
+
+
+def test_backfill_ontology_tools_adds_path_and_scenario_tools():
+    """老库补齐通用路径工具，并按岗位独立补客户/故障场景能力。"""
+    catalog.init()
+    catalog.seed_if_empty()
+    con = sqlite3.connect(str(catalog.db.DB))
+    ontology_tools = (
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+        "ontology_customer_360", "ontology_fault_impact",
+    )
+    placeholders = ",".join("?" for _ in ontology_tools)
+    con.execute(
+        f"DELETE FROM employee_tools WHERE tool_id IN ({placeholders})",
+        ontology_tools)
+    con.execute(
+        f"DELETE FROM tools WHERE id IN ({placeholders})",
+        ontology_tools)
+    con.commit()
+    con.close()
+
+    catalog.backfill_ontology_tools()
+    assert set(catalog.get_employee_config("xiaoshu")["tools"]) >= {
+        "ontology_expand", "ontology_find_paths"}
+    assert "ontology_customer_360" in catalog.get_employee_config("xiaoxiao")["tools"]
+    assert "ontology_fault_impact" in catalog.get_employee_config("net-ops")["tools"]
+    # 幂等
+    catalog.backfill_ontology_tools()
 
 
 # ---- 知识库（RAGFlow 映射） ----

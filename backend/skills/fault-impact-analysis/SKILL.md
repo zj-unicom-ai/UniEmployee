@@ -34,6 +34,11 @@ alarm_type/severity P1~P4/status/duration_min/root_cause/handler），
 
 ### 步骤3：展开影响面（本体逐跳查询）
 
+优先调用 `ontology_fault_impact(station_name="基站名或编号")` 一次拿到：
+覆盖片区、受影响客户、重点/VIP 客户、维护人员、回传链路和中文关系路径。
+
+如需逐项核对证据路径，再按以下顺序走一跳查询：
+
 从基站实体 id 出发：
 1. ontology_query_relations(entity_id, relation_type="cover") → 得到覆盖片区；
 2. 对每个片区，ontology_query_relations(片区id, relation_type="located_in", direction="in")
@@ -42,6 +47,7 @@ alarm_type/severity P1~P4/status/duration_min/root_cause/handler），
 
 ### 步骤4：定位责任人
 
+- 优先使用 `ontology_fault_impact` 返回的维护人员及联系方式；
 - 装维：ontology_query_relations(基站id, relation_type="maintain", direction="in")
   → 负责该基站的装维工程师（含电话）；与告警流水 handler 字段交叉核对，
   若 handler 与本体维护人不一致，提示调度记录与本体维护关系需要核实；
@@ -68,3 +74,11 @@ alarm_type/severity P1~P4/status/duration_min/root_cause/handler），
 - 数据分析用 execute 跑 pandas（工作目录 /data，共享数据集在 /datasets/ 只读
   目录，用绝对路径读 csv 如 pd.read_csv("/datasets/netops_alerts.csv")），
   不要把告警数据逐条贴进上下文
+
+## 最终输出铁律
+
+1. 必须输出完整中文结论，格式固定为：
+   「影响面 → 告警摘要 → 责任人 → 处置建议 → 已登记工单」。
+2. 责任人必须写明姓名和联系方式，例如：装维工程师赵敏，电话 13800001003。
+3. 必须先输出完整结论，再调用 create_ticket 登记工单。
+4. 如果工具调用后会话暂停，等待审批或用户继续，不要停在过程性文字。

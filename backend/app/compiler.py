@@ -181,7 +181,9 @@ def _build_sop_routing(sops: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_ontology_routing(write_enabled: bool = False) -> str:
+def _build_ontology_routing(write_enabled: bool = False,
+                            customer_360_enabled: bool = False,
+                            fault_impact_enabled: bool = False) -> str:
     """企业业务本体使用指引：员工具备 ontology_* 工具时拼进 system_prompt。
 
     本体的价值是让数字员工基于真实业务关系作答（谁负责哪个项目、
@@ -195,9 +197,19 @@ def _build_ontology_routing(write_enabled: bool = False) -> str:
         "回答涉及具体业务事实时，必须先查询本体再作答，禁止编造或凭记忆猜测：",
         "- 查实体：ontology_find_entities（实体类型：org/department/position/employee/customer/product/project/contract/order）",
         "- 查关系：ontology_query_relations（如谁负责某项目、某客户下过哪些订单、某订单包含哪些产品）",
+        "- 展开周边：ontology_expand（实体周边多跳节点/边，适合快速建立上下文）",
+        "- 查找路径：ontology_find_paths（两个实体间或实体到某类实体的证据路径）",
         "查询链路：先 ontology_find_entities 拿到实体 id，再 ontology_query_relations 沿关系展开。",
         "例如用户问「李晓芳负责哪些项目」：先查员工李晓芳，再用她的 id 查询 manage 关系。",
     ]
+    if customer_360_enabled:
+        lines += [
+            "- 客户全景：ontology_customer_360（一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径）",
+        ]
+    if fault_impact_enabled:
+        lines += [
+            "- 故障影响：ontology_fault_impact（一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路）",
+        ]
     if write_enabled:
         lines += [
             "",
@@ -317,18 +329,29 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             tools.append(ALL_LOCAL_TOOLS[g])
 
     # --- 企业业务本体闭包工具：spec.tools 声明了 ontology_* 才注入（按用户 tenant 隔离）。
-    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一查询工具即注入
-    #     两个只读工具（find 拿 id → query_relations 展开）。
+    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一通用查询工具即注入
+    #     四个只读工具（find 拿 id → query / expand / find_paths 展开）。
+    #     两个场景工具独立授权，避免把所有员工的工具集都铺满。
     #     ontology_write（企业本体写回）是独立授权：只有 spec.tools 显式声明才注入，
     #     未授权员工的工具集里不存在该工具（资源中心开关即授权）；授权写回时连带
     #     保证只读工具在场（写之前需要 find 定位实体）。---
     from app.tools.ontology_tools import make_ontology_tools
-    onto_reads = any(n in ("ontology_find_entities", "ontology_query_relations")
+    onto_reads = any(n in (
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+    )
                      for n in spec.tools)
     onto_write = "ontology_write" in spec.tools
-    if onto_reads or onto_write:
-        for t in make_ontology_tools(user_id, include_reads=onto_reads or onto_write,
-                                     include_write=onto_write):
+    onto_customer_360 = "ontology_customer_360" in spec.tools
+    onto_fault_impact = "ontology_fault_impact" in spec.tools
+    if onto_reads or onto_write or onto_customer_360 or onto_fault_impact:
+        for t in make_ontology_tools(user_id,
+                                     include_reads=(
+                                         onto_reads or onto_write
+                                         or onto_customer_360 or onto_fault_impact),
+                                     include_write=onto_write,
+                                     include_customer_360=onto_customer_360,
+                                     include_fault_impact=onto_fault_impact):
             if t.name not in have:
                 tools.append(t)
 
@@ -532,10 +555,16 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     system_prompt += _build_user_context(user_id)
     system_prompt += _build_skill_routing(skill_summaries)
     system_prompt += _build_sop_routing(sop_summaries)
-    if any(n in ("ontology_find_entities", "ontology_query_relations", "ontology_write")
+    if any(n in (
+        "ontology_find_entities", "ontology_query_relations", "ontology_expand",
+        "ontology_find_paths", "ontology_customer_360", "ontology_fault_impact",
+        "ontology_write",
+    )
            for n in spec.tools):
         system_prompt += _build_ontology_routing(
-            write_enabled="ontology_write" in spec.tools)
+            write_enabled="ontology_write" in spec.tools,
+            customer_360_enabled="ontology_customer_360" in spec.tools,
+            fault_impact_enabled="ontology_fault_impact" in spec.tools)
     system_prompt += _build_subagent_routing(subagents)
     if spec.subagent_policy:
         system_prompt += "\n" + spec.subagent_policy.strip()

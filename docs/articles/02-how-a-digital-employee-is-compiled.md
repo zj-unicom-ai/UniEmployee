@@ -57,7 +57,7 @@ catalog.db 关联表（employee_skills / employee_tools / employee_kbs / employe
 | 闭包工具 | `kb_search` 按员工的知识库配置动态生成，运行时实时读库 |
 | 工厂工具 | `start_refund` 需要注入运行时 checkpointer，用于内层状态机的挂起恢复 |
 | 通用工具 | `get_current_time` 无条件注入所有员工 |
-| 本体工具 | `ontology_find_entities` / `ontology_query_relations` 按用户租户生成 |
+| 本体工具 | `ontology_find_entities` / `ontology_query_relations` / `ontology_expand` / `ontology_find_paths` 按用户租户生成；客户 360、故障影响等场景工具按岗位授权 |
 | MCP 连接器 | 通过 `MultiServerMCPClient` 拉起 CRM、新闻等外部工具 |
 
 特别要说明的是闭包工具。它们捕获了"当前员工是谁、当前用户是谁"的上下文，运行时查询的是最新配置，而不是编译期固化下来的快照。知识库条目增删改后，不需要重新编译员工。

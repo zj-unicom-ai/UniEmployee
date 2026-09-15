@@ -26,9 +26,11 @@ description: 客户 360 画像技能。当用户询问某个客户的综合情�
 ### 步骤 2：查业务本体关系
 用本体工具查客户的结构化关系（知识库是叙述性材料，本体是权威关系数据，
 实体类型用英文代码 customer/contact/product/project/contract）：
+- 先调用 `ontology_customer_360(customer_name="客户名")` 获取客户全景：
+  跟进人、联系人、项目/商机、合同、订单、产品和中文关系路径；
 - `ontology_find_entities(entity_type="customer", keyword="客户名关键词")` 定位客户实体
-- `ontology_query_relations(entity_id=客户实体id, direction="any")` 获取
-  该客户的签约合同（sign）/ 在途项目（serve）/ 联系人（belongs_to）等关系
+- 对全景结果中需要追证的部分，再用 `ontology_query_relations` / `ontology_find_paths`
+  核验签约合同（sign）、在途项目（serve）、联系人（belongs_to）及商机对应的存量合同
 - 定位客户联系人用 `entity_type="contact"`；沿合同继续查 `include` 关系可得产品清单，
   沿商机查 `correspond_to` 可得关联存量合同
 

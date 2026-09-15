@@ -67,6 +67,36 @@
         <n-empty v-if="!relations.length" description="暂无关系数据，先在「业务关系」中创建" size="large" style="padding:60px 0" />
       </n-tab-pane>
 
+      <!-- 路径查询 -->
+      <n-tab-pane name="paths" tab="路径查询">
+        <div class="onto-toolbar path-toolbar">
+          <n-select v-model:value="pathForm.source_id" :options="pathEntityOptions" filterable clearable
+                    placeholder="起点实体" style="width:240px" />
+          <span class="path-arrow">→</span>
+          <n-select v-model:value="pathForm.target_id" :options="pathEntityOptions" filterable clearable
+                    placeholder="目标实体（可选）" style="width:240px" />
+          <n-select v-model:value="pathForm.target_type" :options="typeOptions" clearable
+                    placeholder="目标类型（可选）" style="width:180px" />
+          <n-select v-model:value="pathForm.max_depth" :options="depthOptions" style="width:130px" />
+          <n-button type="primary" :loading="pathLoading" :disabled="!canFindPaths" @click="findPaths">查找路径</n-button>
+        </div>
+        <n-empty v-if="!pathResult.length" description="暂无可展示路径" size="large" style="padding:60px 0" />
+        <div v-else class="path-list">
+          <div v-for="(path, idx) in pathResult" :key="idx" class="path-card">
+            <div class="path-card-head">
+              <span class="path-title">{{ path.text }}</span>
+              <n-tag size="tiny" round bordered>{{ path.hops }} 跳</n-tag>
+            </div>
+            <div class="path-steps">
+              <n-tag v-for="(step, stepIdx) in path.steps" :key="`${step.relation_id}-${stepIdx}`"
+                     size="small" round bordered>
+                {{ pathStepText(step) }}
+              </n-tag>
+            </div>
+          </div>
+        </div>
+      </n-tab-pane>
+
       <!-- 类型定义 -->
       <n-tab-pane name="schema" tab="类型定义">
         <div class="onto-schema">
@@ -216,6 +246,7 @@ const activeTab = ref('entities')
 
 const schema = ref({ entity_types: [], relation_types: [] })
 const entities = ref([])
+const pathEntities = ref([])
 const relations = ref([])
 const stats = ref({})
 const filterType = ref(null)
@@ -224,6 +255,8 @@ const keyword = ref('')
 const typeOptions = computed(() => (schema.value.entity_types || []).map(t => ({ label: `${t.icon || ''} ${t.name}（${t.code}）`, value: t.code })))
 const relationTypeOptions = computed(() => (schema.value.relation_types || []).map(t => ({ label: `${t.name}（${t.code}）`, value: t.code })))
 const entityOptions = computed(() => entities.value.map(e => ({ label: `【${entityTypeName(e.entity_type)}】${e.name}`, value: e.id })))
+const pathEntityOptions = computed(() => pathEntities.value.map(e => ({ label: `【${entityTypeName(e.entity_type)}】${e.name}`, value: e.id })))
+const depthOptions = [1, 2, 3, 4, 5].map(v => ({ label: `最大 ${v} 跳`, value: v }))
 const isAdmin = computed(() => auth.isAdmin)
 
 const etColumns = [
@@ -275,6 +308,11 @@ const editingType = ref(null)
 const rtModal = ref(false)
 const rtForm = ref({})
 const editingRt = ref(null)
+const pathForm = ref({ source_id: null, target_id: null, target_type: null, max_depth: 3 })
+const pathResult = ref([])
+const pathLoading = ref(false)
+const canFindPaths = computed(() =>
+  !!pathForm.value.source_id && !!(pathForm.value.target_id || pathForm.value.target_type))
 
 const entityById = id => entities.value.find(e => e.id === id)
 const relName = id => entityById(id)?.name || `#${id}`
@@ -293,6 +331,12 @@ const relTargetName = r => {
   const id = r.from_id === detailEntity.value.id ? r.to_id : r.from_id
   return relName(id)
 }
+const pathStepText = step => {
+  const rel = step.relation_name || step.relation_type
+  return step.direction === 'out'
+    ? `${step.source.name} —${rel}→ ${step.target.name}`
+    : `${step.source.name} ←${rel}— ${step.target.name}`
+}
 
 async function loadSchema() {
   schema.value = (await api.get('/admin/ontology/schema')).data
@@ -306,11 +350,14 @@ async function loadEntities() {
 async function loadRelations() {
   relations.value = (await api.get('/admin/ontology/relations')).data.items
 }
+async function loadPathEntities() {
+  pathEntities.value = (await api.get('/admin/ontology/entities')).data.items
+}
 async function loadStats() {
   stats.value = (await api.get('/admin/ontology/stats')).data
 }
 async function reloadAll() {
-  await Promise.all([loadSchema(), loadEntities(), loadRelations(), loadStats()])
+  await Promise.all([loadSchema(), loadEntities(), loadPathEntities(), loadRelations(), loadStats()])
 }
 
 function openEntityDetail(id) {
@@ -366,6 +413,25 @@ async function delRelation(id) {
   await api.delete(`/admin/ontology/relations/${id}`)
   msg.success('已删除')
   reloadAll()
+}
+
+async function findPaths() {
+  if (!canFindPaths.value) return
+  pathLoading.value = true
+  try {
+    const params = {
+      source_id: pathForm.value.source_id,
+      max_depth: pathForm.value.max_depth,
+    }
+    if (pathForm.value.target_id) params.target_id = pathForm.value.target_id
+    if (pathForm.value.target_type) params.target_type = pathForm.value.target_type
+    pathResult.value = (await api.get('/admin/ontology/paths', { params })).data.items
+    if (!pathResult.value.length) msg.warning('未找到可达路径')
+  } catch (e) {
+    msg.error(e.response?.data?.detail || '路径查询失败')
+  } finally {
+    pathLoading.value = false
+  }
 }
 
 function openTypeModal(t) {
@@ -553,4 +619,11 @@ onBeforeUnmount(() => {
 .onto-rel-text { flex: 1; font-size: 13px; }
 .onto-graph { height: 560px; border: 1px solid #e0e0e6; border-radius: 8px; }
 .graph-hint { color: #888; font-size: 12px; }
+.path-toolbar { flex-wrap: wrap; }
+.path-arrow { color: #999; }
+.path-list { display: flex; flex-direction: column; gap: 10px; }
+.path-card { padding: 12px 14px; border: 1px solid #e0e0e6; border-radius: 8px; background: #fff; }
+.path-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.path-title { color: #333; font-weight: 600; line-height: 1.5; }
+.path-steps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 </style>

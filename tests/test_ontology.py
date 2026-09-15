@@ -11,11 +11,13 @@ def test_seed_schema_and_demo_are_idempotent():
     ontology.seed_demo_if_empty()
 
     schema = ontology.list_schema("default")
-    assert len(schema["entity_types"]) == 14
-    assert len(schema["relation_types"]) == 14
+    assert len(schema["entity_types"]) == 15
+    assert len(schema["relation_types"]) == 16
     codes = {t["code"] for t in schema["entity_types"]}
     assert {"org", "employee", "customer", "project", "contract", "order",
-            "station", "area"} <= codes
+            "station", "area", "contact"} <= codes
+    relation_codes = {t["code"] for t in schema["relation_types"]}
+    assert {"sign", "decide"} <= relation_codes
 
     stats = ontology.stats("default")
     assert stats["total_entities"] == 35
@@ -57,7 +59,7 @@ def test_tenant_isolation():
     assert ontology.stats("tenant-b")["total_entities"] == 0
     # system 预置 schema 对任何租户可见
     schema = ontology.list_schema("tenant-b")
-    assert len(schema["entity_types"]) == 14
+    assert len(schema["entity_types"]) == 15
 
 
 def test_entity_and_relation_crud():
@@ -215,6 +217,164 @@ def test_netops_demo_seed_skips_when_station_exists():
     assert ontology.find_entities("default", entity_type="org", keyword="星联") == []
 
 
+# ---------------- 关系展开 / 路径 / 场景查询 ----------------
+
+def test_query_relations_enforces_tenant_scope():
+    """跨租户实体 id 不能借关系查询探测，即使两端实体真实存在。"""
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    emp = ontology.create_entity("tenant-b", {
+        "entity_type": "employee", "name": "租户B员工"})
+    cus = ontology.create_entity("tenant-b", {
+        "entity_type": "customer", "name": "租户B客户"})
+    ontology.create_relation("tenant-b", {
+        "from_id": emp, "to_id": cus, "relation_type": "follow_up"})
+
+    assert ontology.query_relations("default", emp) == []
+    assert ontology.query_relations("default", cus) == []
+    assert len(ontology.query_relations("tenant-b", emp)) == 1
+
+
+def test_expand_entity_returns_evidence_paths_and_honors_filters():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    station = ontology.find_entities("default", "station", "BS-003")[0]
+
+    graph = ontology.expand_entity("default", station["id"], depth=2)
+    assert graph["center"]["name"] == "高新区1号基站"
+    assert graph["truncated"] is False
+    assert any(
+        path["text"] == "高新区1号基站 -覆盖-> 高新区片区 <-居住于- 杭州智造科技"
+        for path in graph["relation_paths"]
+    )
+
+    only_cover = ontology.expand_entity(
+        "default", station["id"], depth=2, relation_types=["cover"])
+    assert {edge["relation_type"] for edge in only_cover["edges"]} == {"cover"}
+    assert all(step["relation_type"] == "cover"
+               for path in only_cover["relation_paths"] for step in path["steps"])
+
+
+def test_find_paths_to_entity_and_type():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    station = ontology.find_entities("default", "station", "BS-003")[0]
+    customer = ontology.find_entities("default", "customer", "杭州智造科技")[0]
+
+    exact = ontology.find_paths(
+        "default", station["id"], target_id=customer["id"], max_depth=2)
+    assert len(exact) == 1
+    assert exact[0]["hops"] == 2
+    assert exact[0]["target"]["name"] == "杭州智造科技"
+    assert "高新区片区" in exact[0]["text"]
+
+    by_type = ontology.find_paths(
+        "default", station["id"], target_type="customer", max_depth=2)
+    assert {p["target"]["name"] for p in by_type} == {
+        "杭州智造科技", "王秀英"}
+
+
+def test_find_paths_more_business_scenarios():
+    """扩展场景：客户签约产品、算力节点归属、基站回传链路。"""
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_demo_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    ontology.seed_netops_resources_if_empty()
+    ontology.seed_crm_demo_if_empty()
+
+    def entity(type_, name):
+        return ontology.find_entities("default", type_, name)[0]
+
+    geely = entity("customer", "吉利汽车")
+    product = entity("product", "5G 专网")
+    customer_paths = ontology.find_paths(
+        "default", geely["id"], target_id=product["id"], max_depth=2)
+    assert any(
+        p["hops"] == 2
+        and p["text"].startswith("吉利汽车 -签约-> HT-2025-0031 -包含-> 5G 专网")
+        for p in customer_paths
+    )
+
+    node = entity("compute_node", "GPU训练节点01")
+    datacenter = entity("datacenter", "滨江核心机房")
+    resource_paths = ontology.find_paths(
+        "default", node["id"], target_id=datacenter["id"], max_depth=1)
+    assert len(resource_paths) == 1
+    assert resource_paths[0]["text"] == "GPU训练节点01 -部署于-> 滨江核心机房"
+
+    station = entity("station", "BS-003")
+    link = entity("link", "高新-下沙光缆")
+    backhaul_paths = ontology.find_paths(
+        "default", station["id"], target_id=link["id"], max_depth=1)
+    assert len(backhaul_paths) == 1
+    assert backhaul_paths[0]["text"] == "高新区1号基站 -回传-> 高新-下沙光缆"
+
+
+def test_expand_customer_context_contains_contracts_and_products():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_crm_demo_if_empty()
+
+    geely = ontology.find_entities("default", "customer", "吉利汽车")[0]
+    graph = ontology.expand_entity("default", geely["id"], depth=2)
+    nodes = {n["name"]: n for n in graph["nodes"]}
+    edges = {(e["relation_type"], e["from"]["name"], e["to"]["name"])
+             for e in graph["edges"]}
+
+    assert {"HT-2025-0031", "HT-2025-0044", "5G 专网", "联通云"} <= set(nodes)
+    assert ("sign", "吉利汽车", "HT-2025-0031") in edges
+    assert ("include", "HT-2025-0031", "5G 专网") in edges
+
+
+def test_customer_360_scenario():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_crm_demo_if_empty()
+
+    out = ontology.customer_360("default", "吉利汽车")
+    assert out["customer"]["name"] == "吉利汽车"
+    assert [x["name"] for x in out["account_owners"]] == ["万仁刚"]
+    assert {x["name"] for x in out["contacts"]} == {"李总监", "王工"}
+    assert {x["name"] for x in out["projects"]} == {
+        "极氪工厂 5G 专网二期", "车联网数据合规平台", "视频云园区安防扩容"}
+    assert "HT-2025-0031" in {x["name"] for x in out["contracts"]}
+    assert "联通云" in {x["name"] for x in out["products"]}
+    assert any("-签约->" in p["text"] for p in out["relation_paths"])
+
+
+def test_customer_360_zero_run():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_crm_demo_if_empty()
+
+    out = ontology.customer_360("default", "零跑汽车")
+    assert [x["name"] for x in out["account_owners"]] == ["万仁刚"]
+    assert [x["name"] for x in out["contacts"]] == ["陈经理"]
+    assert {x["name"] for x in out["contracts"]} == {
+        "HT-2025-0089", "HT-2026-0007"}
+    assert {x["name"] for x in out["products"]} == {
+        "SD-WAN 智选专线", "联通云"}
+
+
+def test_fault_impact_scenario():
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    ontology.seed_netops_resources_if_empty()
+
+    out = ontology.fault_impact("default", "BS-003")
+    assert out["station"]["name"] == "高新区1号基站"
+    assert [x["name"] for x in out["areas"]] == ["高新区片区"]
+    assert {x["name"] for x in out["affected_customers"]} == {
+        "杭州智造科技", "王秀英"}
+    assert [x["name"] for x in out["vip_customers"]] == ["杭州智造科技"]
+    assert [x["name"] for x in out["maintainers"]] == ["赵敏"]
+    assert [x["name"] for x in out["backhaul_links"]] == ["高新-下沙光缆"]
+
+
 # ---------------- 对话写回（ontology_write / source 溯源） ----------------
 
 def test_seed_rows_default_source_and_migration_idempotent():
@@ -301,6 +461,33 @@ def test_ontology_write_tool_gate():
     writable = {t.name for t in make_ontology_tools(
         None, include_reads=True, include_write=True)}
     assert {"ontology_find_entities", "ontology_query_relations", "ontology_write"} <= writable
+
+
+def test_ontology_scenario_tools_are_gated_and_tenant_bound():
+    import json as _json
+    from app.tools.ontology_tools import make_ontology_tools
+
+    ontology.init()
+    ontology.seed_schema_if_empty()
+    ontology.seed_netops_demo_if_empty()
+    ontology.seed_crm_demo_if_empty()
+
+    general = {t.name for t in make_ontology_tools(None)}
+    assert {
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+    } <= general
+    assert "ontology_customer_360" not in general
+    assert "ontology_fault_impact" not in general
+
+    tools = {t.name: t for t in make_ontology_tools(
+        None, include_customer_360=True, include_fault_impact=True)}
+    customer = _json.loads(tools["ontology_customer_360"].invoke(
+        {"customer_name": "吉利汽车"}))
+    fault = _json.loads(tools["ontology_fault_impact"].invoke(
+        {"station_name": "BS-003"}))
+    assert customer["customer"]["name"] == "吉利汽车"
+    assert fault["vip_customers"][0]["name"] == "杭州智造科技"
 
 
 def test_ontology_write_tool_full_flow_and_audit():

@@ -47,7 +47,20 @@ CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-
                     "playwright": ["net-ops", "market-intel"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
-ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
+ONTOLOGY_TOOLS = (
+    "ontology_find_entities",
+    "ontology_query_relations",
+    "ontology_expand",
+    "ontology_find_paths",
+)
+
+# 场景化只读工具：按岗位独立授权，避免把客户/网络场景工具无差别铺给所有员工。
+ONTOLOGY_CUSTOMER_360_TOOL = "ontology_customer_360"
+ONTOLOGY_FAULT_IMPACT_TOOL = "ontology_fault_impact"
+ONTOLOGY_SCENARIO_ASSIGN = {
+    ONTOLOGY_CUSTOMER_360_TOOL: ("xiaoxiao",),
+    ONTOLOGY_FAULT_IMPACT_TOOL: ("net-ops",),
+}
 
 # 本体写回工具（对话中增改实体/建立关系）：独立授权，默认只给掌握业务事实
 # 录入职责的员工（xiaoxiao 客户事实 / hrbp 员工事实）；资源中心可开关，
@@ -171,7 +184,9 @@ EMPLOYEE_SEEDS = {
         kbs=[], sops=[]),
     "xiaoxiao": dict(
         skills=["enterprise-sales", "customer-360", "renewal-scan"],
-        tools=_tools_with_ontology(["kb_search", "bocha_search", "create_ticket"], write=True),
+        tools=(_tools_with_ontology(
+            ["kb_search", "bocha_search", "create_ticket"], write=True)
+            + [ONTOLOGY_CUSTOMER_360_TOOL]),
         kbs=[]),
     "hrbp": dict(
         skills=["hr-assistant"],
@@ -185,7 +200,9 @@ EMPLOYEE_SEEDS = {
     "net-ops": dict(
         skills=["fault-impact-analysis", "ops-metrics-analysis",
                 "resource-capacity-analysis", "sop-execution"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
+        tools=(_tools_with_ontology(
+            ["kb_search", "create_ticket", "get_current_time"])
+            + [ONTOLOGY_FAULT_IMPACT_TOOL]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
     "market-intel": dict(
@@ -239,6 +256,14 @@ def seed_if_empty():
          "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）", "local", None),
         ("ontology_query_relations", "企业本体关系查询",
          "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）", "local", None),
+        ("ontology_expand", "企业本体关系展开",
+         "从实体出发做有限深度关系展开，返回节点、边和证据路径", "local", None),
+        ("ontology_find_paths", "企业本体路径查询",
+         "查找两个实体之间或实体到某类实体的有限业务路径", "local", None),
+        ("ontology_customer_360", "企业本体客户 360",
+         "一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径", "local", None),
+        ("ontology_fault_impact", "企业本体故障影响",
+         "一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路", "local", None),
         ("ontology_write", "企业本体写回",
          "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）",
          "local", None),
@@ -349,20 +374,38 @@ def backfill_ontology_tools():
                                    "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）"),
         "ontology_query_relations": ("企业本体关系查询",
                                      "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）"),
+        "ontology_expand": ("企业本体关系展开",
+                            "从实体出发做有限深度关系展开，返回节点、边和证据路径"),
+        "ontology_find_paths": ("企业本体路径查询",
+                                "查找两个实体之间或实体到某类实体的有限业务路径"),
+        ONTOLOGY_CUSTOMER_360_TOOL: (
+            "企业本体客户 360",
+            "一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径"),
+        ONTOLOGY_FAULT_IMPACT_TOOL: (
+            "企业本体故障影响",
+            "一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路"),
         ONTOLOGY_WRITE_TOOL: ("企业本体写回",
                               "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）"),
     }
-    for tid in (*ONTOLOGY_TOOLS, ONTOLOGY_WRITE_TOOL):
+    for tid in (*ONTOLOGY_TOOLS, *ONTOLOGY_SCENARIO_ASSIGN, ONTOLOGY_WRITE_TOOL):
         name, desc = _ONTOLOGY_DESC[tid]
         cur.execute(
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
             "VALUES(?,?,?,?,?)",
             (tid, name, desc, "local", None))
-    for e in ("xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops", "unicom-presale"):
+    for e in ("xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops",
+              "market-intel", "unicom-presale"):
         if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    for tool_id, employees in ONTOLOGY_SCENARIO_ASSIGN.items():
+        for e in employees:
+            if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
+                           (e,)).fetchone():
+                cur.execute(
+                    "INSERT OR IGNORE INTO employee_tools VALUES(?,?)",
+                    (e, tool_id))
     # 写回是独立授权：只给业务事实录入岗（xiaoxiao/hrbp），其余内置员工不补。
     for e in ONTOLOGY_WRITE_EMPLOYEES:
         if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
@@ -753,6 +796,7 @@ def backfill_ragflow_knowledge_bases():
 EMPLOYEE_KB_ASSIGN = {
     "xiaoxiao": ["浙江联通自研产品Wiki", "产品知识库", "客户档案"],
     "unicom-presale": ["浙江联通业务知识库"],
+    "net-ops": ["算网运营知识库"],
 }
 
 
