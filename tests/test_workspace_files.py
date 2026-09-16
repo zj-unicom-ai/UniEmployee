@@ -82,6 +82,20 @@ def test_user_isolation_on_uid_dirs(monkeypatch, tmp_path):
     assert r.status_code == 200
 
 
+def test_user_isolation_checks_resolved_symlink_target(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_paths, "WORKSPACE_DATA", tmp_path)
+    catalog.db.init()
+    catalog.create_user("u_other", "x", role="user", user_id="u_other")
+    _make_file(tmp_path, "u_other/私有产物.txt", "private")
+    (tmp_path / "u_me").mkdir(parents=True)
+    (tmp_path / "u_me" / "link.txt").symlink_to(tmp_path / "u_other" / "私有产物.txt")
+
+    r = _client(monkeypatch, role="user", uid="u_me").get(
+        "/api/workspace/file", params={"path": "u_me/link.txt"})
+
+    assert r.status_code == 403
+
+
 def test_missing_file_404(monkeypatch, tmp_path):
     monkeypatch.setattr(app_paths, "WORKSPACE_DATA", tmp_path)
     r = _client(monkeypatch).get("/api/workspace/file", params={"path": "不存在.docx"})
@@ -109,6 +123,19 @@ def test_workspace_file_watcher_diff(monkeypatch, tmp_path):
     assert w.diff() == []
     _make_file(tmp_path, "汇报.md", "# updated")
     assert w.diff() == []
+
+
+def test_workspace_file_watcher_scopes_to_current_user(monkeypatch, tmp_path):
+    monkeypatch.setattr(streaming, "WORKSPACE_DATA", tmp_path)
+    _make_file(tmp_path, "u_me/old.md", "old")
+    _make_file(tmp_path, "u_other/old.md", "old")
+    w = streaming._WorkspaceFileWatcher(user_id="u_me")
+
+    _make_file(tmp_path, "u_other/new.md", "other")
+    _make_file(tmp_path, "u_me/new.md", "mine")
+
+    got = w.diff()
+    assert got == [{"name": "new.md", "path": "u_me/new.md", "size": len("mine")}]
 
 
 # ---------- 会话产物落库与历史恢复 ----------

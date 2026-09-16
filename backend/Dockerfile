@@ -31,8 +31,8 @@ RUN mkdir -p /app/backend/skills-custom /app/workspace/data
 
 EXPOSE 8787
 
-# 容器探针：连不上 /health 即视为不健康
+# 容器探针：依赖未就绪时 /readyz 返回 503，容器视为不健康
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD curl -fsS http://localhost:8787/health || exit 1
+    CMD curl -fsS http://localhost:8787/readyz || exit 1
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

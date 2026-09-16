@@ -24,20 +24,20 @@ PYTHONPATH=backend .venv/bin/uvicorn app.main:app --port 8787 --reload
 cd frontend && npx vite
 ```
 
-验证：浏览器开 `http://localhost:8787`，默认账号 `admin / admin123`（首登强制改密）；或 `curl http://localhost:8787/health` 应返回 `"status":"ok"` 与 7 个库的 ok 状态。
+验证：浏览器开 `http://localhost:8787`，默认账号 `admin / admin123`（首登强制改密）；或 `curl http://localhost:8787/readyz` 应返回 `"status":"ok"` 与 7 个库的 ok 状态。
 
 ## 形态二：Docker Compose 全栈（推荐）
 
 ```bash
 cp .env.example .env    # 填好密钥
 docker compose up -d --build
-curl http://localhost:8787/health
+curl http://localhost:8787/readyz
 ```
 
 编排内容（`docker-compose.yml`）：
 
 - `db`：PostgreSQL 16 + `scripts/init_postgres.sql` 自动建 7 个业务库，数据落在命名卷 `pgdata`；
-- `uniemployee`：应用镜像（`backend/Dockerfile`，前后端一体），`.env` 经 `env_file` 注入密钥，挂载 `backend/skills`（技能目录热改）、`workspace`（产物文件）两个卷，healthcheck 走 `/health`。
+- `uniemployee`：应用镜像（`backend/Dockerfile`，前后端一体），`.env` 经 `env_file` 注入密钥，挂载 `backend/skills`（技能目录热改）、`workspace`（产物文件）两个卷，healthcheck 走 `/readyz`；`/livez` 只表示进程存活，`/health` 保留为兼容旧监控的 200 状态结构。
 
 生产化追加清单：
 
@@ -67,7 +67,7 @@ BACKUP_KEEP=30 ./scripts/backup.sh /data/backups   # 自定义目录与保留份
 PGBIN=/opt/homebrew/opt/postgresql@16/bin ./scripts/backup.sh   # 指定 pg_dump 位置
 ```
 
-脚本对 7 个业务库逐个 `pg_dump -Fc` 打包成带时间戳的 tar.gz，连接参数自动从 `.env` 读取。建议 crontab 每日一次：`0 3 * * * /path/to/scripts/backup.sh`。
+脚本对 7 个业务库逐个 `pg_dump -Fc` 打包成带时间戳的 tar.gz，连接参数自动从 `.env` 读取。任一关键库导出失败都会返回非 0 且不生成归档，避免把部分备份误当完整备份。建议 crontab 每日一次：`0 3 * * * /path/to/scripts/backup.sh`。
 
 恢复：解包后对每个库 `pg_restore -U <user> -d <库名> --clean <dump文件>`，再重启应用。
 
@@ -84,7 +84,7 @@ docker compose up -d --build      # 或裸机：重启 uvicorn
 
 | 现象 | 检查 |
 |---|---|
-| `/health` 某库不是 ok | PG 连接参数/网络；容器网络内 `POSTGRES_HOST=db` 而非 localhost |
+| `/readyz` 返回 503 或某库不是 ok | PG 连接参数/网络；容器网络内 `POSTGRES_HOST=db` 而非 localhost |
 | 员工列表缺新员工 | 老库靠 backfill 补种，确认升级到了含该员工的版本并已重启 |
 | 改了人设/工具没生效 | agent 编译缓存按"员工+用户+模型"缓存，**重启服务** |
 | 技能规程改了没生效 | 正文改动会热同步；frontmatter `description` 改动需重启 |

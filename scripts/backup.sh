@@ -49,6 +49,7 @@ mkdir -p "$DUMP_DIR"
 
 DBS="catalog conversations checkpoints store traces approvals ontology"
 dumped=()
+failed=()
 for db in $DBS; do
   full="${PREFIX}${db}"
   echo "[$(date '+%F %T')] pg_dump $full"
@@ -56,10 +57,17 @@ for db in $DBS; do
       -Fc -f "$DUMP_DIR/$full.dump" "$full" 2>/dev/null; then
     dumped+=("$full.dump")
   else
-    echo "  [警告] $full 导出失败（库不存在？），跳过"
+    echo "  [错误] $full 导出失败"
+    failed+=("$full")
     rm -f "$DUMP_DIR/$full.dump"
   fi
 done
+
+if [ "${#failed[@]}" -gt 0 ]; then
+  echo "[$(date '+%F %T')] 以下关键库导出失败，未生成备份归档：${failed[*]}"
+  rm -rf "$DUMP_DIR"
+  exit 1
+fi
 
 if [ "${#dumped[@]}" -eq 0 ]; then
   echo "[$(date '+%F %T')] 没有任何库导出成功，退出。"

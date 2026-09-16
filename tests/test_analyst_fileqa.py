@@ -145,6 +145,64 @@ def test_execute_query_rejects_write():
         assert "SELECT" in r["error"]
 
 
+def test_execute_query_rejects_duckdb_external_file_reads(tmp_path):
+    _make_csv("u1", "1000_销售明细.csv")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("AUDIT_ONLY_MARKER", encoding="utf-8")
+
+    for sql in (
+        f"SELECT * FROM read_text('{outside.as_posix()}')",
+        f"SELECT * FROM read_csv('{outside.as_posix()}')",
+        f"SELECT * FROM parquet_scan('{outside.as_posix()}')",
+        f"SELECT glob('{outside.as_posix()}')",
+    ):
+        r = fileqa_manager.execute_query("u1", sql)
+        assert not r["success"]
+        assert "禁止" in r["error"]
+
+
+def test_execute_query_rejects_multistatement_copy_write(tmp_path):
+    _make_csv("u1", "1000_销售明细.csv")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
+    out = tmp_path / "copy.csv"
+
+    r = fileqa_manager.execute_query(
+        "u1", f"SELECT 1; COPY (SELECT 1 AS proof) TO '{out.as_posix()}'")
+
+    assert not r["success"]
+    assert "多语句" in r["error"]
+    assert not out.exists()
+
+
+def test_execute_query_rejects_duckdb_attach_install_load(tmp_path):
+    _make_csv("u1", "1000_销售明细.csv")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
+    attach_db = tmp_path / "other.duckdb"
+
+    for sql in (
+        f"ATTACH '{attach_db.as_posix()}' AS other",
+        "INSTALL httpfs",
+        "LOAD httpfs",
+    ):
+        r = fileqa_manager.execute_query("u1", sql)
+        assert not r["success"]
+
+
+def test_execute_query_allows_registered_table_select_with_cte():
+    _make_csv("u1", "1000_销售明细.csv")
+    fileqa_manager.register_data_file("/data/u1/uploads/c1/1000_销售明细.csv", "u1")
+
+    r = fileqa_manager.execute_query(
+        "u1",
+        'WITH high AS (SELECT 产品, 销售额 FROM "1000_销售明细" '
+        'WHERE 销售额 >= 101) SELECT COUNT(*) AS n FROM high',
+    )
+
+    assert r["success"]
+    assert r["data"][0]["n"] == 2
+
+
 def test_execute_query_empty_library():
     r = fileqa_manager.execute_query("nobody", "SELECT 1")
     assert not r["success"]

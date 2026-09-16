@@ -324,6 +324,24 @@ def test_build_backends_sandbox_toggle(monkeypatch):
     assert isinstance(backend2.default, RoutingSandboxBackend)
 
 
+def test_build_backends_sandbox_production_fails_closed(monkeypatch):
+    from app.compiler import build_backends
+    from app.spec import EmployeeSpec
+
+    spec = EmployeeSpec(id="net-ops", name="x", model="m", persona="p",
+                        backend="sandbox")
+
+    monkeypatch.delenv("SANDBOX_ENABLED", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="禁止回退宿主机"):
+        build_backends(spec, None)
+
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("REQUIRE_SANDBOX", "1")
+    with pytest.raises(RuntimeError, match="禁止回退宿主机"):
+        build_backends(spec, None)
+
+
 # ---- 孤儿清扫（二期）----
 
 class _FakeInfo:
