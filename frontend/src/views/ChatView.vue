@@ -236,6 +236,7 @@ async function openConversation(cid) {
         }
       }
     }
+    await loadHistory(data.employee_id)
     scrollToBottom()
   } catch {}
 }

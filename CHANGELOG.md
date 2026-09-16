@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.0 (2026-09-17)
+
+### 重磅：小数升级数据分析师方法论 + 新员工小保析（保险经营分析）
+
+- **分析师六步工作流**：小数从「数据库问数助手」升级为数据分析师——理解业务问题 → 获取数据 → 验证数据 → 分析 → 归因 → 生成结论 → 输出报告；persona 与 `data-analysis` 技能规程同步重写，输出强制区分事实/推断/建议，重要结论必须说明数据质量限制
+- **数据验证工具落地**：新增 `sql_db_profile`（数据表画像：行数/字段非空率/数值范围/均值/分类 Top 值）与 `sql_db_quality_check`（SQL 或目标表质量检查：空结果/样本量/缺失/重复风险），方言感知的保守标识符引用，仅走表名白名单内对象
+- **归因技能**：新增 `sql-root-cause-analysis` 技能（不依赖 run_python 的 SQL 归因规程：确认异常 → 维度下钻 → 贡献度拆解），老库由 `backfill_xiaoshu_skills` 幂等补绑
+- **新员工小保析（insurance-analyst）**：第八个内置员工，保险经营分析数字员工（保费收入/赔付率/续保率/渠道贡献/机构异常识别），配 `insurance-operations-analysis` 技能；`scripts/generate_insurance_demo_data.py` 生成可复现演示数据集（workspace/data 不入库，脚本入库）
+- **前端修复**：报告新窗口打开改 Blob URL（修复 `noopener` 返回 null 导致打开失败）；报告 HTML 提取增加可渲染性校验（避免误提取短片段）；AnalystView 去除与 ChatMessage 重复的报告渲染；ChatView 打开历史会话时加载对应员工信息
+
+### 测试
+
+- 新增 8 个用例：`sql_db_profile` 画像输出与空表名拒绝、`sql_db_quality_check` 通过/小样本告警/空结果拦截/表名直查，小保析种子能力校验；内置员工数断言更新为 8
+- 相关用例全绿；vite build 通过（全量 pytest 失败清单与 main 基线一致，均为既有登录 401/429、playwright 环境失败）
+
 ## 0.16.0 (2026-09-15)
 
 ### 新增：企业业务本体深化阶段 1 第二项——多跳路径与场景查询

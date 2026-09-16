@@ -59,6 +59,8 @@ ALL_LOCAL_TOOLS = {
     "sql_db_table_relationship": ANALYST_SQL_TOOLS[2],
     "sql_db_query": ANALYST_SQL_TOOLS[3],
     "sql_db_query_checker": ANALYST_SQL_TOOLS[4],
+    "sql_db_profile": ANALYST_SQL_TOOLS[5],
+    "sql_db_quality_check": ANALYST_SQL_TOOLS[6],
     # 数据分析员工表格问答工具集（上传 Excel/CSV → DuckDB）
     "file_table_list": ANALYST_FILE_TOOLS[0],
     "file_table_query": ANALYST_FILE_TOOLS[1],

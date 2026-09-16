@@ -81,6 +81,10 @@ ANALYST_SQL_TOOLS = {
                       "执行 SELECT 查询并返回结果（只读，禁止写操作）"),
     "sql_db_query_checker": ("SQL 语法检查",
                               "检查 SQL 语法是否正确（不执行）"),
+    "sql_db_profile": ("数据表画像",
+                       "分析前检查表行数、字段非空率、数值范围和分类 Top 值"),
+    "sql_db_quality_check": ("数据质量检查",
+                             "检查分析 SQL 或目标表的空结果、样本量、缺失和重复风险"),
 }
 
 # 数据分析专家 xiaoshu 的表格问答工具集（上传 Excel/CSV → DuckDB 注册 → SQL 查询）
@@ -173,10 +177,12 @@ NETOPS_SOPS = [
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
     "xiaoshu": dict(
-        skills=["data-analysis", "frontend-design", "report-generation"],
+        skills=["data-analysis", "sql-root-cause-analysis",
+                "frontend-design", "report-generation"],
         tools=_tools_with_ontology([
             "sql_db_smart_search", "sql_db_table_schema",
             "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
+            "sql_db_profile", "sql_db_quality_check",
             "file_table_list", "file_table_query",
             # 知识库作为数据源：用户选了知识库时用 kb_search 检索
             "kb_search",
@@ -196,6 +202,10 @@ EMPLOYEE_SEEDS = {
         skills=["business-overview", "root-cause-analysis",
                 "decision-analysis", "market-intelligence"],
         tools=_tools_with_ontology(["run_python", "bocha_search", "get_current_time"]),
+        kbs=[], sops=[], cons=[]),
+    "insurance-analyst": dict(
+        skills=["insurance-operations-analysis", "frontend-design"],
+        tools=_tools_with_ontology(["run_python", "get_current_time"]),
         kbs=[], sops=[], cons=[]),
     "net-ops": dict(
         skills=["fault-impact-analysis", "ops-metrics-analysis",
@@ -278,6 +288,10 @@ def seed_if_empty():
          "执行 SELECT 查询并返回结果（只读，禁止写操作）", "local", None),
         ("sql_db_query_checker", "SQL 语法检查",
          "检查 SQL 语法是否正确（不执行）", "local", None),
+        ("sql_db_profile", "数据表画像",
+         "分析前检查表行数、字段非空率、数值范围和分类 Top 值", "local", None),
+        ("sql_db_quality_check", "数据质量检查",
+         "检查分析 SQL 或目标表的空结果、样本量、缺失和重复风险", "local", None),
     ]
     for t in tools:
         cur.execute(
@@ -490,7 +504,7 @@ def backfill_analyst_sql_tools():
 
 
 def backfill_xiaoshu_skills():
-    """幂等补齐 xiaoshu 新增技能绑定（frontend-design + report-generation）。
+    """幂等补齐 xiaoshu 新增技能绑定。
 
     设计动机：report-generation 报告生成技能是 v0.12.0 新增，frontend-design
     此前虽已在 skills/ 目录但未绑定 xiaoshu。backfill_employees_if_missing
@@ -504,8 +518,8 @@ def backfill_xiaoshu_skills():
     ).fetchone():
         con.close()
         return
-    # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这两行
-    for s in ("frontend-design", "report-generation"):
+    # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这些行
+    for s in ("sql-root-cause-analysis", "frontend-design", "report-generation"):
         cur.execute("INSERT OR IGNORE INTO employee_skills VALUES('xiaoshu', ?)", (s,))
     con.commit()
     con.close()

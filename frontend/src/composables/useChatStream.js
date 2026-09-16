@@ -38,6 +38,15 @@ export function renderMd(md) {
 
 // 报告 HTML 提取：从 markdown 文本中抽出 REPORT_HTML_START/END 包裹的整段 HTML
 // 让前端用 iframe srcdoc 渲染（renderMd 的 sanitize 会剥掉 script/style，必须独立通道）
+function isRenderableReportHtml(html) {
+  const s = (html || '').trim()
+  if (!s || s.length < 80) return false
+  return /<!doctype\s+html/i.test(s) ||
+    (/<html[\s>]/i.test(s) && /<\/html>/i.test(s)) ||
+    (/<(?:head|body|div|section|main|script|style|canvas|svg)[\s>]/i.test(s) &&
+      /<\/(?:div|section|main|script|style|canvas|svg)>/i.test(s))
+}
+
 export function extractReport(md) {
   const re = /<!--\s*REPORT_HTML_START\s*-->([\s\S]*?)<!--\s*REPORT_HTML_END\s*-->/
   const m = (md || '').match(re)
@@ -46,6 +55,9 @@ export function extractReport(md) {
   // 兼容模型把整段包在 ```html 围栏里的情况
   const fence = html.match(/^```(?:html)?\s*\n([\s\S]*?)\n```$/)
   if (fence) html = fence[1].trim()
+  if (!isRenderableReportHtml(html)) {
+    return { reportHtml: '', cleanedMd: md || '' }
+  }
   // 删掉报告段（含外层围栏），保留前后文本
   const cleanedMd = (md || '').replace(re, '').trim()
   return { reportHtml: html, cleanedMd }

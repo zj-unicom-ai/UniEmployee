@@ -112,8 +112,7 @@
           />
           <!-- SQL 语句展示：msg.sql 由 SSE sql 事件或工具 trace 填充 -->
           <SqlViewer v-if="msg.sql" :sql="msg.sql" style="margin: 4px 0 12px" />
-          <!-- 数据分析报告：report-generation 技能输出的整段 HTML，iframe srcdoc 渲染 -->
-          <ReportViewer v-if="msg.reportHtml" :html="msg.reportHtml" style="margin: 4px 0 12px" />
+          <!-- 报告/看板由 ChatMessage 内部的 ReportViewer 渲染，此处不再重复 -->
         </template>
       </div>
 
@@ -184,7 +183,6 @@ import * as analystApi from '../../../api/analyst.js'
 import { useChatStream, renderMd, extractReport } from '../../../composables/useChatStream.js'
 import ChatMessage from '../../../components/chat/ChatMessage.vue'
 import SqlViewer from '../../../components/agent/analyst/SqlViewer.vue'
-import ReportViewer from '../../../components/agent/analyst/ReportViewer.vue'
 
 defineOptions({ name: 'AnalystView' })
 const message = useMessage()
