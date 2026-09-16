@@ -311,6 +311,17 @@ def test_xiaoshu_seed_has_file_tools():
     assert "file_table_query" in EMPLOYEE_SEEDS["xiaoshu"]["tools"]
 
 
+def test_insurance_analyst_seed_has_demo_capabilities():
+    """保险经营分析演示员工必须带保险分析技能和可执行数据分析工具。"""
+    from app.catalog.seeds import EMPLOYEE_SEEDS
+
+    cfg = EMPLOYEE_SEEDS["insurance-analyst"]
+    assert "insurance-operations-analysis" in cfg["skills"]
+    assert "frontend-design" in cfg["skills"]
+    assert "run_python" in cfg["tools"]
+    assert "get_current_time" in cfg["tools"]
+
+
 def test_compiler_registers_file_tools():
     from app.compiler import ALL_LOCAL_TOOLS
 

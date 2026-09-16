@@ -102,35 +102,20 @@ function download() {
 }
 
 function openInNew() {
+  let url = ''
   try {
-    const win = window.open('', '_blank', 'noopener,noreferrer')
+    const blob = new Blob([props.html], { type: 'text/html;charset=utf-8' })
+    url = URL.createObjectURL(blob)
+    const win = window.open(url, '_blank')
     if (!win) {
+      URL.revokeObjectURL(url)
       message.error('打开失败：浏览器阻止了新窗口')
       return
     }
     win.opener = null
-    const srcdoc = JSON.stringify(props.html).replace(/</g, '\\u003c')
-    win.document.open()
-    win.document.write(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>数据分析报告</title>
-  <style>
-    html, body { margin: 0; min-height: 100%; background: #f6f7f9; }
-    iframe { display: block; width: 100%; min-height: 100vh; border: 0; background: #fff; }
-  </style>
-</head>
-<body>
-  <iframe sandbox="allow-scripts"></iframe>
-  <script>
-    document.querySelector('iframe').srcdoc = ${srcdoc};
-  <\/script>
-</body>
-</html>`)
-    win.document.close()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
   } catch (e) {
+    if (url) URL.revokeObjectURL(url)
     message.error('打开失败：' + (e?.message || ''))
   }
 }
