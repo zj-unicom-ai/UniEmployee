@@ -1,6 +1,8 @@
 """自动化任务回归测试：cron 解析 / next_fire 计算 / CRUD / 抢占 / 模板渲染。"""
 from datetime import datetime
 
+import asyncio
+
 from app import automations
 
 
@@ -133,6 +135,32 @@ def test_mark_result_updates_counters():
     assert cur["last_status"] == "ok"
     assert cur["last_conv_id"] == "c_test_1"
     assert cur["run_count"] == 1
+
+
+def test_execute_marks_awaiting_approval(monkeypatch):
+    from app import conversations
+    from app import streaming
+
+    async def fake_stream(*args, **kwargs):
+        yield 'data: {"type":"token","content":"已生成简报"}\n\n'
+        yield 'data: {"type":"approval_required","approval_id":"ap_1","tool":"publish_briefing","args":{}}\n\n'
+
+    async def fail_push(*args, **kwargs):
+        raise AssertionError("awaiting approval should not push outbound")
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    monkeypatch.setattr(automations, "_push", fail_push)
+    channel = conversations.create_channel(
+        "审批频道", config={"outbound_webhook": "https://example.invalid/webhook"})
+    auto = _mk_cron(channel_id=channel["id"])
+
+    result = asyncio.run(automations.execute(auto, trigger="manual"))
+
+    assert result["status"] == "awaiting_approval"
+    assert result["approval_id"] == "ap_1"
+    cur = automations.get(auto["id"])
+    assert cur["last_status"] == "awaiting_approval"
+    assert "ap_1" in cur["last_error"]
 
 
 def test_list_by_event_filters_enabled():

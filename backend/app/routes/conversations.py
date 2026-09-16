@@ -14,6 +14,13 @@ logger = logging.getLogger("app.routes.conversations")
 router = APIRouter(prefix="/api")
 
 
+def _ensure_employee_access(user: dict, emp_id: str) -> None:
+    if user.get("role") == "admin":
+        return
+    if emp_id not in catalog.assigned_employee_ids(user["id"]):
+        raise HTTPException(403, "该数字员工未分配给你，请联系管理员")
+
+
 @router.get("/employees")
 async def list_employees(user: dict = Depends(auth.get_current_user)):
     if user.get("role") == "admin":
@@ -76,6 +83,7 @@ async def get_conv(conv_id: str, user: dict = Depends(auth.get_current_user_or_f
     if meta.get("user_id", "default") != uid:
         return {"error": "无权访问该会话"}
     emp = meta["employee_id"]
+    _ensure_employee_access(user, emp)
     agent, _ = await runtime.get_agent(emp)
     states = [s async for s in agent.aget_state_history(
         {"configurable": {"thread_id": conv_id}}, limit=1)]
@@ -102,6 +110,9 @@ async def upload_attachment(conv_id: str, file: UploadFile = File(...),
         raise HTTPException(404, "会话不存在")
     if owner and owner != uid and owner != "default":
         raise HTTPException(403, "无权操作该会话")
+    emp = employee_of(conv_id)
+    if emp:
+        _ensure_employee_access(user, emp)
     return await attachments.save_attachment(conv_id, uid, file)
 
 
@@ -118,6 +129,7 @@ async def send_message(conv_id: str, body: MessageIn,
     if owner and owner != uid and owner != "default":
         raise HTTPException(403, "无权操作该会话")
     emp = employee_of(conv_id)
+    _ensure_employee_access(user, emp)
     # 附件只接受本用户上传目录内的路径，防止伪造 /data/ 任意路径
     atts = [a.model_dump() for a in body.attachments
             if attachments.validate_attachment_path(uid, a.path)]
@@ -200,6 +212,7 @@ async def decide(approval_id: str, body: DecisionIn,
         raise HTTPException(404, "审批单不存在或已处理")
     if user.get("role") != "admin" and record.get("user_id") not in (None, user["id"]):
         raise HTTPException(403, "无权处理该审批单")
+    _ensure_employee_access(user, record["employee_id"])
     record = approvals.decide(approval_id, body.decision)
     if not record:
         raise HTTPException(404, "审批单不存在或已处理")

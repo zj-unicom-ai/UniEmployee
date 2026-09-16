@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import sqlglot
+from sqlglot import exp
 
 from app import paths as _paths
 
@@ -215,21 +217,77 @@ def list_user_tables(uid: str) -> list[dict]:
         con.close()
 
 
-_FORBIDDEN_KEYWORDS = ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
-                       "TRUNCATE", "CREATE", "GRANT", "REVOKE", "ATTACH")
+_DUCKDB_BLOCKED_FUNCTIONS = {
+    "read_text", "read_csv", "read_csv_auto", "read_json", "read_json_auto",
+    "read_parquet", "read_ndjson", "read_blob", "read_xlsx", "read_excel",
+    "parquet_scan", "json_scan", "glob", "read_file",
+}
+
+_DUCKDB_BLOCKED_NODES = (
+    exp.Alter,
+    exp.Attach,
+    exp.Command,
+    exp.Copy,
+    exp.Create,
+    exp.Delete,
+    exp.Drop,
+    exp.Insert,
+    exp.Merge,
+    exp.Update,
+)
 
 
 def check_select_only(sql: str) -> Optional[str]:
-    """只读校验：非 SELECT/WITH 开头或含写操作关键词时返回错误文案，否则 None。"""
+    """DuckDB 表格问答只读校验。
+
+    表格问答只允许对已注册表执行单条 SELECT。DuckDB 的 read_*/COPY/ATTACH
+    等能力即使在 read_only 数据库连接上也可能访问宿主文件系统，因此这里用
+    AST fail-closed 校验，而不是字符串关键词判断。
+    """
     stripped = (sql or "").strip()
-    upper = stripped.upper()
-    if not upper:
+    if not stripped:
         return "错误: SQL 查询为空"
-    if not upper.startswith(("SELECT", "WITH")):
+
+    try:
+        statements = [s for s in sqlglot.parse(stripped, dialect="duckdb")
+                      if s is not None]
+    except Exception as e:
+        logger.warning("表格问答 SQL AST 解析失败: %s", e)
+        return f"错误: SQL 语法解析失败，已拒绝执行：{type(e).__name__}"
+
+    if len(statements) != 1:
+        return "错误: 禁止多语句执行，只允许单条 SELECT 查询"
+
+    stmt = statements[0]
+    if not isinstance(stmt, exp.Select):
         return "错误: 只允许执行 SELECT 查询"
-    for kw in _FORBIDDEN_KEYWORDS:
-        if kw in upper:
-            return f"错误: 不允许执行 {kw} 操作，只允许 SELECT 查询"
+
+    if stmt.args.get("into"):
+        return "错误: 禁止 SELECT INTO，只允许只读查询"
+
+    for cte in stmt.find_all(exp.CTE):
+        body = cte.this
+        if isinstance(body, exp.Subquery):
+            body = body.this
+        if body is not None and not isinstance(body, exp.Select):
+            return "错误: CTE 内只允许 SELECT 查询"
+
+    for blocked in _DUCKDB_BLOCKED_NODES:
+        found = stmt.find(blocked)
+        if found is not None:
+            return "错误: 查询中包含被禁止的 DuckDB 写入或外部访问语句"
+
+    for func in stmt.find_all(exp.Anonymous):
+        fname = (func.name or "").lower().strip()
+        if fname in _DUCKDB_BLOCKED_FUNCTIONS:
+            return f"错误: 禁止调用 DuckDB 外部访问函数 {fname}"
+
+    for table in stmt.find_all(exp.Table):
+        source = table.this
+        source_name = type(source).__name__
+        if source_name.startswith("Read") or source_name in {"Anonymous"}:
+            return "错误: 禁止通过 DuckDB 表函数访问外部文件"
+
     return None
 
 

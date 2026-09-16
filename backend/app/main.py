@@ -160,9 +160,8 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/health")
-async def health():
-    """健康检查（无需登录）：供容器探针 / 监控使用。"""
+def _dependency_health() -> tuple[dict, bool]:
+    """探测依赖状态；返回结构化结果与 readiness 布尔值。"""
     dbs: dict[str, str] = {}
     for name in DB_FILES:
         try:
@@ -179,13 +178,38 @@ async def health():
     except Exception as e:
         sandbox_status = f"error: {type(e).__name__}: {e}"
     all_ok = all(v == "ok" for v in dbs.values()) and not sandbox_status.startswith("error")
-    return {
+    payload = {
         "status": "ok" if all_ok else "degraded",
         "version": APP_VERSION,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "databases": dbs,
         "sandbox": sandbox_status,
     }
+    return payload, all_ok
+
+
+@app.get("/livez")
+async def livez():
+    """进程存活检查：不探测数据库等外部依赖。"""
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+
+@app.get("/readyz")
+async def readyz():
+    """依赖就绪检查：关键依赖不可用时返回 503。"""
+    payload, all_ok = _dependency_health()
+    return JSONResponse(status_code=200 if all_ok else 503, content=payload)
+
+
+@app.get("/health")
+async def health():
+    """兼容旧监控的结构化健康检查；HTTP 状态始终为 200。"""
+    payload, _ = _dependency_health()
+    return payload
 
 
 # 挂载 API 路由

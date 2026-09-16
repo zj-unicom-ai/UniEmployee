@@ -1,6 +1,6 @@
 """普通用户自助路由：查看/调整自己的员工覆盖、看板、调试。"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app import auth, catalog, runtime
@@ -80,12 +80,25 @@ async def update_my_overrides(emp_id: str, body: dict,
     ov = body.get("overrides", {})
     if not isinstance(ov, dict):
         return {"error": "overrides 必须是对象"}
+    base = catalog.get_employee_config(emp_id) or {}
     keys = ("skills", "tools", "kbs", "sops", "connectors")
     add = ov.get("add") if isinstance(ov.get("add"), dict) else {}
     remove = ov.get("remove") if isinstance(ov.get("remove"), dict) else {}
+    denied = []
+    for k in keys:
+        allowed = set(base.get(k, []) or [])
+        requested = add.get(k, []) if isinstance(add.get(k), list) else []
+        blocked = [x for x in requested if x not in allowed]
+        if blocked:
+            denied.append(f"{k}: {', '.join(blocked)}")
+    if denied:
+        raise HTTPException(400, "不可添加未授权资源：" + "；".join(denied))
+
     clean = {
-        "add": {k: (add.get(k, []) if isinstance(add.get(k), list) else []) for k in keys},
-        "remove": {k: (remove.get(k, []) if isinstance(remove.get(k), list) else []) for k in keys},
+        "add": {k: ([x for x in add.get(k, []) if x in set(base.get(k, []) or [])]
+                     if isinstance(add.get(k), list) else []) for k in keys},
+        "remove": {k: ([x for x in remove.get(k, []) if x in set(base.get(k, []) or [])]
+                        if isinstance(remove.get(k), list) else []) for k in keys},
     }
     catalog.set_assignment_overrides(user["id"], emp_id, clean)
     # 用户级技能覆盖变化：直接同步当前用户技能 Store，并只清该用户变体缓存。

@@ -79,7 +79,11 @@ async def download_workspace_file(
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
     if user.get("role") != "admin":
-        first = rel.parts[0] if rel.parts else ""
+        try:
+            real_rel = target.relative_to(root)
+        except ValueError:
+            raise HTTPException(403, "路径越界")
+        first = real_rel.parts[0] if real_rel.parts else ""
         # 首段目录若是其他用户的 id（如 u_xxx/），按用户隔离拒绝；根级产物共享可读。
         if first and first != user.get("id") and _is_user_id(first):
             raise HTTPException(403, "无权访问其他用户的文件")

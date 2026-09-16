@@ -332,18 +332,21 @@ class _WorkspaceFileWatcher:
     MAX_FILE_SIZE = 100 * 1024 * 1024   # 超过 100MB 的文件不推卡片
     MAX_PER_TURN = 10                    # 单回合最多推送 10 个文件
 
-    def __init__(self):
+    def __init__(self, user_id: str | None = None):
+        self.user_id = user_id or ""
         self._seen: dict[str, float] = {}
         self._emitted: set[str] = set()   # 本回合已推送过的文件，重复触碰不再推送
         self.snapshot()
 
     def _scan(self) -> dict[str, float]:
         out: dict[str, float] = {}
+        root = WORKSPACE_DATA
+        scan_root = root / self.user_id if self.user_id else root
         try:
-            for p in WORKSPACE_DATA.rglob("*"):
+            for p in scan_root.rglob("*"):
                 if not p.is_file():
                     continue
-                rel = p.relative_to(WORKSPACE_DATA)
+                rel = p.relative_to(root)
                 if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
                     continue
                 try:
@@ -434,7 +437,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                                     input_preview=input_preview, kind=kind)
     tracer = traces.TraceHandler(trace_run_id)
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
-    file_watcher = _WorkspaceFileWatcher()
+    file_watcher = _WorkspaceFileWatcher(user_id=user_id)
 
     config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id},
               "callbacks": [tracer]}

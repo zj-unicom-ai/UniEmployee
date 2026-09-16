@@ -102,13 +102,34 @@ function download() {
 }
 
 function openInNew() {
-  // 新窗口打开（写 blob URL 避免 srcdoc 在新标签页失效）
   try {
-    const blob = new Blob([props.html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
-    // 给浏览器时间加载后再回收
-    setTimeout(() => URL.revokeObjectURL(url), 30000)
+    const win = window.open('', '_blank', 'noopener,noreferrer')
+    if (!win) {
+      message.error('打开失败：浏览器阻止了新窗口')
+      return
+    }
+    win.opener = null
+    const srcdoc = JSON.stringify(props.html).replace(/</g, '\\u003c')
+    win.document.open()
+    win.document.write(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>数据分析报告</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #f6f7f9; }
+    iframe { display: block; width: 100%; min-height: 100vh; border: 0; background: #fff; }
+  </style>
+</head>
+<body>
+  <iframe sandbox="allow-scripts"></iframe>
+  <script>
+    document.querySelector('iframe').srcdoc = ${srcdoc};
+  <\/script>
+</body>
+</html>`)
+    win.document.close()
   } catch (e) {
     message.error('打开失败：' + (e?.message || ''))
   }

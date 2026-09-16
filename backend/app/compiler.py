@@ -15,6 +15,7 @@ from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend, LocalShellBackend, FilesystemBackend
+from deepagents.middleware import FilesystemMiddleware
 from deepagents.backends.utils import create_file_data
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
@@ -68,6 +69,10 @@ ALL_LOCAL_TOOLS = {
 # 所有数字员工默认具备的通用工具（不依赖其 tools 字段声明）。
 # 编译期无条件注入，解决「对话时不知道当前时间」的普遍问题。
 GLOBAL_TOOL_NAMES = ["get_current_time"]
+
+FS_TOOLS_READONLY = ["ls", "read_file", "glob", "grep"]
+FS_TOOLS_ALL = ["ls", "read_file", "write_file", "edit_file", "delete",
+                "glob", "grep", "execute"]
 
 def make_kb_search(spec: EmployeeSpec, user_id: str | None):
     """按员工 / 用户视角动态生成 kb_search 工具（仅 RAGFlow 向量检索）。
@@ -413,7 +418,8 @@ def _init_model(model: str):
     return model
 
 
-async def _assemble_subagents(spec: EmployeeSpec, checkpointer) -> list[dict]:
+async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
+                              user_id: str | None = None) -> list[dict]:
     """按员工配置装配子代理列表，传给 create_deep_agent(subagents=...)。
 
     子代理的 tools 一旦指定就完全覆盖主 agent 的工具继承，因此这里为每个
@@ -440,6 +446,10 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer) -> list[dict]:
             "tools": tools,
             "model": _init_model(cfg.get("model") or spec.model),
             "permissions": cfg.get("permissions", []),
+            "middleware": [FilesystemMiddleware(
+                backend=backend,
+                tools=_fs_tools_for_subagent(cfg),
+            )] if backend is not None else [],
         })
     return subagents
 
@@ -489,6 +499,37 @@ def _local_shell_backend() -> LocalShellBackend:
     )
 
 
+def _production_mode() -> bool:
+    return (os.environ.get("APP_ENV", "").lower() in ("prod", "production")
+            or os.environ.get("REQUIRE_SANDBOX", "") == "1")
+
+
+def _fs_tools_for_user(user_id: str | None) -> list[str] | str:
+    """返回主 agent 可见的 deepagents 内置文件工具白名单。"""
+    if user_id:
+        try:
+            from app.catalog import users as _users
+            user = _users.get_user(user_id) or {}
+            if user.get("role") == "admin":
+                return FS_TOOLS_ALL
+        except Exception:
+            pass
+        return FS_TOOLS_READONLY
+    return FS_TOOLS_ALL
+
+
+def _fs_tools_for_subagent(cfg: dict) -> list[str]:
+    configured = cfg.get("fs_tools")
+    if configured == "all":
+        return FS_TOOLS_ALL
+    if isinstance(configured, list):
+        allowed = [x for x in configured if x in FS_TOOLS_ALL]
+        if "read_file" not in allowed:
+            allowed.insert(0, "read_file")
+        return allowed
+    return FS_TOOLS_READONLY
+
+
 def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     """构造 CompositeBackend：默认后端 + /data、/skills、/memories、/sops 路由。"""
     if spec.backend == "local_shell":
@@ -498,6 +539,8 @@ def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
         # 开关未置 1（测试/开发/未部署 server）回退宿主机 LocalShellBackend，零行为变化。
         if sandbox_enabled():
             default_backend = RoutingSandboxBackend()
+        elif _production_mode():
+            raise RuntimeError("sandbox 后端未启用，生产模式禁止回退宿主机 LocalShellBackend")
         else:
             default_backend = _local_shell_backend()
     else:
@@ -549,7 +592,9 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     # --- 工具：本地注册表按名挑选 + 知识库闭包 + 通用工具 + MCP 连接器 ---
     tools, mcp_client = await _assemble_tools(spec, checkpointer, user_id=user_id)
     tool_names = [t.name for t in tools]
-    subagents = await _assemble_subagents(spec, checkpointer)
+    backend = build_backends(spec, store, user_id)
+    subagents = await _assemble_subagents(spec, checkpointer, backend=backend,
+                                          user_id=user_id)
 
     system_prompt = spec.persona
     system_prompt += _build_user_context(user_id)
@@ -570,8 +615,6 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         system_prompt += "\n" + spec.subagent_policy.strip()
     sop_detail = spec.sop_text.strip() if spec.sop_text else "（无刚性 SOP，按技能规程执行）"
 
-    backend = build_backends(spec, store, user_id)
-
     agent = create_deep_agent(
         model=_init_model(spec.model),
         tools=tools,
@@ -579,6 +622,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         skills=["/skills/"],
         memory=["/memories/AGENTS.md"],
         subagents=subagents or None,
+        middleware=[FilesystemMiddleware(backend=backend,
+                                         tools=_fs_tools_for_user(user_id))],
         backend=backend,
         interrupt_on=spec.interrupt_on,
         checkpointer=checkpointer,

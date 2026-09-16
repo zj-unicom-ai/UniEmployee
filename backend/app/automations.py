@@ -371,6 +371,7 @@ async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
     input_ = {"messages": [{"role": "user", "content": prompt}]}
     parts: list[str] = []
     status, error = "ok", ""
+    approval_id = ""
     try:
         async for raw in _stream_run(conv_id, input_, user_id=user_id, role="user"):
             if not raw.startswith("data: "):
@@ -383,6 +384,11 @@ async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
                 parts.append(ev.get("content", ""))
             elif ev.get("type") == "error":
                 status, error = "error", ev.get("message", "任务执行出错")
+            elif ev.get("type") == "approval_required":
+                status = "awaiting_approval"
+                approval_id = ev.get("approval_id", "")
+                error = f"等待人工审批：{approval_id}" if approval_id else "等待人工审批"
+                break
     except Exception as e:
         status, error = "error", f"{type(e).__name__}: {e}"
         log.exception("自动任务执行异常 id=%s", auto["id"])
@@ -391,7 +397,7 @@ async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
     mark_result(auto["id"], status, error, conv_id)
     if reply:
         conversations.touch(conv_id, preview=reply[:60], bump=1)
-    if channel:
+    if channel and status == "ok":
         await _push(channel, conv_id, reply)
     return {"conversation_id": conv_id, "status": status, "error": error,
-            "reply": reply}
+            "reply": reply, "approval_id": approval_id}
