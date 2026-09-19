@@ -9,19 +9,22 @@
 
 UniEmployee is an enterprise platform for **building and running digital employees**: it turns the experience, business processes, and judgment standards of professional staff into AI employees that are always on duty, configurable, approval-gated, and fully observable.
 
-Through its five-layer capability model — **Employee → Workflow/SOP → Skill → Connector → Tool** — UniEmployee orchestrates LLMs into organizational productivity that can independently handle customer service, sales, data analysis, HR, and more, rather than being just another scattered personal-efficiency tool.
+Through its five-layer capability model — **Employee → Workflow/SOP → Skill → Connector → Tool** — UniEmployee orchestrates LLMs into organizational productivity that can independently handle customer service, sales, data analysis, HR, business analysis, network operations, and more.
 
 ## Highlights
 
-- 🧑‍💼 **Digital Employee Building & Management** — Persona, model, skills, tools, knowledge bases, SOPs, and connectors are all configured through a web UI; the runtime reads everything from a catalog database. Six example employees ship out of the box (customer service / data analyst / sales advisor / HR / business analyst / network ops), with soft-delete and restore.
+- 🧑‍💼 **Digital Employee Building & Management** — Persona, model, skills, tools, knowledge bases, SOPs, and connectors are configured through a web UI; the runtime reads from the catalog database. Eight example employees ship out of the box, with assignment, soft-delete, and restore. Employee YAML files are seed sources; changing them does not re-seed an existing catalog automatically.
 - 🧩 **Process Skills & SOPs** — Skills are captured as `SKILL.md` playbooks (with trigger conditions and execution steps), seeded into the Store for the model to consult on demand — no more skipping steps from memory. Critical business flows can be hardened as StateGraph state machines (with human approval nodes) to guarantee multi-step accuracy.
-- 📚 **Enterprise Knowledge Ontology** — Knowledge is organized as structured assets with business semantics (topics, rules, playbooks, sources); digital employees answer from real material with cited sources. FAQ, markdown product wiki, and RAGFlow vector retrieval are already integrated.
-- 🔌 **Connector & Tool Ecosystem** — Connect external systems such as CRM and news via the MCP standard (stdio and npx). Built-in atomic tools for tickets, search, document generation, and data analysis make business-system extension easy.
+- 📊 **Data Analysis & Reporting Workbench** — `xiaoshu` has a dedicated `/app/analyst` workbench with database, uploaded-table, knowledge-base, and connector data sources. SQL is protected by AST-level read-only validation, table allowlists, row limits, and server-side timeouts. Reports and market briefings render as downloadable HTML dashboards through the `REPORT_HTML_START/END` channel.
+- 📚 **Enterprise Knowledge & Business Ontology** — FAQ, product wiki, RAGFlow, and structured business ontology are integrated. Ontology features include entities, relations, multi-hop paths, customer 360, fault-impact analysis, authorized conversational write-back, provenance, and audit trails.
+- 🔌 **Connector & Tool Ecosystem** — Connect CRM, news, and Playwright browser automation through MCP (stdio and npx). Built-in tools cover tickets, search, knowledge, documents, data analysis, ontology queries, and publishing.
 - 🧠 **Cross-Session Long-Term Memory** — Isolated by `(user_id, employee_id)`, persisted to the `store` database, and survives restarts. Digital employees remember customer preferences and keep improving.
 - 📏 **Automatic Long-Conversation Compaction** — Built on deepagents' `SummarizationMiddleware`: when a conversation hits the threshold (**85% of the model's context window**, or **170k tokens** when no window profile exists), older messages are folded into a summary, with full history saved to `/conversation_history/{thread_id}.md` for later inspection. Old tool arguments are slimmed first, and the model auto-compacts and retries on context-overrun errors — long conversations never blow the context or break.
 - 👀 **End-to-End Observability** — Every conversation / approval resume = one run, recording the inputs and outputs, latency, and token consumption of every LLM and tool call, replayable for debugging.
-- 🔐 **HITL Human Approval** — High-risk actions interrupt the flow mid-way and wait for human approval, then continue automatically — a closed human-in-the-loop.
-- 📱 **Web Chat + IM Extension Architecture** — In-platform web chat today; the multi-IM-channel architecture is already in place (pluggable providers), with WeChat / WeCom / Feishu / DingTalk integrations on the roadmap.
+- 🔐 **HITL + layered guardrails** — High-risk actions interrupt mid-flow for human approval. Sensitive-word filters, tool allowlists, filesystem/command-tool trimming, SQL read-only checks, and audit logs constrain execution.
+- ⏱️ **Automations** — Cron schedules and webhook events trigger the same runtime used by chat, including memory, guardrails, traces, and approvals.
+- 🧰 **Multiple execution backends** — Employees can use `state`, `local_shell`, `standard`, or `sandbox`; `net-ops` can route each conversation to an OpenSandbox container.
+- 📱 **Web Chat + IM Extension Architecture** — In-platform web chat and IM channel framework are available today; external WeChat / WeCom / Feishu / DingTalk providers remain planned.
 
 ## Screenshots
 
@@ -101,11 +104,16 @@ python3 -m venv .venv
 
 ### 3. Generate demo data (optional)
 
-The data analyst (`xiaoshu`) and business analyst (`biz-analyzer`) rely on simulated business datasets under `workspace/data/`. Generate them for the full local experience:
+Generate optional demo datasets for the employee scenarios you want to try:
 
 ```bash
-python3 scripts/generate_biz_data.py   # generates sales_detail.csv and 3 more demo datasets
+python3 scripts/generate_biz_data.py             # business analysis: workspace/data/
+python3 scripts/generate_insurance_demo_data.py  # insurance analysis: workspace/data/
+python3 scripts/generate_netops_data.py          # network ops: workspace/datasets/
+python3 scripts/generate_xiaoxiao_data.py       # renewal scan: workspace/datasets/
 ```
+
+The shared network-ops datasets are mounted read-only at `/datasets/` in sandbox mode. Install Chromium before using Playwright MCP: `npx playwright install --with-deps chromium`.
 
 ### 4. Start the database and the service
 
@@ -182,11 +190,13 @@ The current release ships with a product FAQ knowledge base, markdown product wi
 | Employee | Role | Skills | Connectors |
 |----------|------|--------|------------|
 | `unicom-presale` | Presales customer service (Zhejiang Unicom) | Presales consulting playbook (RAGFlow business KB retrieval) | — |
-| `xiaoshu` | Data analyst | Data analysis, frontend design, report generation | News |
+| `xiaoshu` | Data analyst | Data analysis, SQL root-cause analysis, frontend design, reporting | — |
 | `xiaoxiao` | Sales advisor | Enterprise sales, solution doc generation | CRM |
-| `hrbp` | HR partner | HR assistant | CRM |
+| `hrbp` | HR partner | HR assistant, ontology write-back | — |
 | `biz-analyzer` | Business analysis & decision advisor | Business overview, root-cause analysis, decision analysis, market intelligence | — |
 | `net-ops` | Network operations expert | Fault impact analysis, ops metrics analysis, resource capacity analysis, SOP routing | — |
+| `market-intel` | Market intelligence analyst (Xiaocha) | Daily briefings, competitor deep dives, market alert triage | newsnow, Playwright |
+| `insurance-analyst` | Insurance operations analyst (Xiaobaoxi) | Premiums, loss ratio, renewal rate, channel contribution, anomaly analysis | — |
 
 > Built-in skills live in `backend/skills/` (each with a `SKILL.md` playbook). The `frontend-design` skill is based on [Matt Pocock](https://github.com/mattpocock)'s open-source skill library and distributed under [Apache License 2.0](backend/skills/frontend-design/LICENSE.txt), with the original license attached therein.
 
@@ -200,15 +210,21 @@ UniEmployee/
 │   │   ├── compiler.py       # Compile layer: EmployeeSpec → create_deep_agent()
 │   │   ├── runtime.py         # Agent cache + checkpointer + store + warmup/invalidation
 │   │   ├── catalog/          # catalog DB CRUD (employees/skills/tools/KB/SOP/connectors/users)
-│   │   ├── routes/           # REST routes (auth / conversations / admin / user / im)
-│   │   ├── tools/            # Tool implementations (tickets/search/KB/docs/data)
+│   │   ├── routes/           # REST routes (auth / conversations / admin / user / analyst / guard / audit / automations)
+│   │   ├── tools/            # Tool implementations (tickets/search/KB/docs/data/ontology/publishing)
+│   │   ├── agent/analyst/    # xiaoshu workbench (data sources / SQL / reports)
+│   │   ├── guard/            # Sensitive-word, tool, filesystem, and command guardrails
+│   │   ├── audit/            # Admin and runtime audit logging
+│   │   ├── automations.py    # Cron / webhook automations
+│   │   ├── scheduler.py      # Automation scheduler loop
+│   │   ├── sandbox_mgr.py    # Per-conversation OpenSandbox management
 │   │   ├── workflows/        # StateGraph state-machine workflows
 │   │   ├── connectors/       # MCP connectors (CRM stdio, RAGFlow)
 │   │   ├── approvals.py      # HITL approval tickets (persisted + timeout-reject)
 │   │   ├── traces.py         # Execution tracing (traces DB)
 │   │   ├── auth.py           # bcrypt + JWT auth
 │   │   └── db.py             # DB access layer (PG pool + SQL dialect translation)
-│   ├── employees/*.yaml      # Employee seed definitions (seeded into catalog on first boot)
+│   ├── employees/*.yaml      # Employee seed definitions (seeded into an empty catalog)
 │   └── skills/               # Built-in skills (SKILL.md + frontmatter)
 ├── frontend/                 # Vue 3 + Vite + Naive UI + Pinia admin console
 ├── tests/                    # pytest (fixtures force temporary SQLite DBs — no real data touched)
@@ -219,7 +235,7 @@ UniEmployee/
 
 ## Data Storage
 
-All data lives in PostgreSQL (`DB_BACKEND=postgres`; connection params in `.env` under `POSTGRES_*`).
+Production and local development use PostgreSQL by default (`DB_BACKEND=postgres`; connection params in `.env` under `POSTGRES_*`). Test fixtures force temporary SQLite databases and never touch real data.
 
 Quick local start: `docker compose up -d db` (7 databases are created automatically on first boot; tables are created by the app at startup). For an existing PG instance, use the idempotent `./scripts/init_postgres.sh`:
 
@@ -244,9 +260,14 @@ Quick local start: `docker compose up -d db` (7 databases are created automatica
 | `JWT_EXPIRE_HOURS` | `24` | Token lifetime (hours) |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / empty | Log level / file path |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | Database backend and connection params (host/port/user/password/db prefix) |
-| `APP_VERSION` | `0.16.0` | Printed at /health and in logs |
+| `APP_VERSION` | `0.17.0` | Printed at /health and in logs; can be overridden |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | Markdown product-KB directory for the sales skill |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow integration (optional) |
+| `SANDBOX_ENABLED` / `SANDBOX_DOMAIN` / `SANDBOX_IMAGE` | off / `localhost:8090` / `uniemployee/sandbox:py312-data` | OpenSandbox switch, service address, and image |
+| `SANDBOX_MAX_CONCURRENT` / `SANDBOX_TTL_MINUTES` | `20` / `30` | Sandbox concurrency and idle TTL |
+| `MCP_DISABLED` / `AUTOMATIONS_DISABLED` | off | Skip MCP initialization or automation scheduling |
+| `ANALYST_QUERY_TIMEOUT_SEC` / `ANALYST_QUERY_MAX_ROWS` | `30` / `1000` | Analyst SQL timeout and server-side row cap |
+| `MAX_ATTACHMENT_SIZE` / `CONV_RECOVER_LIMIT` | `20MB` / `2000` | Attachment limit and startup conversation recovery cap |
 
 ### Security baseline
 
@@ -254,7 +275,9 @@ Quick local start: `docker compose up -d db` (7 databases are created automatica
 - Login rate-limiting: ≥5 failures per `(IP, username)` within 60s returns 429
 - `JWT_SECRET` must be set to a long random string; changing it invalidates all issued tokens
 - Admins using the default password are forced to change it on first login; the `/api/debug/memory` endpoint is admin-only
-- Frontend LLM output is sanitized via `sanitizeHtml()` against XSS
+- Frontend LLM output is sanitized via `sanitizeHtml()`; report HTML is rendered in an isolated iframe
+- Tool calls use employee allowlists; injected deepagents filesystem/command tools are trimmed by backend and employee policy, and inline subagents are read-only by default
+- Analyst SQL only permits SELECT statements over allowlisted tables; parsing failures, multi-statements, write CTEs, `SELECT INTO`, and dangerous functions are rejected
 
 ## Testing
 
@@ -272,7 +295,7 @@ Slow tests (real network / browser) are marked with `@pytest.mark.slow` and skip
 
 In-platform **web chat** is supported today, covering the full conversation / history / trace chain.
 
-The platform already implements an IM channel extension architecture: each channel can have a configured provider with multiple digital employees attached; non-web channels reach the platform via `/channels/{id}/incoming` and are unified into conversations, with per-channel auth and permission isolation. WeChat / WeCom / Feishu / DingTalk integrations are under development and will ship in upcoming releases.
+The platform already implements an IM channel extension architecture: each channel can have a configured provider with multiple digital employees attached, and the in-platform IM page reuses the SSE conversation flow. External WeChat / WeCom / Feishu / DingTalk providers are not included in the current release.
 
 ## FAQ
 
@@ -288,17 +311,20 @@ Yes. The app talks to model services over the OpenAI-compatible protocol — GPU
 
 Entirely in PostgreSQL (`docker compose up -d db`, or `./scripts/init_postgres.sh` for an existing instance). Secrets live only in `.env` and never enter the repo; model API keys are used for outbound calls only and never exposed to conversations.
 
-**Will the newsnow MCP connector fail without a local container?**
+**Will MCP initialization break the service if newsnow or Playwright is unavailable?**
 
-No. The built-in `newsnow` news connector points to a local service on `localhost:4444`; if it's not deployed, the connector degrades gracefully (only MCP tools are skipped — the service still starts). To skip MCP initialization entirely, set `MCP_DISABLED=1`. The CRM connector the CS/sales/HR employees depend on is a built-in mock service and works out of the box.
+No. MCP initialization failures degrade gracefully and the service still starts. Set `MCP_DISABLED=1` to skip all MCP initialization while troubleshooting. Playwright requires Chromium; the CRM connector used by the sales advisor is a built-in mock service.
+
+**Does `net-ops` require a sandbox deployment?**
+
+Only when `SANDBOX_ENABLED=1`. In that mode you need an OpenSandbox server, allowed host data paths, and the `uniemployee/sandbox:py312-data` image. When disabled, the app falls back to LocalShellBackend according to the current configuration.
 
 ## Roadmap
 
 - **Multi-replica deployment** — login rate-limiting, hot conversation maps, and agent cache moved to Redis / shared storage
-- **Enterprise knowledge ontology** — typed knowledge concepts (Topic / Playbook / Business Rule / Source Document), semantic relations, knowledge bucketing, and a retrieval debug panel
-- **Recycle-bin UI** — visual restore for soft-deleted entities
-- **Hard API gate for forced password change** — middleware-level blocking of default-password accounts
-- **Multi-tenant isolation** — enabling the reserved `tenant_id` field
+- **Enterprise knowledge ontology** — typed concepts, semantic relations, knowledge bucketing, and a retrieval debug panel
+- **Configuration publishing governance** — draft / review / published versions and runtime snapshots
+- **Deeper multi-tenant and organization permissions** — tenant resource admins, cross-tenant governance, and capability grants
 - **Group chat & multi-employee collaboration** — multiple digital employees dividing work within one conversation
 
 ## Enterprise Support
