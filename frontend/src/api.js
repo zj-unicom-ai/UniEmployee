@@ -1,6 +1,11 @@
 // API 请求封装：Axios 实例，自动注入 Bearer token，401 自动跳登录
 import axios from 'axios'
 
+function readCookie(name) {
+  const prefix = `${name}=`
+  return document.cookie.split('; ').find(v => v.startsWith(prefix))?.slice(prefix.length) || ''
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 60000,
@@ -11,6 +16,11 @@ api.interceptors.request.use(config => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  // SSO 平台会话使用 HttpOnly cookie，所有写请求带双提交 CSRF token。
+  if (!/^(get|head|options)$/i.test(config.method || 'get')) {
+    const csrf = readCookie('ue_csrf')
+    if (csrf) config.headers['X-CSRF-Token'] = csrf
   }
   return config
 })

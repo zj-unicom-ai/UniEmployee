@@ -47,14 +47,22 @@
         @click="doLogin"
         class="login-btn"
       >
-        登 录
+        {{ ssoEnabled ? '紧急管理员登录' : '登 录' }}
       </n-button>
+
+      <template v-if="ssoEnabled">
+        <div class="sso-divider"><span>或</span></div>
+        <n-button size="large" block :loading="ssoLoading" @click="doSso" class="sso-btn">
+          企业单点登录
+        </n-button>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { onMounted, ref, reactive } from 'vue'
+import api from '../api.js'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 
@@ -69,9 +77,30 @@ const rules = {
 }
 const error = ref('')
 const loading = ref(false)
+const ssoLoading = ref(false)
+const ssoEnabled = ref(false)
 
 if (auth.isLoggedIn) {
   router.replace(route.query.next || { name: 'home' })
+}
+
+onMounted(async () => {
+  try {
+    const { data } = await api.get('/auth/sso/config')
+    ssoEnabled.value = !!data.enabled
+    if (route.query.sso === '1') {
+      await auth.completeSso()
+      router.replace(route.query.next || { name: 'home' })
+    }
+  } catch (e) {
+    if (route.query.sso === '1') error.value = '企业登录未完成，请重新尝试'
+  }
+})
+
+function doSso() {
+  ssoLoading.value = true
+  const next = route.query.next || '/app/home'
+  window.location.assign(`/api/auth/sso/login?next=${encodeURIComponent(next)}`)
 }
 
 async function doLogin() {
@@ -198,6 +227,9 @@ async function doLogin() {
 .login-btn:hover {
   box-shadow: 0 0 24px rgba(59,130,246,0.35);
 }
+.sso-divider { display: flex; align-items: center; gap: 12px; color: #64748b; font-size: 12px; margin: 20px 0; }
+.sso-divider::before, .sso-divider::after { content: ''; height: 1px; background: rgba(148,163,184,.22); flex: 1; }
+.sso-btn { height: 46px; border-radius: 12px; }
 
 .tip {
   font-size: 12px;

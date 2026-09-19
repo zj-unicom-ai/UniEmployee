@@ -32,6 +32,7 @@ log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
 _PASSWORD_CHANGE_ALLOWED = {"/api/auth/login", "/api/auth/change-password", "/api/auth/me"}
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 @asynccontextmanager
@@ -134,6 +135,17 @@ async def request_logging_middleware(request: Request, call_next):
     token = request_id_var.set(rid)
     start = time.time()
     try:
+        # OIDC 登录完成后使用 HTTP-only 会话 cookie。对所有有副作用的 API
+        # 强制双提交 CSRF token；Bearer JWT 不会被浏览器自动附带，保持兼容。
+        if (request.method not in _SAFE_METHODS and request.url.path.startswith("/api/")
+                and request.cookies.get(auth.SESSION_COOKIE)
+                and not request.headers.get("Authorization")):
+            csrf_cookie = request.cookies.get(auth.CSRF_COOKIE, "")
+            csrf_header = request.headers.get("X-CSRF-Token", "")
+            if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+                response = JSONResponse(status_code=403, content={"error": "csrf_validation_failed"})
+                response.headers["X-Request-Id"] = rid
+                return response
         if request.url.path.startswith("/api/") and request.url.path not in _PASSWORD_CHANGE_ALLOWED:
             try:
                 current = await auth.get_current_user(request.headers.get("Authorization"))
@@ -218,7 +230,9 @@ app.include_router(app_router)
 
 # ---- 前端静态文件 ----
 _FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
-app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+# CI 后端测试与前端构建分属不同 job，测试时 dist/assets 尚未生成；
+# 延迟检查目录，生产环境正常构建后仍由同一路径提供静态文件。
+app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets"), check_dir=False), name="assets")
 
 
 @app.get("/")

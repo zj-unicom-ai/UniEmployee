@@ -17,7 +17,8 @@ _USER_LIST_COLS = ("u.id, u.username, u.role, u.status, u.tenant_id, u.org_id, "
 
 def create_user(username: str, password_hash: str, role: str = "user",
                 tenant_id: str = "default", user_id: str | None = None,
-                org_id: str | None = None) -> str:
+                org_id: str | None = None, auth_provider: str = "local",
+                is_emergency_admin: bool = False) -> str:
     # 秒级时间戳同秒会撞主键（批量建用户/测试夹具），追加随机段保证唯一
     uid = user_id or ("u_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -28,15 +29,17 @@ def create_user(username: str, password_hash: str, role: str = "user",
     if old:
         con.execute(
             "UPDATE users SET password_hash=?, role=?, status='active', tenant_id=?, "
-            "org_id=?, deleted_at=NULL WHERE username=?",
-            (password_hash, role, tenant_id, org_id, username))
+            "org_id=?, auth_provider=?, is_emergency_admin=?, deleted_at=NULL WHERE username=?",
+            (password_hash, role, tenant_id, org_id, auth_provider,
+             1 if is_emergency_admin else 0, username))
         con.commit()
         con.close()
         return old["id"]
     con.execute(
-        "INSERT OR IGNORE INTO users(id,username,password_hash,role,status,tenant_id,org_id,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?)",
-        (uid, username, password_hash, role, "active", tenant_id, org_id, now))
+        "INSERT OR IGNORE INTO users(id,username,password_hash,role,status,tenant_id,org_id,auth_provider,is_emergency_admin,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (uid, username, password_hash, role, "active", tenant_id, org_id,
+         auth_provider, 1 if is_emergency_admin else 0, now))
     con.commit()
     con.close()
     return uid
@@ -55,6 +58,66 @@ def get_user_by_username(username: str) -> dict | None:
                     (username,)).fetchone()
     con.close()
     return dict(r) if r else None
+
+
+def get_user_by_identity(issuer: str, subject: str) -> dict | None:
+    con = _conn()
+    r = con.execute(
+        "SELECT u.* FROM user_identities i JOIN users u ON u.id=i.user_id "
+        "WHERE i.issuer=? AND i.subject=? AND u.deleted_at IS NULL",
+        (issuer, subject)).fetchone()
+    con.close()
+    return dict(r) if r else None
+
+
+def _external_username(claims: dict) -> str:
+    raw = str(claims.get("preferred_username") or claims.get("email") or claims["sub"])
+    base = "sso_" + "".join(c if c.isalnum() or c in "._-" else "_" for c in raw)[:72]
+    return base or "sso_user"
+
+
+def find_or_create_oidc_user(*, provider: str, issuer: str, claims: dict,
+                             tenant_id: str, org_id: str | None,
+                             role: str = "user") -> dict:
+    """按不可变 issuer+sub 绑定身份；绝不按邮箱自动合并，避免账号接管。"""
+    subject = str(claims.get("sub") or "")
+    if not subject:
+        raise ValueError("OIDC id_token 缺少 sub")
+    old = get_user_by_identity(issuer, subject)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    con = _conn()
+    if old:
+        # 身份源是 SSO 用户的组织/角色事实来源；本地管理员不能借此被绑定或覆盖。
+        con.execute(
+            "UPDATE users SET tenant_id=?, org_id=?, role=? WHERE id=? AND auth_provider<>?",
+            (tenant_id, org_id, role, old["id"], "local"))
+        con.execute(
+            "UPDATE user_identities SET email=?, employee_no=?, claims=?, updated_at=?, last_login_at=? "
+            "WHERE issuer=? AND subject=?",
+            (str(claims.get("email") or ""), str(claims.get("employee_number") or ""),
+             json.dumps(claims, ensure_ascii=False), now, now, issuer, subject))
+        con.commit(); con.close()
+        return get_user(old["id"]) or old
+    username = _external_username(claims)
+    suffix = 0
+    while get_user_by_username(username):
+        suffix += 1
+        username = f"{_external_username(claims)[:64]}_{suffix}"
+    uid = "u_sso_" + uuid.uuid4().hex
+    # password_hash 非空是历史 schema 约束；此随机不可验证值不是登录凭据。
+    con.execute(
+        "INSERT INTO users(id,username,password_hash,role,status,tenant_id,org_id,auth_provider,is_emergency_admin,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (uid, username, "!external-identity!", role, "active", tenant_id, org_id,
+         provider, 0, now))
+    con.execute(
+        "INSERT INTO user_identities(id,user_id,provider,issuer,subject,email,employee_no,claims,created_at,updated_at,last_login_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        ("ident_" + uuid.uuid4().hex, uid, provider, issuer, subject,
+         str(claims.get("email") or ""), str(claims.get("employee_number") or ""),
+         json.dumps(claims, ensure_ascii=False), now, now, now))
+    con.commit(); con.close()
+    return get_user(uid)
 
 
 # ---- 个人画像（用户自述，员工运行时作为当前用户上下文加载） ----
