@@ -230,7 +230,9 @@ app.include_router(app_router)
 
 # ---- 前端静态文件 ----
 _FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
-app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+# CI 后端测试与前端构建分属不同 job，测试时 dist/assets 尚未生成；
+# 延迟检查目录，生产环境正常构建后仍由同一路径提供静态文件。
+app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets"), check_dir=False), name="assets")
 
 
 @app.get("/")
