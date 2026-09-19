@@ -50,6 +50,8 @@ conv_emp_map: dict[str, str] = {}
 # 会话 → 属主 映射：新会话先落内存，首条消息时才写入 conversations.db。
 # 用于发送消息前校验"该会话属于当前用户"，避免拿着 conv_id 越权操作。
 conv_owner_map: dict[str, str] = {}
+# 新会话在第一条消息前尚未持久化，同样要保留其租户归属供附件/消息入口校验。
+conv_tenant_map: dict[str, str] = {}
 
 
 def sse(obj: dict) -> str:
@@ -387,7 +389,8 @@ class _WorkspaceFileWatcher:
 
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
                       datasource_id: str = "", data_source: str = "",
-                      model_override: str = ""):
+                      model_override: str = "", tenant_id: str = "default",
+                      auth_context: dict | None = None):
     """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。
 
     data_source 是新版数据源选择参数（JSON 字符串 '{"kind":"database","id":"ds:xxx"}'），
@@ -433,13 +436,15 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             input_preview = m0.get("content", "") if isinstance(m0, dict) else str(m0)
     except Exception:
         pass
-    trace_run_id = traces.start_run(conv_id, emp_id, user_id,
+    trace_run_id = traces.start_run(conv_id, emp_id, user_id, tenant_id=tenant_id,
                                     input_preview=input_preview, kind=kind)
     tracer = traces.TraceHandler(trace_run_id)
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
     file_watcher = _WorkspaceFileWatcher(user_id=user_id)
 
-    config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id},
+    config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id,
+                                 "auth_context": auth_context or {"user_id": user_id, "tenant_id": tenant_id,
+                                                                   "role": role}},
               "callbacks": [tracer]}
     # 当前用户轮次（1-based）= checkpoint 中已有 HumanMessage 数 + 1。
     # 产物文件按轮次落库（conversation_files.turn_no），历史恢复时挂回生成它的那条回答；
@@ -511,7 +516,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                 if node == "__interrupt__":
                     tool_name, tool_args, inner_thread = _extract_interrupt(update)
                     record = approvals.create(conv_id, emp_id, tool_name, tool_args,
-                                              user_id=user_id, inner_thread=inner_thread)
+                                              user_id=user_id, tenant_id=tenant_id, inner_thread=inner_thread)
                     yield sse({"type": "approval_required", "approval_id": record["approval_id"],
                                "tool": tool_name, "args": tool_args})
                     tracer.flush_pending()

@@ -77,7 +77,14 @@ def init():
       id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL, role TEXT DEFAULT 'user',
       status TEXT DEFAULT 'active', tenant_id TEXT DEFAULT 'default',
-      org_id TEXT, created_at TEXT);
+      org_id TEXT, auth_provider TEXT DEFAULT 'local',
+      is_emergency_admin INTEGER DEFAULT 0, created_at TEXT);
+    CREATE TABLE IF NOT EXISTS user_identities(
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+      provider TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL,
+      email TEXT, employee_no TEXT, claims TEXT,
+      created_at TEXT, updated_at TEXT, last_login_at TEXT,
+      UNIQUE(issuer, subject));
     CREATE TABLE IF NOT EXISTS user_employee_assignments(
       user_id TEXT NOT NULL,
       employee_id TEXT NOT NULL,
@@ -120,6 +127,7 @@ def init():
     _migrate_ragflow_datasets(con)
     _migrate_retire_kb_entries(con)
     _migrate_user_org(con)
+    _migrate_user_identities(con)
     _migrate_employee_kind(con)
     _migrate_datasource_public(con)
     # 安全护栏表（guard 包）幂等建表，复用同一连接
@@ -141,6 +149,24 @@ def _migrate_user_org(con):
     """users 表补 org_id 列（归属组织，NULL=未分配）。幂等。"""
     if "org_id" not in dblayer.table_columns(con, "users"):
         con.execute("ALTER TABLE users ADD COLUMN org_id TEXT")
+    con.commit()
+
+
+def _migrate_user_identities(con):
+    """为已有用户补 SSO 来源与紧急本地管理员标记，且创建外部身份绑定表。"""
+    cols = dblayer.table_columns(con, "users")
+    if "auth_provider" not in cols:
+        con.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT DEFAULT 'local'")
+    if "is_emergency_admin" not in cols:
+        con.execute("ALTER TABLE users ADD COLUMN is_emergency_admin INTEGER DEFAULT 0")
+    con.execute("""CREATE TABLE IF NOT EXISTS user_identities(
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+        provider TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL,
+        email TEXT, employee_no TEXT, claims TEXT,
+        created_at TEXT, updated_at TEXT, last_login_at TEXT,
+        UNIQUE(issuer, subject))""")
+    # 初始种子管理员是唯一可在启用 SSO 后保留密码登录的兜底帐号。
+    con.execute("UPDATE users SET is_emergency_admin=1 WHERE id='u_admin'")
     con.commit()
 
 
