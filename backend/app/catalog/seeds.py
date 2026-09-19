@@ -897,7 +897,8 @@ def seed_admin_if_empty():
 
     if get_user_by_username(username):
         return
-    uid = create_user(username, hash_password(password), role="admin", user_id="u_admin")
+    uid = create_user(username, hash_password(password), role="admin", user_id="u_admin",
+                      is_emergency_admin=True)
     print(f"[seed] 已创建初始管理员：{username} / {password}（首次登录须修改密码）")
     if password == "admin123":
         set_must_change_password(uid, True)

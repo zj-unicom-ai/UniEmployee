@@ -20,8 +20,17 @@ UniEmployee 通过环境变量配置，应用启动时由 `backend/app/main.py` 
 |---|---|---|
 | `JWT_SECRET` | — | JWT 签名密钥，**必须**改为随机长字符串（≥32 字节，`openssl rand -hex 32`）。更换后所有已签发 token 立即失效 |
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
+
 | `ADMIN_USER` | `admin` | 初始管理员用户名（仅空库首次启动创建，之后绝不重置已有账号） |
 | `ADMIN_PASS` | `admin123` | 初始管理员密码；保持默认值时首登强制改密（`must_change_password`） |
+
+## 企业单点登录（OIDC）
+
+单企业、多部门部署可设置 `ENTERPRISE_TENANT_ID` 为本企业的固定标识，并配置
+`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_REDIRECT_URI` 后启用登录页的企业 SSO。
+生产环境必须设置 `AUTH_COOKIE_SECURE=1` 并使用 HTTPS。可用 `OIDC_GROUP_ROLE_MAP`
+与 `OIDC_ORG_MAP`（均为 JSON）把身份源的组和部门码映射为平台角色、组织；身份源
+原始角色不会被直接信任。启用 SSO 后，只有标记为紧急管理员的本地帐号可用密码登录。
 
 ## 数据库
 

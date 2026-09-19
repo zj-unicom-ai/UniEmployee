@@ -8,6 +8,7 @@ checkpointer（checkpoints.db）负责"对话状态本身"（消息、工具调�
 本库用独立 sqlite 文件，避免与 LangGraph 的 checkpointer 并发读写相互干扰。
 """
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     conv_id      TEXT PRIMARY KEY,
     employee_id TEXT NOT NULL,
     user_id      TEXT DEFAULT 'default',
+    tenant_id    TEXT DEFAULT 'default',
     channel_id   TEXT,
     title        TEXT DEFAULT '',
     preview      TEXT DEFAULT '',
@@ -83,6 +85,14 @@ def _migrate(con):
     cols = dblayer.table_columns(con, "conversations")
     if "user_id" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT 'default'")
+    if "tenant_id" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN tenant_id TEXT DEFAULT 'default'")
+    # 一期只允许单企业部署：升级已有库时把遗留 default 会话归到当前企业，
+    # 防止配置 ENTERPRISE_TENANT_ID 后历史记录全部不可见。
+    enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
+    if enterprise_tenant != "default":
+        con.execute("UPDATE conversations SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
+                    (enterprise_tenant,))
     if "channel_id" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN channel_id TEXT")
     # 软删迁移：补 deleted_at 列（NULL=未删除）
@@ -118,15 +128,15 @@ def _channel_row(row) -> dict:
 
 def create(conv_id: str, employee_id: str, title: str = "", preview: str = "",
            count: int = 0, user_id: str = "default", channel_id: str | None = None,
-           model: str | None = None):
+           model: str | None = None, tenant_id: str = "default"):
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with _conn() as con:
         con.execute(
             "INSERT INTO conversations "
-            "(conv_id, employee_id, user_id, channel_id, title, preview, message_count, model, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "(conv_id, employee_id, user_id, tenant_id, channel_id, title, preview, message_count, model, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(conv_id) DO UPDATE SET deleted_at=NULL, updated_at=excluded.updated_at",
-            (conv_id, employee_id, user_id, channel_id, title, preview, count, model, now, now),
+            (conv_id, employee_id, user_id, tenant_id, channel_id, title, preview, count, model, now, now),
         )
 
 
@@ -165,11 +175,12 @@ def touch(conv_id: str, *, title: str | None = None, preview: str | None = None,
             )
 
 
-def _where(employee_id=None, user_id=None, channel_id=None, exclude_channel=False,
+def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, exclude_channel=False,
            exclude_auto=False):
     sql = "WHERE deleted_at IS NULL"; params = []
     if employee_id: sql += " AND employee_id=?"; params.append(employee_id)
     if user_id: sql += " AND user_id=?"; params.append(user_id)
+    if tenant_id: sql += " AND tenant_id=?"; params.append(tenant_id)
     if channel_id: sql += " AND channel_id=?"; params.append(channel_id)
     if exclude_channel: sql += " AND (channel_id IS NULL OR channel_id='')"
     # exclude_auto：过滤自动任务会话（c_auto_ 前缀），用于员工专属会话页（如数据问数）
@@ -179,13 +190,14 @@ def _where(employee_id=None, user_id=None, channel_id=None, exclude_channel=Fals
 
 
 def list_for(employee_id: str | None = None, user_id: str | None = None,
-             limit: int | None = None, exclude_auto: bool = False) -> list[dict]:
+             limit: int | None = None, exclude_auto: bool = False,
+             tenant_id: str | None = None) -> list[dict]:
     """会话清单（按员工/用户过滤；limit 限制条数，用于侧栏最近会话）。
 
     exclude_auto=True 时排除 c_auto_ 前缀的自动任务会话，用于员工专属会话页。
     """
     with _conn() as con:
-        wh, params = _where(employee_id, user_id, exclude_channel=True,
+        wh, params = _where(employee_id, user_id, tenant_id, exclude_channel=True,
                             exclude_auto=exclude_auto)
         sql = f"SELECT * FROM conversations {wh} ORDER BY updated_at DESC, created_at DESC, conv_id DESC"
         if limit:
@@ -195,10 +207,10 @@ def list_for(employee_id: str | None = None, user_id: str | None = None,
 
 
 def list_for_channel(channel_id: str, user_id: str | None = None,
-                     limit: int | None = None) -> list[dict]:
+                     limit: int | None = None, tenant_id: str | None = None) -> list[dict]:
     """频道会话清单：只返回某个频道下的会话。"""
     with _conn() as con:
-        wh, params = _where(channel_id=channel_id, user_id=user_id)
+        wh, params = _where(channel_id=channel_id, user_id=user_id, tenant_id=tenant_id)
         sql = f"SELECT * FROM conversations {wh} ORDER BY updated_at DESC, created_at DESC, conv_id DESC"
         if limit:
             sql += " LIMIT ?"; params.append(limit)
@@ -207,11 +219,11 @@ def list_for_channel(channel_id: str, user_id: str | None = None,
 
 
 def list_paged(employee_id: str | None = None, user_id: str | None = None,
-               page: int = 1, page_size: int = 10) -> dict:
+               page: int = 1, page_size: int = 10, tenant_id: str | None = None) -> dict:
     """分页会话清单，返回 {items, total, page, page_size}。"""
     page = max(1, page)
     with _conn() as con:
-        sql, params = _where(employee_id, user_id, exclude_channel=True)
+        sql, params = _where(employee_id, user_id, tenant_id, exclude_channel=True)
         total = con.execute(f"SELECT COUNT(*) FROM conversations {sql}", params).fetchone()[0]
         full = f"SELECT * FROM conversations {sql} ORDER BY updated_at DESC, created_at DESC, conv_id DESC LIMIT ? OFFSET ?"
         rows = con.execute(full, params + [page_size, (page - 1) * page_size]).fetchall()
