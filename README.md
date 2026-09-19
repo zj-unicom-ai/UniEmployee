@@ -292,7 +292,7 @@ UniEmployee/
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | 数据库后端与连接参数（host/port/user/password/db 前缀） |
-| `APP_VERSION` | `0.17.0` | 打印在 /health 与日志；可用环境变量覆盖 |
+| `APP_VERSION` | `0.18.0` | 打印在 /health 与日志；可用环境变量覆盖 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
 | `SANDBOX_ENABLED` / `SANDBOX_DOMAIN` / `SANDBOX_IMAGE` | 未启用 / `localhost:8090` / `uniemployee/sandbox:py312-data` | OpenSandbox 开关、服务地址和沙箱镜像 |
