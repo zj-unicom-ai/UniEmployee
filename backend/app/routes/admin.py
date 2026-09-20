@@ -197,6 +197,11 @@ async def delete_skill(skill_id: str, request: Request,
         return {"error": "内置技能不允许删除"}
     affected = catalog.employees_using_skill(skill_id)
     catalog.delete_skill(skill_id)
+    # 同步清理自定义技能磁盘目录（校验落在 SKILLS_CUSTOM_DIR 直下，防路径穿越；
+    # 同 ID 再上传时 upload_skill 会重建目录，复活机制不受影响）
+    target = (SKILLS_CUSTOM_DIR / skill_id).resolve()
+    if target.parent == SKILLS_CUSTOM_DIR.resolve() and target.exists():
+        shutil.rmtree(target, ignore_errors=True)
     for emp_id in affected:
         runtime.invalidate(emp_id)
     audit.log("delete", "skill", skill_id, admin, request,
