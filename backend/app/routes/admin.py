@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -241,7 +242,7 @@ async def edit_tool(tool_id: str, body: dict, request: Request,
 @router.post("/knowledge-bases")
 async def create_kb(body: dict, request: Request,
                     admin: dict = Depends(auth.require_admin)):
-    kid = body.get("id") or ("kb_" + time.strftime("%Y%m%d%H%M%S"))
+    kid = body.get("id") or ("kb_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_kb(kid, body.get("name", kid), body.get("description", ""),
                       body.get("ragflow_dataset_id", ""))
     audit.log("create", "kb", kid, admin, request, after=catalog.get_kb(kid))
@@ -288,7 +289,7 @@ async def del_kb(kb_id: str, request: Request,
 @router.post("/sops")
 async def create_sop(body: dict, request: Request,
                      admin: dict = Depends(auth.require_admin)):
-    sid = body.get("id") or ("sop_" + time.strftime("%Y%m%d%H%M%S"))
+    sid = body.get("id") or ("sop_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_sop(sid, body.get("name", sid), body.get("description", ""),
                        body.get("content", ""))
     audit.log("create", "sop", sid, admin, request, after=catalog.get_sop(sid))
@@ -323,7 +324,7 @@ async def del_sop(sop_id: str, request: Request,
 @router.post("/connectors")
 async def create_connector(body: dict, request: Request,
                            admin: dict = Depends(auth.require_admin)):
-    cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S"))
+    cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_connector(cid, body.get("name", cid), body.get("description", ""),
                              body.get("config", {}))
     audit.log("create", "connector", cid, admin, request,

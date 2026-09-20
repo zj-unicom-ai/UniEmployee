@@ -323,6 +323,40 @@ def test_delete_skill_route_cleans_custom_dir(tmp_path, monkeypatch):
     assert "error" in res2
 
 
+def test_create_employee_auto_id_unique():
+    """自动生成员工 id 毫秒内连续创建不互相覆盖（原秒级时间戳会 ON CONFLICT 覆盖）。"""
+    e1 = catalog.create_employee({
+        "name": "员工一", "model": "openai:m", "backend": "state", "persona": "p",
+        "tools": [], "skills": [], "kbs": [], "sops": [], "connectors": [],
+    })
+    e2 = catalog.create_employee({
+        "name": "员工二", "model": "openai:m", "backend": "state", "persona": "p",
+        "tools": [], "skills": [], "kbs": [], "sops": [], "connectors": [],
+    })
+    assert e1 != e2
+    assert catalog.get_employee_config(e1)["name"] == "员工一"
+    assert catalog.get_employee_config(e2)["name"] == "员工二"
+    catalog.delete_employee(e1)
+    catalog.delete_employee(e2)
+
+
+def test_create_sop_route_auto_id_unique():
+    """SOP 路由自动 id 同秒创建不冲突（admin.py 与 employees.py 同模式修复）。"""
+    import asyncio
+
+    from app.routes import admin as admin_routes
+
+    r1 = asyncio.run(admin_routes.create_sop(
+        {"name": "SOP一", "description": "d", "content": "c"},
+        request=None, admin={"id": "u1", "username": "admin"}))
+    r2 = asyncio.run(admin_routes.create_sop(
+        {"name": "SOP二", "description": "d", "content": "c"},
+        request=None, admin={"id": "u1", "username": "admin"}))
+    assert r1["id"] != r2["id"]
+    assert catalog.get_sop(r1["id"])["name"] == "SOP一"
+    assert catalog.get_sop(r2["id"])["name"] == "SOP二"
+
+
 # ---- 市场情报 V2：发布审批工具 ----
 
 def test_backfill_market_intel_publish_tool():
