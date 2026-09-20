@@ -137,6 +137,24 @@ def finish_run(run_id: str, status: str = "done", error: str = ""):
         logger.warning("trace finish_run 更新失败 run_id=%s status=%s", run_id, status, exc_info=True)
 
 
+def finish_stale_running() -> int:
+    """启动时把上次进程遗留的 status='running' Trace 收口为 abandoned。
+
+    返回收口的条数。仅做 UPDATE，不抛异常——失败的清理不应拖垮服务启动。
+    """
+    try:
+        with _conn() as con:
+            cur = con.execute(
+                "UPDATE runs SET status='abandoned', "
+                "error='process exited before run completed' "
+                "WHERE status='running'"
+            )
+            return cur.rowcount or 0
+    except Exception:
+        logger.warning("trace finish_stale_running 清理失败", exc_info=True)
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # 查询（API 用）
 # ---------------------------------------------------------------------------
