@@ -47,3 +47,19 @@ def test_delete():
     assert conversations.delete("c") is True
     assert conversations.get("c") is None
     assert conversations.delete("不存在") is False
+
+
+def test_public_catalog_hides_sensitive_fields():
+    """普通用户 /api/catalog 只见资源目录：无连接器配置、无 SOP 全文。"""
+    import asyncio
+
+    from app import catalog
+    from app.routes.conversations import public_catalog
+
+    catalog.create_sop("sop_secret", "退款SOP", "内部流程", content="第一步：核实订单…")
+    res = asyncio.run(public_catalog(context=None))
+
+    assert "connectors" not in res
+    sops = {s["id"]: s for s in res["sops"]}
+    assert not sops["sop_secret"].get("content")  # 全文被剥离
+    assert sops["sop_secret"]["name"] == "退款SOP"  # 目录字段保留

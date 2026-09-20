@@ -61,6 +61,23 @@ def test_role_user_cannot_manage(users):
     assert _req("/api/admin/users", token=zhang)[0] == 403
 
 
+def test_public_catalog_hides_sensitive_fields(users):
+    """普通用户 /api/catalog 只见资源目录：无连接器配置、无 SOP 全文。"""
+    admin, zhang, _ = users
+    s, b = _req("/api/catalog", token=zhang)
+    assert s == 200
+    data = json.loads(b)
+    assert "connectors" not in data
+    for sop in data.get("sops", []):
+        assert not sop.get("content")
+    # 管理员视角保持完整
+    s2, b2 = _req("/api/admin/catalog", token=admin)
+    assert s2 == 200
+    admin_data = json.loads(b2)
+    assert "connectors" in admin_data
+    assert any(sop.get("content") for sop in admin_data.get("sops", []))
+
+
 def test_role_user_can_chat(users):
     _, zhang, _ = users
     assert _req("/api/conversations", token=zhang)[0] == 200
