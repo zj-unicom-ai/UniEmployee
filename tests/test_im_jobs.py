@@ -9,9 +9,9 @@ from app.im.contracts import NormalizedInbound, OutboundMessage
 from app.im.credentials import CredentialKeyError
 
 
-def inbound(message_id: str = "om_1") -> NormalizedInbound:
+def inbound(message_id: str = "om_1", channel_id: str = "chan_1") -> NormalizedInbound:
     return NormalizedInbound(
-        provider="feishu", channel_id="chan_1", app_id="cli_test",
+        provider="feishu", channel_id=channel_id, app_id="cli_test",
         tenant_key="tenant_a", event_id=f"evt_{message_id}", message_id=message_id,
         chat_id="oc_1", chat_type="group", sender_open_id="ou_1", text="hello",
     )
@@ -43,6 +43,33 @@ def test_inbox_lease_can_only_be_reclaimed_after_expiry():
     assert jobs.finish_inbox(inbox_id, "worker-b") is True
 
 
+def test_workers_only_claim_jobs_for_their_channel():
+    first_id, _ = jobs.enqueue_inbound(inbound("om_ch1", "chan_1"))
+    second_id, _ = jobs.enqueue_inbound(inbound("om_ch2", "chan_2"))
+
+    second = jobs.claim_inbox("worker-2", channel_id="chan_2")
+    assert second["id"] == second_id
+    first = jobs.claim_inbox("worker-1", channel_id="chan_1")
+    assert first["id"] == first_id
+
+    for row, worker in ((first, "worker-1"), (second, "worker-2")):
+        jobs.create_outbox(
+            row["id"],
+            OutboundMessage(
+                channel_id=row["channel_id"],
+                receive_id="oc_1",
+                receive_id_type="chat_id",
+                text="answer",
+            ),
+        )
+        assert jobs.finish_inbox(row["id"], worker)
+
+    outbox_2 = jobs.claim_outbox("delivery-2", channel_id="chan_2")
+    outbox_1 = jobs.claim_outbox("delivery-1", channel_id="chan_1")
+    assert outbox_2["channel_id"] == "chan_2"
+    assert outbox_1["channel_id"] == "chan_1"
+
+
 def test_outbox_is_idempotent_and_preserves_uuid_across_retry():
     inbox_id, _ = jobs.enqueue_inbound(inbound())
     message = OutboundMessage(
@@ -66,6 +93,34 @@ def test_outbox_is_idempotent_and_preserves_uuid_across_retry():
     assert retry["provider_uuid"] == stable_uuid
     assert retry["attempts"] == 2
     assert jobs.finish_outbox(first_id, "worker-b", provider_message_id="om_reply")
+
+
+def test_dead_outbox_can_be_listed_and_replayed():
+    inbox_id, _ = jobs.enqueue_inbound(inbound("om_dead"))
+    outbox_id, _ = jobs.create_outbox(
+        inbox_id,
+        OutboundMessage(
+            channel_id="chan_1",
+            receive_id="oc_1",
+            receive_id_type="chat_id",
+            reply_to_message_id="om_dead",
+            text="answer",
+        ),
+    )
+    claimed = jobs.claim_outbox("worker-a")
+    stable_uuid = claimed["provider_uuid"]
+    assert jobs.retry_outbox(outbox_id, "worker-a", error="permanent", retry_at=None)
+
+    dead = jobs.list_outbox(channel_id="chan_1", status="dead")
+    assert dead[0]["id"] == outbox_id
+    assert "content" not in dead[0]
+    replayed = jobs.replay_outbox(outbox_id)
+    assert replayed["status"] == "pending"
+    assert replayed["attempts"] == 0
+
+    retried = jobs.claim_outbox("worker-b")
+    assert retried["provider_uuid"] == stable_uuid
+    assert retried["attempts"] == 1
 
 
 def test_credentials_are_encrypted_and_summary_never_exposes_secret(monkeypatch):

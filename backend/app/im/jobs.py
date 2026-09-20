@@ -198,28 +198,34 @@ def enqueue_inbound(message: NormalizedInbound) -> tuple[str, bool]:
 
 
 def _claim(table: str, ready: tuple[str, ...], worker_id: str, lease_seconds: int,
-           now: datetime | None = None) -> dict[str, Any] | None:
+           now: datetime | None = None,
+           channel_id: str | None = None) -> dict[str, Any] | None:
     moment = now or datetime.now(timezone.utc)
     now_s = _now(moment)
     lease_s = _now(moment + timedelta(seconds=lease_seconds))
     placeholders = ",".join("?" for _ in ready)
+    channel_clause = "channel_id=? AND " if channel_id else ""
+    channel_params = (channel_id,) if channel_id else ()
     with _conn() as con:
         row = con.execute(
-            f"SELECT id FROM {table} WHERE ((status IN ({placeholders}) "
+            f"SELECT id FROM {table} WHERE {channel_clause}((status IN ({placeholders}) "
             "AND (next_attempt_at IS NULL OR next_attempt_at<=?)) "
             "OR (status IN ('processing','sending') AND lease_expires_at<=?)) "
             "ORDER BY created_at,id LIMIT 1",
-            (*ready, now_s, now_s),
+            (*channel_params, *ready, now_s, now_s),
         ).fetchone()
         if not row:
             return None
         target = "processing" if table == "channel_inbox" else "sending"
         cur = con.execute(
             f"UPDATE {table} SET status=?,attempts=attempts+1,lease_owner=?,"
-            "lease_expires_at=?,updated_at=? WHERE id=? AND ((status IN ("
+            f"lease_expires_at=?,updated_at=? WHERE id=? AND {channel_clause}((status IN ("
             f"{placeholders}) AND (next_attempt_at IS NULL OR next_attempt_at<=?)) "
             "OR (status IN ('processing','sending') AND lease_expires_at<=?))",
-            (target, worker_id, lease_s, now_s, row["id"], *ready, now_s, now_s),
+            (
+                target, worker_id, lease_s, now_s, row["id"],
+                *channel_params, *ready, now_s, now_s,
+            ),
         )
         if cur.rowcount != 1:
             return None
@@ -231,25 +237,28 @@ def _claim(table: str, ready: tuple[str, ...], worker_id: str, lease_seconds: in
 
 
 def claim_inbox(worker_id: str, lease_seconds: int = 60,
-                now: datetime | None = None) -> dict[str, Any] | None:
+                now: datetime | None = None,
+                channel_id: str | None = None) -> dict[str, Any] | None:
     # Inbox 没有 next_attempt_at，为复用查询补一个始终为 NULL 的表达式列不可行；
     # 单独实现其 CAS 条件。
     moment = now or datetime.now(timezone.utc)
     now_s = _now(moment)
     lease_s = _now(moment + timedelta(seconds=lease_seconds))
+    channel_clause = "channel_id=? AND " if channel_id else ""
+    channel_params = (channel_id,) if channel_id else ()
     with _conn() as con:
         row = con.execute(
-            "SELECT id FROM channel_inbox WHERE status='received' OR "
-            "(status='processing' AND lease_expires_at<=?) ORDER BY created_at,id LIMIT 1",
-            (now_s,),
+            f"SELECT id FROM channel_inbox WHERE {channel_clause}(status='received' OR "
+            "(status='processing' AND lease_expires_at<=?)) ORDER BY created_at,id LIMIT 1",
+            (*channel_params, now_s),
         ).fetchone()
         if not row:
             return None
         cur = con.execute(
             "UPDATE channel_inbox SET status='processing',attempts=attempts+1,"
             "lease_owner=?,lease_expires_at=?,updated_at=? WHERE id=? AND "
-            "(status='received' OR (status='processing' AND lease_expires_at<=?))",
-            (worker_id, lease_s, now_s, row["id"], now_s),
+            f"{channel_clause}(status='received' OR (status='processing' AND lease_expires_at<=?))",
+            (worker_id, lease_s, now_s, row["id"], *channel_params, now_s),
         )
         if cur.rowcount != 1:
             return None
@@ -291,8 +300,12 @@ def create_outbox(inbox_id: str, message: OutboundMessage) -> tuple[str, bool]:
 
 
 def claim_outbox(worker_id: str, lease_seconds: int = 60,
-                 now: datetime | None = None) -> dict[str, Any] | None:
-    return _claim("channel_outbox", ("pending", "retry"), worker_id, lease_seconds, now)
+                 now: datetime | None = None,
+                 channel_id: str | None = None) -> dict[str, Any] | None:
+    return _claim(
+        "channel_outbox", ("pending", "retry"), worker_id, lease_seconds, now,
+        channel_id,
+    )
 
 
 def finish_outbox(outbox_id: str, worker_id: str, *, provider_message_id: str) -> bool:
@@ -316,6 +329,51 @@ def retry_outbox(outbox_id: str, worker_id: str, *, error: str,
             (status, error, _now(retry_at) if retry_at else None, _now(), outbox_id, worker_id),
         )
         return cur.rowcount == 1
+
+
+def list_outbox(
+    *, channel_id: str | None = None, status: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """列出投递状态；不返回消息正文和目标标识。"""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if channel_id:
+        clauses.append("channel_id=?")
+        params.append(channel_id)
+    if status:
+        clauses.append("status=?")
+        params.append(status)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(max(1, min(int(limit), 200)))
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT id,inbox_id,channel_id,status,attempts,next_attempt_at,"
+            "provider_message_id,error,created_at,updated_at FROM channel_outbox"
+            f"{where} ORDER BY created_at DESC,id DESC LIMIT ?",
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def replay_outbox(outbox_id: str) -> dict[str, Any] | None:
+    """将失败投递重新放回队列，保留稳定 provider_uuid 以维持幂等语义。"""
+    now = _now()
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE channel_outbox SET status='pending',attempts=0,error=NULL,"
+            "next_attempt_at=NULL,lease_owner=NULL,lease_expires_at=NULL,updated_at=? "
+            "WHERE id=? AND status IN ('dead','retry')",
+            (now, outbox_id),
+        )
+        if cur.rowcount != 1:
+            return None
+        row = con.execute(
+            "SELECT id,inbox_id,channel_id,status,attempts,next_attempt_at,"
+            "provider_message_id,error,created_at,updated_at "
+            "FROM channel_outbox WHERE id=?",
+            (outbox_id,),
+        ).fetchone()
+    return dict(row)
 
 
 def ensure_external_identity(context: ActorContext) -> dict[str, Any]:

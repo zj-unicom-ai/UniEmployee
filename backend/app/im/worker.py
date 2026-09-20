@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+import os
+import random
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app import conversations
@@ -15,6 +17,38 @@ from app.im import jobs
 from app.im.execution import collect_text, run_agent_events
 
 logger = logging.getLogger("app.im.worker")
+
+
+def retry_delay_seconds(
+    attempt: int,
+    *,
+    base: float = 2.0,
+    cap: float = 300.0,
+    jitter_ratio: float = 0.2,
+    random_value: float | None = None,
+) -> float:
+    """指数退避并加入有界抖动；attempt 从 1 开始。"""
+    raw = min(cap, base * (2 ** max(0, attempt - 1)))
+    sample = random.random() if random_value is None else random_value
+    factor = 1 + jitter_ratio * (2 * sample - 1)
+    return max(0.0, raw * factor)
+
+
+def _status_code(exc: Exception) -> int | None:
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_retryable_delivery_error(exc: Exception) -> bool:
+    status = _status_code(exc)
+    if status is None:
+        return True
+    return status in {408, 409, 425, 429} or status >= 500
 
 
 def _context(row: dict[str, Any]) -> ActorContext:
@@ -29,7 +63,9 @@ def _context(row: dict[str, Any]) -> ActorContext:
 async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str,
                              worker_id: str = "im-worker", lease_seconds: int = 120) -> bool:
     """消费一条 Inbox；无任务返回 False，成功处理返回 True。"""
-    row = jobs.claim_inbox(worker_id, lease_seconds=lease_seconds)
+    row = jobs.claim_inbox(
+        worker_id, lease_seconds=lease_seconds, channel_id=channel_id
+    )
     if not row:
         return False
     inbox_id = row["id"]
@@ -69,7 +105,11 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
 
 async def deliver_outbox_once(*, provider: Any, worker_id: str = "im-delivery",
                               lease_seconds: int = 120) -> bool:
-    row = jobs.claim_outbox(worker_id, lease_seconds=lease_seconds)
+    channel_id = getattr(provider, "credential", None)
+    channel_id = getattr(channel_id, "channel_id", None)
+    row = jobs.claim_outbox(
+        worker_id, lease_seconds=lease_seconds, channel_id=channel_id
+    )
     if not row:
         return False
     try:
@@ -85,7 +125,18 @@ async def deliver_outbox_once(*, provider: Any, worker_id: str = "im-delivery",
         return True
     except Exception as exc:
         logger.exception("IM outbox delivery failed outbox=%s", row["id"])
-        jobs.retry_outbox(row["id"], worker_id, error=f"{type(exc).__name__}: {exc}"[:500],
-                          retry_at=datetime.now(timezone.utc))
+        max_attempts = max(1, int(os.environ.get("IM_OUTBOX_MAX_ATTEMPTS", "5")))
+        retryable = _is_retryable_delivery_error(exc)
+        retry_at = None
+        if retryable and row["attempts"] < max_attempts:
+            base = max(0.1, float(os.environ.get("IM_OUTBOX_RETRY_BASE_SECONDS", "2")))
+            cap = max(base, float(os.environ.get("IM_OUTBOX_RETRY_MAX_SECONDS", "300")))
+            delay = retry_delay_seconds(row["attempts"], base=base, cap=cap)
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        jobs.retry_outbox(
+            row["id"],
+            worker_id,
+            error=f"{type(exc).__name__}: {exc}"[:500],
+            retry_at=retry_at,
+        )
         return False
-

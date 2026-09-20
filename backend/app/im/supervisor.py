@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
 from app.im import jobs
@@ -16,15 +17,27 @@ logger = logging.getLogger("app.im.supervisor")
 
 
 class ImSupervisor:
-    def __init__(self, *, provider: FeishuProvider, channel_id: str, employee_id: str):
+    def __init__(
+        self,
+        *,
+        provider: FeishuProvider,
+        channel_id: str,
+        employee_id: str,
+        on_inbound: Callable[[], None] | None = None,
+        on_outbound: Callable[[], None] | None = None,
+    ):
         self.provider = provider
         self.channel_id = channel_id
         self.employee_id = employee_id
+        self.on_inbound = on_inbound
+        self.on_outbound = on_outbound
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
 
     async def _on_message(self, message) -> None:
         jobs.enqueue_inbound(message)
+        if self.on_inbound is not None:
+            self.on_inbound()
 
     async def _inbox_loop(self) -> None:
         while not self._stop.is_set():
@@ -36,7 +49,9 @@ class ImSupervisor:
 
     async def _outbox_loop(self) -> None:
         while not self._stop.is_set():
-            await deliver_outbox_once(provider=self.provider)
+            delivered = await deliver_outbox_once(provider=self.provider)
+            if delivered and self.on_outbound is not None:
+                self.on_outbound()
             await asyncio.sleep(0.05)
 
     async def start(self) -> None:

@@ -9,7 +9,7 @@ import json
 import time
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app import auth, conversations, runtime
@@ -18,6 +18,7 @@ from app.models import (
 )
 from app.streaming import _stream_run, reconstruct, conv_emp_map, conv_owner_map
 from app.im import jobs as im_jobs
+from app.im.registry import registry as im_registry
 
 router = APIRouter(prefix="/api/im", tags=["im"])
 
@@ -58,6 +59,7 @@ def _channel_item(ch: dict, user: dict) -> dict:
         item["config"] = ch.get("config") or {}
         if item["provider"] == "feishu":
             item["config"] = {**item["config"], **(im_jobs.credential_summary(ch["id"]) or {"configured": False})}
+            item["runtime"] = im_registry.status(ch["id"])
     return item
 
 
@@ -120,6 +122,7 @@ async def create_channel(body: ImChannelCreate,
         created_by=user.get("id", "admin"),
         employee_ids=body.employee_ids,
     )
+    await im_registry.reconcile()
     return row
 
 
@@ -140,6 +143,7 @@ async def update_channel(channel_id: str, body: ImChannelUpdate,
     )
     if not ch:
         raise HTTPException(404, "频道不存在")
+    await im_registry.reconcile()
     return ch
 
 
@@ -168,6 +172,7 @@ async def put_credentials(channel_id: str, body: dict = Body(...), user: dict = 
         channel_id=channel_id, app_id=str(body["app_id"]).strip(),
         app_secret=str(body["app_secret"]), tenant_key=str(body.get("tenant_key", "")).strip(),
     )
+    await im_registry.reconcile(force_channel_id=channel_id)
     return im_jobs.credential_summary(channel_id)
 
 
@@ -178,7 +183,59 @@ async def delete_channel(channel_id: str,
         raise HTTPException(403, "仅管理员可删除 IM 频道")
     if not conversations.delete_channel(channel_id):
         raise HTTPException(404, "频道不存在")
+    await im_registry.reconcile()
     return {"ok": True}
+
+
+@router.post("/channels/{channel_id}/reconnect")
+async def reconnect_channel(
+    channel_id: str,
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可重连 IM 频道")
+    channel = conversations.get_channel(channel_id)
+    if not channel:
+        raise HTTPException(404, "频道不存在")
+    if channel.get("provider") != "feishu":
+        raise HTTPException(400, "当前频道不是飞书频道")
+    if not channel.get("enabled", True):
+        raise HTTPException(409, "频道已停用，请先启用")
+    return await im_registry.reconnect(channel_id)
+
+
+@router.get("/channels/{channel_id}/outbox")
+async def list_channel_outbox(
+    channel_id: str,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=200),
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可查看 IM 投递任务")
+    if not conversations.get_channel(channel_id):
+        raise HTTPException(404, "频道不存在")
+    allowed = {None, "pending", "sending", "sent", "retry", "dead"}
+    if status not in allowed:
+        raise HTTPException(400, "不支持的 Outbox 状态")
+    return {
+        "items": im_jobs.list_outbox(
+            channel_id=channel_id, status=status, limit=limit
+        )
+    }
+
+
+@router.post("/outbox/{outbox_id}/replay")
+async def replay_outbox(
+    outbox_id: str,
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可重放 IM 投递任务")
+    row = im_jobs.replay_outbox(outbox_id)
+    if row is None:
+        raise HTTPException(409, "任务不存在或当前状态不可重放")
+    return row
 
 
 @router.post("/channels/{channel_id}/incoming")

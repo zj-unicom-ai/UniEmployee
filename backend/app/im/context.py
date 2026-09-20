@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 
@@ -37,7 +38,13 @@ class ActorContext:
         if chat_type not in {"p2p", "group"}:
             raise ValueError(f"不支持的飞书 chat_type: {chat_type!r}")
         # 单聊和群聊都以 chat_id 为记忆边界；群聊因此天然全群共享。
-        subject_id = f"im:feishu:{app_id}:{tenant_key}:chat:{chat_id}"
+        # subject_id 会被运行时用于 Store namespace 和本地工作目录。
+        # 使用不可逆、确定且跨平台安全的标识，避免 Windows 路径中的冒号，
+        # 同时不把飞书组织、应用和会话标识暴露到文件系统目录名中。
+        scope_material = "\0".join(("feishu", app_id, tenant_key, chat_id))
+        subject_id = "im_feishu_" + hashlib.sha256(
+            scope_material.encode("utf-8")
+        ).hexdigest()
         return cls(
             subject_id=subject_id,
             authorization_user_id=None,

@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from app.im.context import ActorContext
@@ -18,6 +20,8 @@ def test_group_context_is_shared_without_platform_authority():
     assert first.authorization_user_id is None
     assert second.authorization_user_id is None
     assert first.sender_open_id != second.sender_open_id
+    assert re.fullmatch(r"[A-Za-z0-9_.-]+", first.subject_id)
+    assert ":" not in first.subject_id
 
 
 def test_chat_and_tenant_boundaries_are_isolated():
