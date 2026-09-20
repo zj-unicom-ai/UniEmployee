@@ -82,6 +82,7 @@ def _spec(tools, **kw):
         persona=kw.get("persona", ""),
         tools=tools,
         mcp_servers={},
+        subagents=kw.get("subagents", []),
     )
 
 
@@ -190,6 +191,19 @@ def test_assemble_kb_search_closure_injected(monkeypatch):
     assert any(t.name == "kb_search" for t in tools)
 
 
+def test_assemble_closure_tools_follow_allow_deny_policy(monkeypatch):
+    """kb_search 等闭包工具不能绕过统一工具策略。"""
+    guard.set_setting("admin_only_tools", "")
+    guard.set_setting("tool_allowlist", "")
+    guard.set_setting("tool_denylist", "kb_search")
+    _mock_role(monkeypatch, "user")
+    spec = _spec(["kb_search"], id="kb_denied")
+    tools, _ = asyncio.run(_assemble_tools(spec, user_id="u_user"))
+    t = next(x for x in tools if x.name == "kb_search")
+    assert "无权限" in (getattr(t, "description", "") or "")
+    guard.set_setting("tool_denylist", "")
+
+
 def test_assemble_ontology_tools_injected(monkeypatch):
     """声明任一通用本体查询工具 → 四个通用只读工具都注入。"""
     guard.set_setting("admin_only_tools", "")
@@ -215,6 +229,20 @@ def test_assemble_ontology_scenario_tools_injected(monkeypatch):
         "ontology_expand", "ontology_find_paths",
         "ontology_customer_360", "ontology_fault_impact",
     } <= names
+
+
+def test_subagent_inherits_calling_user_tool_policy(monkeypatch):
+    """子代理不能因为编译时缺少 user_id 而获得管理员工具。"""
+    guard.set_setting("admin_only_tools", "create_ticket")
+    _mock_role(monkeypatch, "user")
+    spec = _spec([], id="parent", subagents=[{
+        "name": "child", "tools": ["create_ticket"],
+    }])
+    subagents = asyncio.run(compiler._assemble_subagents(
+        spec, None, user_id="u_user"))
+    child_tool = next(t for t in subagents[0]["tools"]
+                      if t.name == "create_ticket")
+    assert "无权限" in (getattr(child_tool, "description", "") or "")
 
 
 # ---------- deepagents 内置文件工具裁剪 ----------

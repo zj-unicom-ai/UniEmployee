@@ -6,9 +6,10 @@
 - guard_logs 表：拦截/命中记录，供审计页查询
 - 输入硬拦截在 streaming 入口（不进模型）；输出检测在流结束后（记录+截断标记）
 
-工具白名单：admin 配置「仅管理员可调用」的工具名列表；普通用户（role != admin）
-的员工运行时若调用这些工具，直接抛权限错误并记录日志。admin 角色不受限。
+工具能力策略：admin 配置 allow/deny 列表；普通用户（role != admin）的员工运行时
+若命中 deny 或未命中显式 allow，直接抛权限错误并记录日志。admin 角色不受限。
 """
+import fnmatch
 import json
 import time
 
@@ -21,6 +22,15 @@ DEFAULTS = {
     "sensitive_enabled": "1",
     # 工具白名单：逗号分隔的工具名，普通用户不可调用；空 = 不限制
     "admin_only_tools": "ontology_save_entity,ontology_link_entities",
+    # 普通用户的全局允许列表；空表示沿用员工/连接器自身的授权配置
+    "tool_allowlist": "",
+    # 普通用户的全局拒绝列表；deny 优先于 allow，支持 * 通配符
+    "tool_denylist": "",
+    # 未绑定连接器来源的 MCP 工具默认拒绝；已绑定连接器的工具自动放行
+    # （仍受 tool_allowlist / tool_denylist 约束）。mcp_allowlist 保留给
+    # 直接注入、无法关联到连接器的 MCP 工具使用。
+    "mcp_default_deny": "1",
+    "mcp_allowlist": "",
 }
 
 
@@ -92,17 +102,41 @@ def check_text(text: str) -> dict | None:
     return None
 
 
-# ---- 工具白名单 ----
+# ---- 工具能力策略 ----
 
-def admin_only_tool_set() -> set[str]:
-    raw = get_setting("admin_only_tools", DEFAULTS["admin_only_tools"])
+def _tool_names(key: str) -> set[str]:
+    raw = get_setting(key, DEFAULTS.get(key, ""))
     return {x.strip() for x in raw.split(",") if x.strip()}
 
 
-def tool_allowed(tool_name: str, role: str) -> bool:
+def _matches(name: str, patterns: set[str]) -> bool:
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+def admin_only_tool_set() -> set[str]:
+    return _tool_names("admin_only_tools")
+
+
+def tool_allowed(tool_name: str, role: str, source: str = "local",
+                 connector_granted: bool = False) -> bool:
+    """统一判断本地、闭包和 MCP 工具的执行权限。"""
     if role == "admin":
         return True
-    return tool_name not in admin_only_tool_set()
+
+    if _matches(tool_name, admin_only_tool_set() | _tool_names("tool_denylist")):
+        return False
+
+    allowlist = _tool_names("tool_allowlist")
+    if allowlist and not _matches(tool_name, allowlist):
+        return False
+
+    if source == "mcp":
+        if connector_granted:
+            return True
+        default_deny = get_setting("mcp_default_deny", "1").strip().lower()
+        if default_deny in {"1", "true", "yes", "on"} \
+                and not _matches(tool_name, _tool_names("mcp_allowlist")):
+            return False
+    return True
 
 
 # ---- 拦截日志 ----
