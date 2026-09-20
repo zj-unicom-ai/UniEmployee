@@ -23,7 +23,8 @@ from .orgs import (
 # users
 from .users import (
     create_user, get_user, get_user_by_username,
-    list_users, list_users_paged, update_user, set_password,
+    list_users, list_users_paged, update_user, set_password, get_user_by_identity,
+    find_or_create_oidc_user,
     set_must_change_password, delete_user,
     assign_employee, unassign_employee, get_assignment,
     list_assignments, set_assignment_overrides,
@@ -56,6 +57,7 @@ from .seeds import (
     backfill_employees_if_missing, backfill_analyst_sql_tools,
     backfill_xiaoshu_skills, backfill_netops_upgrade,
     backfill_sandbox_backend, backfill_workspace_paths,
+    backfill_ticket_approval, backfill_market_intel_v2,
     seed_assignments_if_empty, seed_admin_if_empty, flag_default_admin_password,
 )
 
@@ -73,7 +75,8 @@ __all__ = [
     "create_org", "get_org", "list_orgs", "descendant_ids", "update_org", "delete_org",
     # users
     "create_user", "get_user", "get_user_by_username",
-    "list_users", "list_users_paged", "update_user", "set_password",
+    "list_users", "list_users_paged", "update_user", "set_password", "get_user_by_identity",
+    "find_or_create_oidc_user",
     "set_must_change_password", "delete_user",
     "assign_employee", "unassign_employee", "get_assignment",
     "list_assignments", "set_assignment_overrides",
@@ -96,6 +99,7 @@ __all__ = [
     "backfill_employees_if_missing", "backfill_analyst_sql_tools",
     "backfill_xiaoshu_skills", "backfill_netops_upgrade",
     "backfill_sandbox_backend", "backfill_workspace_paths",
+    "backfill_ticket_approval", "backfill_market_intel_v2",
     "seed_assignments_if_empty", "seed_admin_if_empty", "flag_default_admin_password",
     # ai_models
     "ai_models_init", "list_models", "get_model", "create_model",

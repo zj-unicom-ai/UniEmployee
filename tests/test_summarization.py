@@ -29,7 +29,9 @@ class FakeModel(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="FAKE_SUMMARY"))])
 
-    async def ainvoke(self, input, **kwargs):
+    async def ainvoke(self, input, config=None, **kwargs):
+        # langchain_core 的 RunnableBinding 会把 config 作为第二个位置参数透传，
+        # 签名必须与 BaseChatModel.ainvoke(input, config=None, **kwargs) 兼容
         return AIMessage(content="FAKE_SUMMARY")
 
 
@@ -103,8 +105,11 @@ def test_summary_generation_and_offload(tmp_path):
     summary = asyncio.run(mw._acreate_summary(to_summarize))
     assert summary == "FAKE_SUMMARY"
 
-    path = mw._offload_to_backend(backend, to_summarize)
-    assert path and path.startswith("/conversation_history/") and path.endswith(".md")
+    # deepagents 0.7.13 起 _offload_to_backend 需要 session_id（每会话一个追加文件）
+    session_id = mw._get_session_id({})
+    path = mw._offload_to_backend(backend, to_summarize, session_id)
+    assert path == mw._get_history_path(session_id)
+    assert path.startswith("/conversation_history/") and path.endswith(".md")
     resp = backend.download_files([path])
     assert resp[0].content is not None
     assert "问题0" in resp[0].content.decode("utf-8")

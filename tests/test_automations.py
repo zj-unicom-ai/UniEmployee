@@ -1,6 +1,8 @@
 """自动化任务回归测试：cron 解析 / next_fire 计算 / CRUD / 抢占 / 模板渲染。"""
 from datetime import datetime
 
+import asyncio
+
 from app import automations
 
 
@@ -135,6 +137,32 @@ def test_mark_result_updates_counters():
     assert cur["run_count"] == 1
 
 
+def test_execute_marks_awaiting_approval(monkeypatch):
+    from app import conversations
+    from app import streaming
+
+    async def fake_stream(*args, **kwargs):
+        yield 'data: {"type":"token","content":"已生成简报"}\n\n'
+        yield 'data: {"type":"approval_required","approval_id":"ap_1","tool":"publish_briefing","args":{}}\n\n'
+
+    async def fail_push(*args, **kwargs):
+        raise AssertionError("awaiting approval should not push outbound")
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    monkeypatch.setattr(automations, "_push", fail_push)
+    channel = conversations.create_channel(
+        "审批频道", config={"outbound_webhook": "https://example.invalid/webhook"})
+    auto = _mk_cron(channel_id=channel["id"])
+
+    result = asyncio.run(automations.execute(auto, trigger="manual"))
+
+    assert result["status"] == "awaiting_approval"
+    assert result["approval_id"] == "ap_1"
+    cur = automations.get(auto["id"])
+    assert cur["last_status"] == "awaiting_approval"
+    assert "ap_1" in cur["last_error"]
+
+
 def test_list_by_event_filters_enabled():
     automations.create(name="退款事件", trigger_type="event", employee_id="xiaoshu",
                        prompt="处理退款事件", event_key="order.refunded", secret="s1")
@@ -169,3 +197,31 @@ def test_render_prompt_appends_payload_when_no_placeholder():
 def test_render_prompt_without_payload():
     out = automations.render_prompt("生成 {{now}} 的日报")
     assert "{{now}}" not in out
+
+
+# ---- 市场情报值守种子任务（V2） ----
+
+def test_backfill_seeds_market_intel_tasks():
+    """值守任务模板幂等补种：默认停用、字段正确、重复执行不重复。"""
+    automations.backfill_seeds()
+    rows = {a["id"]: a for a in automations.list_all() if a["id"].startswith("auto_seed_market")}
+
+    daily = rows.get("auto_seed_market_daily_brief")
+    assert daily and daily["trigger_type"] == "cron"
+    assert daily["cron_expr"] == "30 8 * * 1-5"
+    assert daily["employee_id"] == "market-intel"
+    assert daily["enabled"] is False
+    assert daily["next_fire_at"] is None          # 停用不排期
+    assert "publish_briefing" in daily["prompt"]  # 收尾必须走发布审批
+    assert "{{now}}" in daily["prompt"]
+
+    alert = rows.get("auto_seed_market_alert_event")
+    assert alert and alert["trigger_type"] == "event"
+    assert alert["event_key"] == "market-signal"
+    assert alert["enabled"] is False
+    assert "{{payload}}" in alert["prompt"]
+
+    # 幂等：管理员即使开启后重启，种子也不覆盖/不重置
+    automations.update("auto_seed_market_daily_brief", name="管理员改过的名字")
+    automations.backfill_seeds()
+    assert automations.get("auto_seed_market_daily_brief")["name"] == "管理员改过的名字"

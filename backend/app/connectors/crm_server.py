@@ -33,6 +33,15 @@ ORDERS = {
                "status": "运输中", "sign_date": None, "customer": "林总", "company": "云帆互联网", "phone": "136****8888"},
     "O12358": {"order_id": "O12358", "product": "X1 智能音箱×30（企业集采）", "amount": 10770.0,
                "status": "已签收", "sign_date": "2026-06-28", "customer": "杨总", "company": "万通地产", "phone": "137****2222"},
+    # ---- 浙江联通演示客户订单（吉利汽车/零跑汽车，金额与商务数据均为演示模拟） ----
+    "O22601": {"order_id": "O22601", "product": "5G 专网（杭州湾制造基地一期）年服务费", "amount": 3200000.0,
+               "status": "服务中", "sign_date": "2025-10-05", "customer": "李总监", "company": "吉利汽车", "phone": "139****0001"},
+    "O22602": {"order_id": "O22602", "product": "联通云（车联网数据平台承载）资源包", "amount": 1500000.0,
+               "status": "服务中", "sign_date": "2025-11-20", "customer": "王工", "company": "吉利汽车", "phone": "139****0002"},
+    "O22603": {"order_id": "O22603", "product": "视频云（园区安防 AI 分析）扩容包", "amount": 460000.0,
+               "status": "待签约", "sign_date": None, "customer": "李总监", "company": "吉利汽车", "phone": "139****0001"},
+    "O22604": {"order_id": "O22604", "product": "MPLS-VPN 专线（全国 9 个基地互联）", "amount": 960000.0,
+               "status": "服务中", "sign_date": "2026-03-31", "customer": "李总监", "company": "吉利汽车", "phone": "139****0001"},
 }
 
 CUSTOMERS = {
@@ -77,6 +86,19 @@ CUSTOMERS = {
             "industry": "房地产", "employees": 800, "orders": ["O12358"],
             "total_spent": 10770.0, "since": "2025-05", "last_visit": "2026-06-28",
             "notes": "已采购智能音箱30台用于售楼处，后续有样板间智能家居方案需求"},
+    # ---- 浙江联通演示客户（吉利汽车/零跑汽车，客户信息为演示模拟数据） ----
+    "李总监": {"name": "李总监", "company": "吉利汽车（浙江·宁波杭州湾制造基地）", "title": "数字化中心总监", "level": "战略VIP",
+             "industry": "汽车制造（新能源）", "employees": 24000, "orders": ["O22601", "O22603", "O22604"],
+             "total_spent": 4620000.0, "since": "2023-06", "last_visit": "2026-08-28",
+             "notes": "集团数字化转型决策链核心，管 ICT 年度预算与供应商准入；关注车联网数据出境合规与匈牙利工厂海外组网；只要量化对比数据（SLA/时延/成本），反感过度客套；单笔超 200 万需上集团数字化委员会"},
+    "王工": {"name": "王工", "company": "吉利汽车", "title": "信息化部 网络运维主管", "level": "战略VIP",
+            "industry": "汽车制造（新能源）", "employees": 24000, "orders": ["O22602"],
+            "total_spent": 1500000.0, "since": "2025-11", "last_visit": "2026-09-08",
+            "notes": "联通服务日常技术接口人，要求 P1 故障 15 分钟响应、告警日报自动化；09-08 现场巡检反馈 AGV 调度偶发卡顿（与专网一期 QoS 策略相关），已提开工单"},
+    "陈经理": {"name": "陈经理", "company": "零跑汽车", "title": "数字化部经理", "level": "VIP",
+             "industry": "汽车制造（新能源）", "employees": 8000, "orders": [],
+             "total_spent": 0.0, "since": "2026-09", "last_visit": "2026-09-09",
+             "notes": "智博会获取的新线索，对物联网卡统一管理平台有意向，已约下周技术交流"},
 }
 
 

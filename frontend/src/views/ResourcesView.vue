@@ -10,11 +10,15 @@
         </div>
         <div class="card-grid">
           <div v-for="it in (catalog.skills || [])" :key="it.id" class="res-card tech-card">
-            <div class="card-head"><span class="card-name">{{ it.name }}</span><n-tag v-if="it.dir" size="tiny" round bordered>内置</n-tag></div>
+            <div class="card-head">
+              <span class="card-name">{{ it.name }}</span>
+              <n-tag v-if="!it.is_custom" size="tiny" round bordered>内置</n-tag>
+              <n-tag v-else type="info" size="tiny" round bordered>自定义</n-tag>
+            </div>
             <div class="card-id">{{ it.id }}</div>
             <div class="card-desc">{{ it.description }}</div>
             <div class="card-acts">
-              <n-button size="tiny" quaternary @click="viewSkillContent(it)">查看内容</n-button>
+              <n-button v-if="isAdmin" size="tiny" quaternary @click="viewSkillContent(it)">查看内容</n-button>
               <n-button v-if="isAdmin" size="tiny" quaternary type="error" @click="delItem('skills', it.id)">删除</n-button>
             </div>
           </div>
@@ -23,7 +27,10 @@
 
       <!-- 工具 -->
       <n-tab-pane name="tools" tab="工具">
-        <div class="res-toolbar"><span class="res-title">工具（{{ catalog.tools?.length || 0 }}）</span></div>
+        <div class="res-toolbar">
+          <span class="res-title">工具（{{ catalog.tools?.length || 0 }}）</span>
+          <span class="res-hint">工具由代码注册，此处仅维护元信息与审批策略</span>
+        </div>
         <div class="card-grid">
           <div v-for="it in (catalog.tools || [])" :key="it.id" class="res-card tech-card">
             <div class="card-head"><span class="card-name">{{ it.name }}</span>
@@ -32,6 +39,9 @@
             </div>
             <div class="card-id">{{ it.id }}</div>
             <div class="card-desc">{{ it.description }}</div>
+            <div class="card-acts">
+              <n-button v-if="isAdmin" size="tiny" quaternary @click="openModal('tools', it)">编辑</n-button>
+            </div>
           </div>
         </div>
       </n-tab-pane>
@@ -57,7 +67,9 @@
               <div class="card-desc">{{ d.document_count || 0 }} 文档 · {{ d.chunk_count || 0 }} 片段</div>
             </div>
           </div>
-          <div v-else class="res-empty">RAGFlow 未返回数据集</div>
+          <div v-else class="res-empty">
+            {{ ragflowError || (ragflowConfigured ? 'RAGFlow 未返回数据集' : 'RAGFlow 未配置（RAGFLOW_API_KEY）') }}
+          </div>
         </div>
       </n-tab-pane>
 
@@ -95,11 +107,21 @@
     <!-- 编辑弹窗 -->
     <n-modal v-model:show="modalShow" preset="card" :title="modalTitle" style="width:640px;max-width:92vw">
       <n-form label-placement="left" :label-width="80" size="small">
+        <n-form-item v-if="modalType === 'tools'" label="ID">
+          <n-input :value="modalForm.id" disabled />
+        </n-form-item>
         <n-form-item v-if="modalType !== 'skills' && !editing?.id" label="ID"><n-input v-model:value="modalForm.id" placeholder="唯一标识，如 my-skill" /></n-form-item>
-        <n-form-item v-if="modalType !== 'skills'" label="名称"><n-input v-model:value="modalForm.name" placeholder="显示名称" /></n-form-item>
+        <n-form-item v-if="modalType !== 'skills'" label="名称"><n-input v-model:value="modalForm.name" :disabled="modalType === 'tools'" placeholder="显示名称" /></n-form-item>
         <n-form-item v-if="modalType !== 'skills'" label="描述"><n-input v-model:value="modalForm.description" type="textarea" :rows="2" /></n-form-item>
+        <n-form-item v-if="modalType === 'tools'" label="需审批">
+          <n-switch v-model:value="modalForm.needsApproval" />
+          <template #extra>开启后，员工调用该工具将挂起等待人工审批（approve / reject），修改即时生效于引用该工具的员工</template>
+        </n-form-item>
         <n-form-item v-if="modalType === 'kbs'" label="RAGFlow Dataset">
           <n-select v-model:value="modalForm.ragflow_dataset_id" :options="ragflowOptions" clearable filterable placeholder="选择或留空使用全局 RAGFLOW_DATASET_IDS" />
+          <template v-if="ragflowError" #extra>
+            <span style="color:#d03050">{{ ragflowError }}</span>
+          </template>
         </n-form-item>
         <n-form-item v-if="modalType === 'skills'" label="技能文件">
           <n-upload
@@ -144,7 +166,7 @@
       <template #footer>
         <n-space>
           <n-button @click="viewSkillModalShow = false">关闭</n-button>
-          <n-button v-if="isAdmin" type="primary" @click="openModal('skills', viewSkill); viewSkillModalShow = false">编辑</n-button>
+          <n-button v-if="isAdmin && viewSkill?.is_custom" type="primary" @click="openModal('skills', viewSkill); viewSkillModalShow = false">编辑</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -168,6 +190,8 @@ const isAdmin = computed(() => auth.isAdmin)
 
 const catalog = ref({})
 const ragflowDatasets = ref([])
+const ragflowError = ref('')
+const ragflowConfigured = ref(true)
 const activeTab = ref('skills')
 const sopExpanded = reactive({})
 
@@ -178,7 +202,7 @@ const editing = ref(null)
 const viewSkill = ref(null)
 const skillContent = ref('')
 const skillFile = ref(null)
-const modalForm = reactive({ id: '', name: '', description: '', ragflow_dataset_id: '', content: '', config: '', title: '', keywords: '' })
+const modalForm = reactive({ id: '', name: '', description: '', ragflow_dataset_id: '', content: '', config: '', title: '', keywords: '', needsApproval: false })
 const ragflowOptions = computed(() => (ragflowDatasets.value || []).map(d => ({
   label: `${d.name}（${d.id}）`,
   value: d.id,
@@ -221,8 +245,12 @@ async function loadRagflowDatasets() {
   try {
     const { data } = await api.get('/admin/ragflow/datasets')
     ragflowDatasets.value = data.datasets || []
-  } catch {
+    ragflowConfigured.value = !!data.configured
+    ragflowError.value = data.error || ''
+  } catch (e) {
     ragflowDatasets.value = []
+    ragflowConfigured.value = false
+    ragflowError.value = e.response?.data?.error || e.message || '加载失败'
   }
 }
 
@@ -232,6 +260,7 @@ async function openModal(type, item = null) {
   editing.value = item
   modalTitle.value = (item ? '编辑' : '新建') + modalTitleMap[type]
   Object.keys(modalForm).forEach(k => modalForm[k] = '')
+  modalForm.needsApproval = false
   skillFile.value = null
   if (item) {
     modalForm.id = item.id || ''
@@ -239,6 +268,7 @@ async function openModal(type, item = null) {
     modalForm.description = item.description || ''
     modalForm.ragflow_dataset_id = item.ragflow_dataset_id || ''
     modalForm.content = item.content || ''
+    modalForm.needsApproval = !!item.needs_approval
     // 连接器列表不含 config，编辑时需单独拉详情回填
     if (type === 'connectors') { fillConnectorConfig(item); } else {
       modalForm.config = typeof item.config === 'string' ? item.config : JSON.stringify(item.config, null, 2)
@@ -301,8 +331,25 @@ async function saveItem() {
     return
   }
 
+  // 工具类型：编辑元信息 + 审批策略（后端同步重算受影响员工 interrupt_on）
+  if (type === 'tools') {
+    if (!isEdit) return
+    try {
+      const { data } = await api.put(`/admin/tools/${editing.value.id}`, {
+        description: modalForm.description,
+        needs_approval: modalForm.needsApproval ? ['approve', 'reject'] : null,
+      })
+      if (data.error) { message.error(data.error); return }
+      message.success('已更新')
+      modalShow.value = false
+      await loadCatalog()
+    } catch (e) { message.error('保存失败：' + (e.response?.data?.error || e.message)) }
+    return
+  }
+
   const base = type === 'kbs' ? `/admin/knowledge-bases` : `/admin/${type}`
   const payload = { ...modalForm }
+  delete payload.needsApproval // 仅工具编辑弹窗使用的本地状态
   if (type === 'connectors' && payload.config) { try { payload.config = JSON.parse(payload.config) } catch { message.error('配置 JSON 格式错误'); return } }
   try {
     if (isEdit) {
@@ -326,7 +373,7 @@ function delItem(type, id) {
         await api.delete(`${base}/${id}`)
         message.success('已删除')
         await loadCatalog()
-      } catch (e) { message.error('删除失败：' + e.message) }
+      } catch (e) { message.error('删除失败：' + (e.response?.data?.error || e.message)) }
     },
   })
 }
@@ -341,6 +388,7 @@ onMounted(() => {
 .res-page { padding: 24px; height: 100%; overflow-y: auto; }
 .res-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .res-title { font-size: 15px; font-weight: 600; color: #0f172a; flex: 1; }
+.res-hint { font-size: 12px; color: #94a3b8; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .res-card { padding: 14px; }
 .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }

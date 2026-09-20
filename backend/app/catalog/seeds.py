@@ -43,11 +43,30 @@ CONNECTOR_SEEDS = [
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
-CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu"],
-                    "playwright": ["net-ops"]}
+CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-intel"],
+                    "playwright": ["net-ops", "market-intel"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
-ONTOLOGY_TOOLS = ("ontology_find_entities", "ontology_query_relations")
+ONTOLOGY_TOOLS = (
+    "ontology_find_entities",
+    "ontology_query_relations",
+    "ontology_expand",
+    "ontology_find_paths",
+)
+
+# 场景化只读工具：按岗位独立授权，避免把客户/网络场景工具无差别铺给所有员工。
+ONTOLOGY_CUSTOMER_360_TOOL = "ontology_customer_360"
+ONTOLOGY_FAULT_IMPACT_TOOL = "ontology_fault_impact"
+ONTOLOGY_SCENARIO_ASSIGN = {
+    ONTOLOGY_CUSTOMER_360_TOOL: ("xiaoxiao",),
+    ONTOLOGY_FAULT_IMPACT_TOOL: ("net-ops",),
+}
+
+# 本体写回工具（对话中增改实体/建立关系）：独立授权，默认只给掌握业务事实
+# 录入职责的员工（xiaoxiao 客户事实 / hrbp 员工事实）；资源中心可开关，
+# 未授权员工编译时不注入该工具。
+ONTOLOGY_WRITE_TOOL = "ontology_write"
+ONTOLOGY_WRITE_EMPLOYEES = ("xiaoxiao", "hrbp")
 
 # 数据分析专家 xiaoshu 的 SQL 工具集（agent/analyst 模块定义，登记进 tools 表
 # 后资源中心可见可开关；老库由 backfill_analyst_sql_tools 幂等补缺）
@@ -62,6 +81,10 @@ ANALYST_SQL_TOOLS = {
                       "执行 SELECT 查询并返回结果（只读，禁止写操作）"),
     "sql_db_query_checker": ("SQL 语法检查",
                               "检查 SQL 语法是否正确（不执行）"),
+    "sql_db_profile": ("数据表画像",
+                       "分析前检查表行数、字段非空率、数值范围和分类 Top 值"),
+    "sql_db_quality_check": ("数据质量检查",
+                             "检查分析 SQL 或目标表的空结果、样本量、缺失和重复风险"),
 }
 
 # 数据分析专家 xiaoshu 的表格问答工具集（上传 Excel/CSV → DuckDB 注册 → SQL 查询）
@@ -73,9 +96,15 @@ ANALYST_FILE_TOOLS = {
 }
 
 
-def _tools_with_ontology(tools: list[str]) -> list[str]:
-    """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。"""
-    return tools + list(ONTOLOGY_TOOLS)
+def _tools_with_ontology(tools: list[str], write: bool = False) -> list[str]:
+    """种子员工统一追加本体查询工具，让新库播种时默认具备业务事实问答能力。
+
+    write=True 时再追加 ontology_write（对话写回），仅业务事实录入岗使用。
+    """
+    out = tools + list(ONTOLOGY_TOOLS)
+    if write:
+        out.append(ONTOLOGY_WRITE_TOOL)
+    return out
 
 
 # 算网运营 SOP 种子（seed_if_empty 全量播种 / backfill_netops_upgrade 老库补缺共用）
@@ -148,34 +177,49 @@ NETOPS_SOPS = [
 # 内置员工种子配置（seed_if_empty 全量播种 / backfill_employees_if_missing 幂等补缺共用）
 EMPLOYEE_SEEDS = {
     "xiaoshu": dict(
-        skills=["data-analysis", "frontend-design", "report-generation"],
+        skills=["data-analysis", "sql-root-cause-analysis",
+                "frontend-design", "report-generation"],
         tools=_tools_with_ontology([
             "sql_db_smart_search", "sql_db_table_schema",
             "sql_db_table_relationship", "sql_db_query", "sql_db_query_checker",
+            "sql_db_profile", "sql_db_quality_check",
             "file_table_list", "file_table_query",
             # 知识库作为数据源：用户选了知识库时用 kb_search 检索
             "kb_search",
         ]),
         kbs=[], sops=[]),
     "xiaoxiao": dict(
-        skills=["enterprise-sales"],
-        tools=_tools_with_ontology(["kb_search", "bocha_search"]),
+        skills=["enterprise-sales", "customer-360", "renewal-scan"],
+        tools=(_tools_with_ontology(
+            ["kb_search", "bocha_search", "create_ticket"], write=True)
+            + [ONTOLOGY_CUSTOMER_360_TOOL]),
         kbs=[]),
     "hrbp": dict(
         skills=["hr-assistant"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"]),
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"], write=True),
         kbs=[]),
     "biz-analyzer": dict(
         skills=["business-overview", "root-cause-analysis",
                 "decision-analysis", "market-intelligence"],
         tools=_tools_with_ontology(["run_python", "bocha_search", "get_current_time"]),
         kbs=[], sops=[], cons=[]),
+    "insurance-analyst": dict(
+        skills=["insurance-operations-analysis", "frontend-design"],
+        tools=_tools_with_ontology(["run_python", "get_current_time"]),
+        kbs=[], sops=[], cons=[]),
     "net-ops": dict(
         skills=["fault-impact-analysis", "ops-metrics-analysis",
                 "resource-capacity-analysis", "sop-execution"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "get_current_time"]),
+        tools=(_tools_with_ontology(
+            ["kb_search", "create_ticket", "get_current_time"])
+            + [ONTOLOGY_FAULT_IMPACT_TOOL]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
+    "market-intel": dict(
+        skills=["market-daily-brief", "competitor-deep-dive", "market-alert-triage"],
+        tools=_tools_with_ontology(["kb_search", "bocha_search", "get_current_time",
+                                    "publish_briefing"]),
+        kbs=[], sops=[], cons=["newsnow", "playwright"]),
     "unicom-presale": dict(
         skills=["unicom-presale-faq"],
         tools=["kb_search", "create_ticket"],
@@ -202,10 +246,14 @@ def seed_if_empty():
     # --- tools（本地工具注册表）---
     tools = [
         ("kb_search", "知识库检索", "基于 RAGFlow 向量检索知识库", "local", None),
-        ("create_ticket", "工单登记", "登记客服工单", "local", None),
+        ("create_ticket", "工单登记", "登记客服工单（需人工审批）", "local",
+         json.dumps(["approve", "reject"])),
         ("start_refund", "退款流程", "发起退款（需人工审批）", "local",
          json.dumps(["approve", "reject"])),
         ("bocha_search", "联网搜索", "联网搜索实时信息（博查）", "local", None),
+        ("publish_briefing", "发布市场简报",
+         "把生成的市场简报看板提交发布（需人工审批，批准后归档为 HTML 文件并外发）", "local",
+         json.dumps(["approve", "reject"])),
         ("get_my_id", "获取用户ID", "返回当前登录用户的 ID", "local", None),
         ("get_current_time", "获取当前时间", "获取当前真实日期时间（东八区）", "local", None),
         ("generate_solution_doc", "生成方案文档",
@@ -218,6 +266,17 @@ def seed_if_empty():
          "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）", "local", None),
         ("ontology_query_relations", "企业本体关系查询",
          "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）", "local", None),
+        ("ontology_expand", "企业本体关系展开",
+         "从实体出发做有限深度关系展开，返回节点、边和证据路径", "local", None),
+        ("ontology_find_paths", "企业本体路径查询",
+         "查找两个实体之间或实体到某类实体的有限业务路径", "local", None),
+        ("ontology_customer_360", "企业本体客户 360",
+         "一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径", "local", None),
+        ("ontology_fault_impact", "企业本体故障影响",
+         "一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路", "local", None),
+        ("ontology_write", "企业本体写回",
+         "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）",
+         "local", None),
         # 数据分析专家 SQL 工具集（与 ANALYST_SQL_TOOLS 常量保持一致）
         ("sql_db_smart_search", "智能表检索",
          "BM25 检索最相关的表并返回 schema（数据分析首选工具）", "local", None),
@@ -229,6 +288,10 @@ def seed_if_empty():
          "执行 SELECT 查询并返回结果（只读，禁止写操作）", "local", None),
         ("sql_db_query_checker", "SQL 语法检查",
          "检查 SQL 语法是否正确（不执行）", "local", None),
+        ("sql_db_profile", "数据表画像",
+         "分析前检查表行数、字段非空率、数值范围和分类 Top 值", "local", None),
+        ("sql_db_quality_check", "数据质量检查",
+         "检查分析 SQL 或目标表的空结果、样本量、缺失和重复风险", "local", None),
     ]
     for t in tools:
         cur.execute(
@@ -325,18 +388,84 @@ def backfill_ontology_tools():
                                    "按实体类型/关键词查询企业业务实体（组织/员工/客户/项目/合同/订单等）"),
         "ontology_query_relations": ("企业本体关系查询",
                                      "查询企业实体间的业务关系（谁负责/跟进/下单/包含等）"),
+        "ontology_expand": ("企业本体关系展开",
+                            "从实体出发做有限深度关系展开，返回节点、边和证据路径"),
+        "ontology_find_paths": ("企业本体路径查询",
+                                "查找两个实体之间或实体到某类实体的有限业务路径"),
+        ONTOLOGY_CUSTOMER_360_TOOL: (
+            "企业本体客户 360",
+            "一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径"),
+        ONTOLOGY_FAULT_IMPACT_TOOL: (
+            "企业本体故障影响",
+            "一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路"),
+        ONTOLOGY_WRITE_TOOL: ("企业本体写回",
+                              "对话中把用户确认的业务事实写回企业本体（新增/更新实体、建立关系，仅授权员工）"),
     }
-    for tid in ONTOLOGY_TOOLS:
+    for tid in (*ONTOLOGY_TOOLS, *ONTOLOGY_SCENARIO_ASSIGN, ONTOLOGY_WRITE_TOOL):
         name, desc = _ONTOLOGY_DESC[tid]
         cur.execute(
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
             "VALUES(?,?,?,?,?)",
             (tid, name, desc, "local", None))
-    for e in ("xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops", "unicom-presale"):
+    for e in ("xiaoshu", "xiaoxiao", "hrbp", "biz-analyzer", "net-ops",
+              "market-intel", "unicom-presale"):
         if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
                        (e,)).fetchone():
             for t in ONTOLOGY_TOOLS:
                 cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)", (e, t))
+    for tool_id, employees in ONTOLOGY_SCENARIO_ASSIGN.items():
+        for e in employees:
+            if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
+                           (e,)).fetchone():
+                cur.execute(
+                    "INSERT OR IGNORE INTO employee_tools VALUES(?,?)",
+                    (e, tool_id))
+    # 写回是独立授权：只给业务事实录入岗（xiaoxiao/hrbp），其余内置员工不补。
+    for e in ONTOLOGY_WRITE_EMPLOYEES:
+        if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
+                       (e,)).fetchone():
+            cur.execute(
+                "INSERT OR IGNORE INTO employee_tools VALUES(?,?)",
+                (e, ONTOLOGY_WRITE_TOOL))
+    con.commit()
+    con.close()
+
+
+def backfill_market_intel_v2():
+    """老库补齐 market-intel V2 能力：publish_briefing 发布审批工具（幂等）。
+
+    对新库由 seed_if_empty 写入；对已存在的库用 INSERT OR IGNORE 补缺。
+    needs_approval 使编译层自动派生 interrupt_on，简报发布前挂人工审批。
+    不覆盖管理员在资源中心的自定义改动。"""
+    con = _conn()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+        "VALUES(?,?,?,?,?)",
+        ("publish_briefing", "发布市场简报",
+         "把生成的市场简报看板提交发布（需人工审批，批准后归档为 HTML 文件并外发）",
+         "local", json.dumps(["approve", "reject"])))
+    if cur.execute("SELECT 1 FROM employees WHERE id='market-intel' AND deleted_at IS NULL").fetchone():
+        cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('market-intel','publish_briefing')")
+    con.commit()
+    con.close()
+
+
+def backfill_ticket_approval():
+    """老库补齐 create_ticket 的审批标记（幂等）。
+
+    轻量工单审批依赖 tools.needs_approval（运行时由 _build_interrupt_on 推导
+    interrupt_on）。历史种子把 create_ticket 的 needs_approval 记为 NULL，
+    导致全新库中 create_ticket 不被拦截、审批卡不出现，与文档行为不符。
+    这里仅对未配置审批策略的记录补默认值 ["approve","reject"]，
+    不覆盖管理员在资源中心自定义的策略。
+    """
+    con = _conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE tools SET needs_approval=? "
+        "WHERE id='create_ticket' AND (needs_approval IS NULL OR needs_approval='')",
+        (json.dumps(["approve", "reject"]),))
     con.commit()
     con.close()
 
@@ -375,7 +504,7 @@ def backfill_analyst_sql_tools():
 
 
 def backfill_xiaoshu_skills():
-    """幂等补齐 xiaoshu 新增技能绑定（frontend-design + report-generation）。
+    """幂等补齐 xiaoshu 新增技能绑定。
 
     设计动机：report-generation 报告生成技能是 v0.12.0 新增，frontend-design
     此前虽已在 skills/ 目录但未绑定 xiaoshu。backfill_employees_if_missing
@@ -389,8 +518,8 @@ def backfill_xiaoshu_skills():
     ).fetchone():
         con.close()
         return
-    # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这两行
-    for s in ("frontend-design", "report-generation"):
+    # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这些行
+    for s in ("sql-root-cause-analysis", "frontend-design", "report-generation"):
         cur.execute("INSERT OR IGNORE INTO employee_skills VALUES('xiaoshu', ?)", (s,))
     con.commit()
     con.close()
@@ -679,8 +808,9 @@ def backfill_ragflow_knowledge_bases():
 # 内置员工知识库指派：按 RAGFlow 数据集名称绑定（dataset id 随环境变化，
 # 名称是稳定约定；只在数据集存在时补绑，不覆盖管理员手动增删）。
 EMPLOYEE_KB_ASSIGN = {
-    "xiaoxiao": ["自研产品Wiki", "产品知识库", "客户档案"],
+    "xiaoxiao": ["浙江联通自研产品Wiki", "产品知识库", "客户档案"],
     "unicom-presale": ["浙江联通业务知识库"],
+    "net-ops": ["算网运营知识库"],
 }
 
 
@@ -767,7 +897,8 @@ def seed_admin_if_empty():
 
     if get_user_by_username(username):
         return
-    uid = create_user(username, hash_password(password), role="admin", user_id="u_admin")
+    uid = create_user(username, hash_password(password), role="admin", user_id="u_admin",
+                      is_emergency_admin=True)
     print(f"[seed] 已创建初始管理员：{username} / {password}（首次登录须修改密码）")
     if password == "admin123":
         set_must_change_password(uid, True)

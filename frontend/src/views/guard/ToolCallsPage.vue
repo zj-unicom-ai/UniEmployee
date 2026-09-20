@@ -1,22 +1,51 @@
-<!-- 安全护栏 · 工具调用护栏：仅管理员可调用的工具白名单（逗号分隔），
-     普通用户的员工调用白名单内工具会被运行时拒绝并记录。 -->
+<!-- 安全护栏 · 工具调用护栏：统一配置工具级 allow/deny。 -->
 <template>
   <div class="tools-page">
     <div class="intro-card">
-      <div class="intro-title">工具白名单机制</div>
+      <div class="intro-title">工具能力策略</div>
       <div class="intro-sub">
-        列在下方白名单中的工具，只有管理员账号的数字员工可以真实执行；
-        普通用户的员工即使声明了这些工具，运行时调用也会被安全护栏拒绝（返回权限错误并记录日志），真实逻辑不执行。
+        普通用户的员工只有在员工配置和本页策略同时允许时才能执行工具；deny 优先于 allow。
+        管理员不受此策略限制，所有拒绝都会记录审计护栏日志。
       </div>
     </div>
 
     <div class="editor-card">
-      <div class="editor-title">仅管理员可调用的工具</div>
+      <div class="editor-title">普通用户全局 allow/deny</div>
+      <n-input
+        v-model:value="toolAllowlist" type="textarea" :rows="3"
+        placeholder="允许列表（可选，逗号分隔；支持 *，留空表示不额外限制）"
+      />
+      <n-input
+        v-model:value="toolDenylist" type="textarea" :rows="3"
+        placeholder="拒绝列表（逗号分隔；deny 优先，支持 *）"
+        style="margin-top: 10px"
+      />
+      <div class="editor-hint">闭包工具（如 kb_search、ontology_*）也遵循此策略。</div>
+    </div>
+
+    <div class="editor-card">
+      <div class="editor-title">MCP 工具策略</div>
+      <n-space align="center">
+        <n-switch
+          :value="mcpDefaultDeny === '1'"
+          @update:value="(v) => { mcpDefaultDeny = v ? '1' : '0' }"
+        />
+        <span>未绑定连接器来源的 MCP 工具默认拒绝；已绑定连接器自动放行</span>
+      </n-space>
+      <n-input
+        v-model:value="mcpAllowlist" type="textarea" :rows="3"
+        placeholder="直接注入 MCP 的允许列表（逗号分隔；已绑定连接器无需填写）"
+        style="margin-top: 10px"
+      />
+    </div>
+
+    <div class="editor-card">
+      <div class="editor-title">仅管理员可调用的工具（兼容旧策略）</div>
       <n-input
         v-model:value="adminOnlyTools" type="textarea" :rows="5"
         placeholder="逗号分隔的工具名，如：ontology_save_entity, ontology_link_entities"
       />
-      <div class="editor-hint">从下表点击工具名可快速加入白名单；留空表示不限制任何工具。</div>
+      <div class="editor-hint">从下表点击工具名可快速加入；这里的 deny 规则优先于普通用户 allow。</div>
       <div class="editor-actions">
         <n-button type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">
           保存{{ dirty ? '（有未保存修改）' : '' }}
@@ -64,11 +93,24 @@ defineOptions({ name: 'ToolCallsPage' })
 const message = useMessage()
 const adminOnlyTools = ref('')
 const savedValue = ref('')
+const toolAllowlist = ref('')
+const savedToolAllowlist = ref('')
+const toolDenylist = ref('')
+const savedToolDenylist = ref('')
+const mcpDefaultDeny = ref('1')
+const savedMcpDefaultDeny = ref('1')
+const mcpAllowlist = ref('')
+const savedMcpAllowlist = ref('')
 const tools = ref([])
 const toolLogs = ref([])
 const saving = ref(false)
 
-const dirty = computed(() => adminOnlyTools.value.trim() !== savedValue.value.trim())
+const dirty = computed(() =>
+  adminOnlyTools.value.trim() !== savedValue.value.trim() ||
+  toolAllowlist.value.trim() !== savedToolAllowlist.value.trim() ||
+  toolDenylist.value.trim() !== savedToolDenylist.value.trim() ||
+  mcpDefaultDeny.value !== savedMcpDefaultDeny.value ||
+  mcpAllowlist.value.trim() !== savedMcpAllowlist.value.trim())
 
 function listSet() {
   return new Set(adminOnlyTools.value.split(',').map(x => x.trim()).filter(Boolean))
@@ -90,6 +132,14 @@ async function load() {
   ])
   savedValue.value = s.data.admin_only_tools || ''
   adminOnlyTools.value = savedValue.value
+  savedToolAllowlist.value = s.data.tool_allowlist || ''
+  toolAllowlist.value = savedToolAllowlist.value
+  savedToolDenylist.value = s.data.tool_denylist || ''
+  toolDenylist.value = savedToolDenylist.value
+  savedMcpDefaultDeny.value = s.data.mcp_default_deny ?? '1'
+  mcpDefaultDeny.value = savedMcpDefaultDeny.value
+  savedMcpAllowlist.value = s.data.mcp_allowlist || ''
+  mcpAllowlist.value = savedMcpAllowlist.value
   tools.value = c.data.tools || []
   toolLogs.value = l.data.logs || []
 }
@@ -99,10 +149,22 @@ async function save() {
   try {
     const { data } = await api.put('/admin/guard/settings', {
       admin_only_tools: adminOnlyTools.value.trim(),
+      tool_allowlist: toolAllowlist.value.trim(),
+      tool_denylist: toolDenylist.value.trim(),
+      mcp_default_deny: mcpDefaultDeny.value,
+      mcp_allowlist: mcpAllowlist.value.trim(),
     })
     if (data.error) { message.error(data.error); return }
     savedValue.value = data.settings.admin_only_tools || ''
     adminOnlyTools.value = savedValue.value
+    savedToolAllowlist.value = data.settings.tool_allowlist || ''
+    toolAllowlist.value = savedToolAllowlist.value
+    savedToolDenylist.value = data.settings.tool_denylist || ''
+    toolDenylist.value = savedToolDenylist.value
+    savedMcpDefaultDeny.value = data.settings.mcp_default_deny ?? '1'
+    mcpDefaultDeny.value = savedMcpDefaultDeny.value
+    savedMcpAllowlist.value = data.settings.mcp_allowlist || ''
+    mcpAllowlist.value = savedMcpAllowlist.value
     message.success('已保存，各用户下次对话生效')
   } catch (e) {
     message.error('保存失败：' + e.message)

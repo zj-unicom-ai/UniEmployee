@@ -15,6 +15,7 @@ from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend, LocalShellBackend, FilesystemBackend
+from deepagents.middleware import FilesystemMiddleware
 from deepagents.backends.utils import create_file_data
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
@@ -25,6 +26,7 @@ from app.tools.kb import create_ticket
 from app.tools.data_tools import get_my_id
 from app.tools.search import bocha_search
 from app.tools.time_tools import get_current_time
+from app.tools.publish_tools import publish_briefing
 from app.tools.wiki_tools import query_product_wiki, list_product_catalog
 from app.workflows.refund import make_start_refund
 # 数据分析员工 SQL 工具集（从 Aix-DB 适配搬迁）
@@ -46,6 +48,8 @@ ALL_LOCAL_TOOLS = {
     "bocha_search": bocha_search,
     "get_my_id": get_my_id,
     "get_current_time": get_current_time,
+    # 市场简报发布（需人工审批，interrupt_on 由 tools.needs_approval 自动派生）
+    "publish_briefing": publish_briefing,
     # 兼容旧员工配置；实现已改为 RAGFlow 检索，不再读取本地 product-wiki。
     "query_product_wiki": query_product_wiki,
     "list_product_catalog": list_product_catalog,
@@ -55,6 +59,8 @@ ALL_LOCAL_TOOLS = {
     "sql_db_table_relationship": ANALYST_SQL_TOOLS[2],
     "sql_db_query": ANALYST_SQL_TOOLS[3],
     "sql_db_query_checker": ANALYST_SQL_TOOLS[4],
+    "sql_db_profile": ANALYST_SQL_TOOLS[5],
+    "sql_db_quality_check": ANALYST_SQL_TOOLS[6],
     # 数据分析员工表格问答工具集（上传 Excel/CSV → DuckDB）
     "file_table_list": ANALYST_FILE_TOOLS[0],
     "file_table_query": ANALYST_FILE_TOOLS[1],
@@ -65,6 +71,10 @@ ALL_LOCAL_TOOLS = {
 # 所有数字员工默认具备的通用工具（不依赖其 tools 字段声明）。
 # 编译期无条件注入，解决「对话时不知道当前时间」的普遍问题。
 GLOBAL_TOOL_NAMES = ["get_current_time"]
+
+FS_TOOLS_READONLY = ["ls", "read_file", "glob", "grep"]
+FS_TOOLS_ALL = ["ls", "read_file", "write_file", "edit_file", "delete",
+                "glob", "grep", "execute"]
 
 def make_kb_search(spec: EmployeeSpec, user_id: str | None):
     """按员工 / 用户视角动态生成 kb_search 工具（仅 RAGFlow 向量检索）。
@@ -178,12 +188,14 @@ def _build_sop_routing(sops: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_ontology_routing() -> str:
-    """企业业务本体使用指引：所有员工都具备 ontology_* 查询工具。
+def _build_ontology_routing(write_enabled: bool = False,
+                            customer_360_enabled: bool = False,
+                            fault_impact_enabled: bool = False) -> str:
+    """企业业务本体使用指引：员工具备 ontology_* 工具时拼进 system_prompt。
 
     本体的价值是让数字员工基于真实业务关系作答（谁负责哪个项目、
-    哪个客户下过哪些订单），而不是靠模型猜测。拼进 system_prompt，
-    确保模型在用户问业务事实时先查本体。
+    哪个客户下过哪些订单），而不是靠模型猜测。
+    write_enabled=True 时额外挂载写回规程（仅授权 ontology_write 的员工）。
     """
     lines = [
         "",
@@ -192,10 +204,31 @@ def _build_ontology_routing() -> str:
         "回答涉及具体业务事实时，必须先查询本体再作答，禁止编造或凭记忆猜测：",
         "- 查实体：ontology_find_entities（实体类型：org/department/position/employee/customer/product/project/contract/order）",
         "- 查关系：ontology_query_relations（如谁负责某项目、某客户下过哪些订单、某订单包含哪些产品）",
+        "- 展开周边：ontology_expand（实体周边多跳节点/边，适合快速建立上下文）",
+        "- 查找路径：ontology_find_paths（两个实体间或实体到某类实体的证据路径）",
         "查询链路：先 ontology_find_entities 拿到实体 id，再 ontology_query_relations 沿关系展开。",
         "例如用户问「李晓芳负责哪些项目」：先查员工李晓芳，再用她的 id 查询 manage 关系。",
-        "",
     ]
+    if customer_360_enabled:
+        lines += [
+            "- 客户全景：ontology_customer_360（一次汇总客户跟进人、联系人、项目、合同、订单、产品与关系路径）",
+        ]
+    if fault_impact_enabled:
+        lines += [
+            "- 故障影响：ontology_fault_impact（一次汇总基站覆盖片区、受影响客户、VIP、维护人和回传链路）",
+        ]
+    if write_enabled:
+        lines += [
+            "",
+            "### 业务事实写回（ontology_write，谨慎使用）",
+            "用户明确要求「记一下/记录/更新/新增/把…录到本体/建立…关系」时，把确认无误的事实写回本体——",
+            "本体是全企业共享的结构化事实，其他数字员工都会读到，写入纪律：",
+            "1. 只写用户亲口陈述、语义明确的事实；禁止推测补全，信息不全先追问确认后再写；",
+            "2. 写前先 ontology_find_entities 查重：已存在的实体用 update_entity（属性合并），不要重复新建；",
+            "3. 关系端点优先用名称+类型让工具自动解析，解析歧义时按返回的候选列表向用户确认；",
+            "4. 写回成功后明确告知用户「已记录」及具体内容；工具返回 ok=false 时不得谎称成功。",
+        ]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -239,7 +272,8 @@ def _build_user_context(user_id: str | None) -> str:
     return "\n".join(lines)
 
 
-def _make_denied_tool(orig_tool):
+def _make_denied_tool(orig_tool, reason: str = "工具能力策略拒绝",
+                      user_id: str = "", employee_id: str = ""):
     """生成与原工具同名同描述的「拒绝执行」替身（安全护栏）。
 
     场景：普通用户的员工声明了仅管理员可用的工具。替身保留原工具的
@@ -253,8 +287,12 @@ def _make_denied_tool(orig_tool):
 
     @tool(name, description=desc, args_schema=getattr(orig_tool, "args_schema", None))
     def _denied(**kwargs):
+        from app import guard
+        guard.log("tool_denied", f"工具 {name} 被能力策略拒绝",
+                  user_id=user_id, employee_id=employee_id,
+                  extra={"tool": name, "reason": reason})
         raise PermissionError(
-            f"工具 {name} 仅管理员授权账号可调用（安全护栏拦截）")
+            f"工具 {name} 当前不可用：{reason}（安全护栏拦截）")
     return _denied
 
 
@@ -271,8 +309,8 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
          目前含 get_current_time，让所有员工都能回答时间类问题；
       5. MCP 连接器工具（spec.mcp_servers 非空时拉起 stdio/sse 客户端）。
 
-    安全护栏：若调用方（user_id 对应角色）非 admin，白名单内的工具
-    被包装为「拒绝执行」版本（越权调用直接返回权限错误，不执行真实逻辑）。
+    安全护栏：所有本地、闭包和 MCP 工具都经过统一 capability policy；
+    被拒绝的工具保留 schema 但不执行真实逻辑，并写入 tool_denied 日志。
     """
     from app import guard as _guard
     from app.catalog import users as _users
@@ -281,35 +319,64 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
         _u = _users.get_user(user_id)
         _role = (_u or {}).get("role") or "user"
 
+    def _guard_tool(tool_obj, source: str = "local",
+                    connector_granted: bool = False):
+        if _guard.tool_allowed(
+                tool_obj.name, _role, source=source,
+                connector_granted=connector_granted):
+            return tool_obj
+        return _make_denied_tool(
+            tool_obj,
+            reason=("MCP 工具未进入普通用户允许列表"
+                    if source == "mcp" else "未通过工具 allow/deny 策略"),
+            user_id=user_id or "",
+            employee_id=spec.id,
+        )
+
     tools = []
     for name in spec.tools:
         if name == "kb_search":
             # 按员工 / 用户视角动态生成检索工具（运行时读 catalog，不固化快照）
-            tools.append(make_kb_search(spec, user_id))
+            tools.append(_guard_tool(make_kb_search(spec, user_id), "closure"))
         elif name == "start_refund":
             # 退款工具需注入运行时 checkpointer（支持后续 Point2 内层图 interrupt）
-            tools.append(make_start_refund(checkpointer))
+            tools.append(_guard_tool(make_start_refund(checkpointer), "closure"))
         elif name in ALL_LOCAL_TOOLS:
             t = ALL_LOCAL_TOOLS[name]
-            if _role != "admin" and not _guard.tool_allowed(name, _role):
-                tools.append(_make_denied_tool(t))
-            else:
-                tools.append(t)
+            tools.append(_guard_tool(t, "local"))
 
     # --- 通用工具：即使员工 tools=[] 也自动具备（去重避免重复）---
     have = {t.name for t in tools}
     for g in GLOBAL_TOOL_NAMES:
         if g in ALL_LOCAL_TOOLS and g not in have:
-            tools.append(ALL_LOCAL_TOOLS[g])
+            tools.append(_guard_tool(ALL_LOCAL_TOOLS[g], "local"))
 
     # --- 企业业务本体闭包工具：spec.tools 声明了 ontology_* 才注入（按用户 tenant 隔离）。
-    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一即注入两个，
-    #     配合使用（find 拿 id → query_relations 展开）。资源中心可对员工开关。---
+    #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一通用查询工具即注入
+    #     四个只读工具（find 拿 id → query / expand / find_paths 展开）。
+    #     两个场景工具独立授权，避免把所有员工的工具集都铺满。
+    #     ontology_write（企业本体写回）是独立授权：只有 spec.tools 显式声明才注入，
+    #     未授权员工的工具集里不存在该工具（资源中心开关即授权）；授权写回时连带
+    #     保证只读工具在场（写之前需要 find 定位实体）。---
     from app.tools.ontology_tools import make_ontology_tools
-    if any(n in ("ontology_find_entities", "ontology_query_relations") for n in spec.tools):
-        for t in make_ontology_tools(user_id):
+    onto_reads = any(n in (
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+    )
+                     for n in spec.tools)
+    onto_write = "ontology_write" in spec.tools
+    onto_customer_360 = "ontology_customer_360" in spec.tools
+    onto_fault_impact = "ontology_fault_impact" in spec.tools
+    if onto_reads or onto_write or onto_customer_360 or onto_fault_impact:
+        for t in make_ontology_tools(user_id,
+                                     include_reads=(
+                                         onto_reads or onto_write
+                                         or onto_customer_360 or onto_fault_impact),
+                                     include_write=onto_write,
+                                     include_customer_360=onto_customer_360,
+                                     include_fault_impact=onto_fault_impact):
             if t.name not in have:
-                tools.append(t)
+                tools.append(_guard_tool(t, "closure"))
 
     # --- MCP 连接器工具 ---
     mcp_client = None
@@ -335,8 +402,26 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             servers[name] = cfg
         try:
             mcp_client = MultiServerMCPClient(servers)
-            mcp_tools = await mcp_client.get_tools()
-            tools += mcp_tools
+            # 按 server 获取工具，保留 connector_id 归属；不能把多连接器
+            # 汇总后用最后一个 name 判断，否则会把未绑定连接器的工具误放行。
+            server_tools = []
+            if len(servers) == 1:
+                server_name = next(iter(servers))
+                try:
+                    mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                except TypeError:
+                    # 兼容旧版/测试替身客户端不支持 server_name 参数。
+                    mcp_tools = await mcp_client.get_tools()
+                server_tools.extend((server_name, t) for t in mcp_tools)
+            else:
+                for server_name in servers:
+                    mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                    server_tools.extend((server_name, t) for t in mcp_tools)
+            tools += [
+                _guard_tool(
+                    t, "mcp", connector_granted=(server_name in spec.connectors))
+                for server_name, t in server_tools
+            ]
         except Exception as e:
             # MCP 连接器失败不应拖垮服务：先降级，仅保留本地工具。
             # 后续由 MCP Manager 补齐重试、健康检查与进程回收。
@@ -369,7 +454,8 @@ def _init_model(model: str):
     return model
 
 
-async def _assemble_subagents(spec: EmployeeSpec, checkpointer) -> list[dict]:
+async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
+                              user_id: str | None = None) -> list[dict]:
     """按员工配置装配子代理列表，传给 create_deep_agent(subagents=...)。
 
     子代理的 tools 一旦指定就完全覆盖主 agent 的工具继承，因此这里为每个
@@ -385,9 +471,10 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer) -> list[dict]:
                 role="",
                 model=spec.model,
                 persona="",
-                tools=cfg.get("tools", []),
+            tools=cfg.get("tools", []),
             ),
             checkpointer,
+            user_id=user_id,
         )
         subagents.append({
             "name": cfg["name"],
@@ -396,6 +483,10 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer) -> list[dict]:
             "tools": tools,
             "model": _init_model(cfg.get("model") or spec.model),
             "permissions": cfg.get("permissions", []),
+            "middleware": [FilesystemMiddleware(
+                backend=backend,
+                tools=_fs_tools_for_subagent(cfg),
+            )] if backend is not None else [],
         })
     return subagents
 
@@ -445,6 +536,37 @@ def _local_shell_backend() -> LocalShellBackend:
     )
 
 
+def _production_mode() -> bool:
+    return (os.environ.get("APP_ENV", "").lower() in ("prod", "production")
+            or os.environ.get("REQUIRE_SANDBOX", "") == "1")
+
+
+def _fs_tools_for_user(user_id: str | None) -> list[str] | str:
+    """返回主 agent 可见的 deepagents 内置文件工具白名单。"""
+    if user_id:
+        try:
+            from app.catalog import users as _users
+            user = _users.get_user(user_id) or {}
+            if user.get("role") == "admin":
+                return FS_TOOLS_ALL
+        except Exception:
+            pass
+        return FS_TOOLS_READONLY
+    return FS_TOOLS_ALL
+
+
+def _fs_tools_for_subagent(cfg: dict) -> list[str]:
+    configured = cfg.get("fs_tools")
+    if configured == "all":
+        return FS_TOOLS_ALL
+    if isinstance(configured, list):
+        allowed = [x for x in configured if x in FS_TOOLS_ALL]
+        if "read_file" not in allowed:
+            allowed.insert(0, "read_file")
+        return allowed
+    return FS_TOOLS_READONLY
+
+
 def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     """构造 CompositeBackend：默认后端 + /data、/skills、/memories、/sops 路由。"""
     if spec.backend == "local_shell":
@@ -454,6 +576,8 @@ def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
         # 开关未置 1（测试/开发/未部署 server）回退宿主机 LocalShellBackend，零行为变化。
         if sandbox_enabled():
             default_backend = RoutingSandboxBackend()
+        elif _production_mode():
+            raise RuntimeError("sandbox 后端未启用，生产模式禁止回退宿主机 LocalShellBackend")
         else:
             default_backend = _local_shell_backend()
     else:
@@ -505,20 +629,28 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     # --- 工具：本地注册表按名挑选 + 知识库闭包 + 通用工具 + MCP 连接器 ---
     tools, mcp_client = await _assemble_tools(spec, checkpointer, user_id=user_id)
     tool_names = [t.name for t in tools]
-    subagents = await _assemble_subagents(spec, checkpointer)
+    backend = build_backends(spec, store, user_id)
+    subagents = await _assemble_subagents(spec, checkpointer, backend=backend,
+                                          user_id=user_id)
 
     system_prompt = spec.persona
     system_prompt += _build_user_context(user_id)
     system_prompt += _build_skill_routing(skill_summaries)
     system_prompt += _build_sop_routing(sop_summaries)
-    if any(n in ("ontology_find_entities", "ontology_query_relations") for n in spec.tools):
-        system_prompt += _build_ontology_routing()
+    if any(n in (
+        "ontology_find_entities", "ontology_query_relations", "ontology_expand",
+        "ontology_find_paths", "ontology_customer_360", "ontology_fault_impact",
+        "ontology_write",
+    )
+           for n in spec.tools):
+        system_prompt += _build_ontology_routing(
+            write_enabled="ontology_write" in spec.tools,
+            customer_360_enabled="ontology_customer_360" in spec.tools,
+            fault_impact_enabled="ontology_fault_impact" in spec.tools)
     system_prompt += _build_subagent_routing(subagents)
     if spec.subagent_policy:
         system_prompt += "\n" + spec.subagent_policy.strip()
     sop_detail = spec.sop_text.strip() if spec.sop_text else "（无刚性 SOP，按技能规程执行）"
-
-    backend = build_backends(spec, store, user_id)
 
     agent = create_deep_agent(
         model=_init_model(spec.model),
@@ -527,6 +659,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         skills=["/skills/"],
         memory=["/memories/AGENTS.md"],
         subagents=subagents or None,
+        middleware=[FilesystemMiddleware(backend=backend,
+                                         tools=_fs_tools_for_user(user_id))],
         backend=backend,
         interrupt_on=spec.interrupt_on,
         checkpointer=checkpointer,

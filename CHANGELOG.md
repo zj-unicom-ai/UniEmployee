@@ -1,5 +1,179 @@
 # Changelog
 
+## 0.19.1 (2026-09-20)
+
+### 修复：资源中心模块全面梳理（#55–#61）
+
+- **工具编辑死接口修复 + 审批策略即时生效**（#55）：`PUT /admin/tools/{id}` 此前前端无入口，且改 `needs_approval` 后员工的 `interrupt_on` 不同步（重编译仍读存量旧值，审批开关实际不生效）。现 `update_tool` 同步重算受影响员工并落库、按受影响列表失效编译缓存；前端工具卡片补编辑弹窗（ID/名称只读、描述 + 需审批开关），并明示"工具由代码注册，此处仅维护元信息与审批策略"
+- **技能"内置"标签误标**（#56）：原判断 `v-if="it.dir"` 恒为真导致所有技能（含上传的自定义技能）都显示"内置"标签；改用后端 `is_custom` 字段区分内置/自定义
+- **普通用户权限收窄**（#57）：技能"查看内容"按钮仅 admin 可见（原普通用户点击调管理接口必 403，误导为技能损坏）；`/api/catalog` 响应剥离 SOP 全文 `content`（内部流程文档仅管理员可见，id/名称/描述目录字段保留，管理员视角不变）
+- **删除技能磁盘清理**（#58）：删除自定义技能同步清理 `skills-custom/{id}/` 目录（原仅软删 DB、目录永久残留，叠加同 ID 再上传的复活机制会产生幽灵内容）；带路径穿越防护，内置技能删除保护不变
+- **前端反馈优化**（#59）：RAGFlow 数据集空态区分"接口报错 / 未配置 API KEY / 无数据集"三种情况并在编辑弹窗透出具体错误（原先一律显示"未返回数据集"）；技能查看弹窗"编辑"按钮仅对自定义技能显示；删除失败提示改读后端 `error` 字段
+- **API 一致性**（#60）：`create_connector` 返回 `{"id":...}` 与其他 create 端点统一（原 `{"cid":...}`，无消费方）；`update_kb` 未传 `ragflow_dataset_id` 时保留原值（部分更新语义与 `update_employee` 对齐）；catalog 工具列表补透出 `source` 字段
+- **自动 id 同秒覆盖修复**（#61）：`emp_/kb_/sop_/conn_` 四处自动生成 id 由纯秒级时间戳改为追加 `uuid.uuid4().hex[:6]` 后缀（与 orgs/users 既有模式一致），同秒连续创建不再因 `ON CONFLICT DO UPDATE` 静默互相覆盖
+
+### 验证
+
+- 新增回归测试：工具审批策略联动（interrupt_on 开关即时重算 / 未关联与软删员工隔离）、公开目录脱敏（SOP 全文剥离 + 目录保留）、技能删除磁盘清理 + 内置保护、自动 id 唯一性（员工连续创建 + SOP 路由抽查）
+- 各 PR 对应测试子集全绿（41 + 29 + 30 项）；`npx vite build` 通过；环境性失败（登录/token/浏览器类，依赖运行中服务）均与 main 基线对比确认非本次引入
+
+## 0.19.0 (2026-09-20)
+
+### 平台护栏升级：analyst 全局配置管理收紧 + 工具能力策略统一 allow/deny
+
+- **analyst 全局配置管理权限收紧到 admin**（#50）：术语 / SQL 示例 / 同义词 / KB 绑定 / 连接器绑定等全局配置操作一律 `Depends(auth.require_admin)` + 写 catalog 审计日志；`list_employee_connectors` 默认 `include_config=False` 不下发 MCP 密钥；前端 `analyst/kbs` 与 `analyst/connectors` 路由加 `requiresAdmin` 守卫，操作按钮按角色隐藏，连接器配置脱敏展示
+- **工具能力策略升级为统一 allow/deny**（#51）：工具护栏从「单一白名单」升级为 `tool_allowlist` / `tool_denylist` / `mcp_default_deny` / `mcp_allowlist` 四字段（fnmatch 通配），MCP 默认拒绝、按 server 分组授权；本地工具 / 闭包工具 / MCP 工具统一过 `_guard_tool`；子代理编译传 `user_id` 避免绕过护栏；热改护栏配置触发全员工具缓存失效；前端 ToolCallsPage 新增 allow/deny/MCP 配置 UI
+
+### 修复：报告新窗口会话隔离 + SSE 断流兜底
+
+- **报告新窗口改受控壳页面**（#52）：此前 ReportViewer.vue 用 Blob URL 打开报告，新窗口脚本能通过 `window.opener` 回连主站 cookie/token；改走 `/report-viewer.html` 受控壳页面，主站 token / cookie 不会自动带到该页，壳页面读 localStorage 中报告 HTML 后注入 `<iframe sandbox="allow-scripts">`（不放 `allow-same-origin` 防 DOM 操作主站）
+- **SSE 断流兜底 + 启动遗留 Trace 收口**（#53）：客户端断开 SSE 时服务端 `asyncio` 取消 `_stream_run` 生成器，此前 Trace 仍停留在 `running`、已流给浏览器的 token 不进 checkpoint，刷新后整段结果凭空消失。新增 `except asyncio.CancelledError` 分支：先 flush pending Trace + 调 `_persist_partial_response`（`asyncio.shield` 防一起被取消）把已流出 `bot_text` 追加为 AIMessage 写入 checkpoint + `finish_run(status='cancelled')`；启动时 `traces.finish_stale_running()` 把上次进程遗留的 `status='running'` Trace 收口为 `abandoned`，避免运维排障误判
+
+### 验证
+
+- 新增 `tests/test_analyst_permissions.py`（admin + 普通用户越权场景）、`tests/test_streaming_errors.py::test_cancelled_stream_marks_trace_and_persists_partial_answer`；扩展 `tests/test_guard.py` / `test_builtin_tools_guard.py` / `test_mcp_connectors.py` 覆盖 allow/deny 通配、MCP 默认拒绝 + 按 server 授权、子代理编译注入 user_id 场景
+- 各 PR 对应测试子集全绿（197 + 29 + 26 项）；`npx vite build` 通过；服务端路由注册冒烟通过
+
+## 0.18.0 (2026-09-19)
+
+### 企业身份与租户安全
+
+- **OIDC 单点登录**：新增通用授权码登录，覆盖 OpenID Connect Discovery、JWK 签名、issuer/audience/nonce/state 校验与 HTTP-only 平台会话。
+- **外部身份绑定**：以不可变 `issuer + sub` 匹配用户，绝不按邮箱合并；IdP 用户组只能通过本地受控映射授权，原始角色声明不能直接提权。
+- **紧急本地访问**：启用 SSO 后，只有种子紧急管理员保留本地密码登录能力。
+- **租户授权上下文**：请求统一产出包含用户、租户、组织树和权限的 `AuthContext`，并注入 Agent 运行时配置。
+- **运行数据租户隔离**：会话、附件入口、Trace 和审批持久化并校验 `tenant_id`；单企业存量数据会安全迁移到固定企业租户。
+- **发布可靠性**：后端测试不再依赖预构建前端静态目录，CI 后端/前端任务可独立运行。
+
+### 验证
+
+- 新增 OIDC 身份绑定、SSO 会话、授权上下文与跨租户隔离测试。
+- 后端测试集与前端生产构建均已在 CI 通过。
+
+## 0.17.0 (2026-09-17)
+
+### 重磅：小数升级数据分析师方法论 + 新员工小保析（保险经营分析）
+
+- **分析师六步工作流**：小数从「数据库问数助手」升级为数据分析师——理解业务问题 → 获取数据 → 验证数据 → 分析 → 归因 → 生成结论 → 输出报告；persona 与 `data-analysis` 技能规程同步重写，输出强制区分事实/推断/建议，重要结论必须说明数据质量限制
+- **数据验证工具落地**：新增 `sql_db_profile`（数据表画像：行数/字段非空率/数值范围/均值/分类 Top 值）与 `sql_db_quality_check`（SQL 或目标表质量检查：空结果/样本量/缺失/重复风险），方言感知的保守标识符引用，仅走表名白名单内对象
+- **归因技能**：新增 `sql-root-cause-analysis` 技能（不依赖 run_python 的 SQL 归因规程：确认异常 → 维度下钻 → 贡献度拆解），老库由 `backfill_xiaoshu_skills` 幂等补绑
+- **新员工小保析（insurance-analyst）**：第八个内置员工，保险经营分析数字员工（保费收入/赔付率/续保率/渠道贡献/机构异常识别），配 `insurance-operations-analysis` 技能；`scripts/generate_insurance_demo_data.py` 生成可复现演示数据集（workspace/data 不入库，脚本入库）
+- **前端修复**：报告新窗口打开改 Blob URL（修复 `noopener` 返回 null 导致打开失败）；报告 HTML 提取增加可渲染性校验（避免误提取短片段）；AnalystView 去除与 ChatMessage 重复的报告渲染；ChatView 打开历史会话时加载对应员工信息
+
+### 测试
+
+- 新增 8 个用例：`sql_db_profile` 画像输出与空表名拒绝、`sql_db_quality_check` 通过/小样本告警/空结果拦截/表名直查，小保析种子能力校验；内置员工数断言更新为 8
+- 相关用例全绿；vite build 通过（全量 pytest 失败清单与 main 基线一致，均为既有登录 401/429、playwright 环境失败）
+
+## 0.16.0 (2026-09-15)
+
+### 新增：企业业务本体深化阶段 1 第二项——多跳路径与场景查询
+
+- **通用关系探索**：新增 `ontology_expand`（有限深度节点/边展开）与 `ontology_find_paths`（实体到实体/实体到类型的中文证据路径），工具层对深度、条数、关系类型和遍历预算做硬限制，避免把整张图谱塞进模型上下文
+- **场景化查询**：新增 `ontology_customer_360`（客户跟踪人/联系人/项目/合同/订单/产品全景）与 `ontology_fault_impact`（基站覆盖片区/客户/VIP/维护人/回传链路）；分别默认授权 xiaoxiao 与 net-ops，资源中心可独立开关
+- **底层加固**：关系查询补租户双向过滤，阻断跨租户实体 id 探测；实体解析支持名称与业务编号（如基站 BS-003）；路径文本按真实遍历方向输出，不再混淆 schema 边方向与查询方向；补齐 CRM 演示中已在使用的 `contact`、`sign`、`decide` schema，中文路径无需回退英文代码
+- **管理端**：本体页新增「路径查询」视图，可选择起点、目标实体/目标类型与最大跳数，直接查看逐跳证据
+- **技能接线**：customer-360 与 fault-impact-analysis 优先调用场景工具，需要追证时再回到通用一跳/路径查询
+
+### 测试
+
+- 新增多跳/场景测试：跨租户关系隔离、关系展开与过滤、实体/类型路径、客户 360、故障影响、场景工具授权与 tenant 绑定、catalog 工具回填
+- 全量 pytest：新增用例全绿，失败清单与 main 基线一致（均为既有登录 401/429、playwright 类环境失败）
+
+## 0.15.0 (2026-09-14)
+
+### 新增：企业业务本体对话写回（ontology_write）——本体深化阶段 1 第一项
+
+- **对话即录入**：新增闭包工具 `ontology_write`，员工可在对话中把用户明确陈述的业务事实写回企业本体（全企业共享），支持三种操作：
+  - `create_entity` 新增实体（同名查重，已存在则提示走更新，不重复建）
+  - `update_entity` 增量更新（props 按 key 浅合并不抹其他字段，区别于管理端整包覆盖）
+  - `create_relation` 建立关系边（端点可用 id 或「类型+名称」指定，名称自动解析、歧义报错；复用既有 schema 两端类型校验；同类型重边幂等去重）
+- **授权红线**：写回是独立工具授权，未在资源中心勾选的员工编译时根本不注入该工具（模型无法调用）；system prompt 的写回规程也按授权挂载。默认仅授权 xiaoxiao（客户事实）与 hrbp（员工事实），老库由 `backfill_ontology_tools()` 幂等补登记/补指派，其余内置员工不补
+- **数据溯源 + 审计**：entities/relations 新增 `source`（seed/admin/chat/import）、`source_ref`（来源会话 id，取自运行时 thread_id）、`created_by`（操作人）三列，老库启动幂等 ALTER 补列、存量数据标 seed；每次写回写 catalog 审计日志（chat_create_entity/chat_update_entity/chat_create_relation，含 before/after 快照），幂等重边不重复审计
+- 管理端既有 CRUD 的写入默认标 source=admin；资源中心工具列表自动出现「企业本体写回」开关，无需前端改动
+- 招牌演示：对 HRBP 说「记一下，王工升职为信息化部副总监」→ 下一轮问「王工什么职位」，答案来自本体而非模型记忆
+
+### 测试
+
+- 新增 7 个用例：迁移幂等与 seed 溯源默认值、props 合并更新与溯源落标、名称解析（精确/模糊唯一/歧义/未命中）、关系写回去重、工具授权闸门、工具级全流程（新增→查重拒绝→合并更新→按名建边→schema 拒绝→审计齐全）、跨租户写回隔离
+- 编译器接线冒烟：授权员工实际装配 ontology_write 且 system prompt 挂写回规程，未授权员工不注入
+
+## 0.14.1 (2026-09-12)
+
+### 新增：市场情报数字员工「小察」（market-intel）
+
+- 第七个内置员工：值守式情报岗（区别于 biz-analyzer 内按需问答的 market-intelligence 技能），持续监测行业/竞品/政策 → HTML 在线看板输出
+- 员工配置：composed/state 后端（看板走对话内 HTML 通道，无文件系统），intel-scouter 只读检索子代理（≥3 次检索委派采集），newsnow/playwright 连接器指派；老库经 `backfill_employees_if_missing` / `backfill_connectors` 幂等补种
+- 三个技能（SKILL.md 播种进 Store，运行时 read_file）：
+  - **market-daily-brief**：多源采集→筛选核实→每日简报看板（纯 CSS：预警横幅/头条/竞品卡墙/政策/建议关注/来源汇总，每条强制来源+日期标注）
+  - **competitor-deep-dive**：竞品档案附录（声湃/光屿/极映）+ 联网核实 + 对标看板（对比总表/SWOT/ECharts 价格带图）
+  - **market-alert-triage**：先核实后分级的 P0/P1/P2 预警简卡
+- 看板统一走 `REPORT_HTML_START/END` 分隔符作为消息文本输出（复用小数报告通道），persona/规程写明禁落盘红线
+
+### 新增：主聊天看板渲染
+
+- ChatMessage 挂载现成 ReportViewer（iframe 沙箱 + 下载/新窗口，此前仅小数工作台渲染）
+- ChatView 历史会话恢复补 `extractReport` 抽取，与流式行为一致
+
+### 新增（V2）：自动值守闭环——定时简报 + 发布人工审批 + 预警事件触发
+
+- **publish_briefing 发布审批工具**：tools.needs_approval=["approve","reject"] 派生 interrupt_on，发布前挂人工审批卡，批准前内容不外发；批准后归档 HTML 至 `workspace/data/<uid>/briefings/`（产物文件卡可下载），`MARKET_INTEL_PUBLISH_WEBHOOK` 可选外推
+- streaming 产物文件探测加入 publish_briefing，归档即时出文件卡
+- **值守任务模板**（`automations.backfill_seeds()`，幂等、默认停用、不覆盖管理员改动）：
+  - `auto_seed_market_daily_brief`：工作日 08:30 cron 生成每日简报，无人值守不反问，收尾强制走发布审批
+  - `auto_seed_market_alert_event`：外部系统 POST `/api/automations/events/market-signal`（payload 注入 {{payload}}）触发预警研判
+- 技能规程补值守模式与发布审批流程；P0/P1 预警外发同走审批闸门
+- ChatView 增加小察引导提示
+
+### 测试
+
+- 新增 market-intel 补种、publish_briefing 登记/审批派生/归档包装、值守种子任务幂等共 10 个用例；全量 pytest 失败清单与 0.14.0 基线一致
+
+## 0.14.0 (2026-09-12)
+
+### 新增：客户经理数字员工升级全生命周期经营 + 浙江联通×吉利汽车演示案例
+
+- xiaoxiao（客户经理·解决方案顾问）从签前方案顾问升级为全生命周期客户经理：
+  - 新技能 **customer-360**：知识库 → 业务本体 → CRM 三源汇总的客户画像，结论先行、标注来源、风险显性化
+  - 新技能 **renewal-scan**：合同临期（≤30 天）/预警（≤90 天）/商机停滞（>14 天）扫描，基于 workspace/datasets 台账 execute 真实跑数
+  - **enterprise-sales** 补「拜访后纪要」规程：口述纪要结构化落档 + 偏好写入跨会话记忆 + 升级红线
+  - persona 重构：签前+签后双线、技能路由段、审批升级红线（投诉/折扣/赔偿/超 SLA 必须 create_ticket 人工审批）
+  - 工具追加 create_ticket 与业务本体关系查询；本体演示数据启动自动播种（`ontology.seed_crm_demo_if_empty`：吉利/零跑客户、联系人、合同、商机、产品及 sign/include/decide/maintain/correspond_to 关系边）
+
+### 修复：create_ticket 工单审批在全新库不生效
+
+- 运行时 interrupt_on 由工具表 needs_approval 自动推导（`_build_interrupt_on`），历史种子把 create_ticket 记为 NULL → 全新库中轻量工单审批不出审批卡
+- 种子补默认策略 `["approve","reject"]`；新增 `backfill_ticket_approval()` 启动幂等补老库（不覆盖管理员自定义策略）
+
+### 新增：数字员工产物文件可下载/预览
+
+- 新增 `GET /api/workspace/file`：以 workspace/data 为受控根，路径归一（相对//data/ 虚拟路径/绝对路径）+ resolve 防穿越 + uid 目录用户隔离
+- SSE 流内 `_WorkspaceFileWatcher` 快照-对比探测产物（write_file/execute/edit_file/run_python 后），推 file 事件并落库 conversation_files（含归属轮次 turn_no，同回合单文件去重）
+- 前端 FileCard 文件卡片（下载 + 文本预览）：实时挂在生成它的回答下方，历史会话按轮次恢复；此前产物只以文本路径出现，服务器文件系统外无法获取
+
+### 新增：演示物料（examples/demo-geely/）
+
+- `generate_xiaoxiao_data.py` 换为浙江联通×吉利汽车背景（零跑汽车对照），产品名对齐联通政企产品线，内嵌四条可扫描故事线
+- 演示手册六场景 + 按数字员工绑定的话术速查卡；场景 6「本体价值 A/B」真机实测——无本体=台账推断且自承无法回答，有本体=correspond_to 关系路径直达
+- CRM mock 追加吉利/零跑客户与订单（保留原演示数据）
+
+### 修复：首页员工卡片按定制型/编排型分流
+
+- 首页卡片写死 chat 路由，点击定制型员工（xiaoshu）进入编排型聊天页；改用 `routeNameForEmployee` 分流，并补齐 ChatView `?emp=` 预选
+
+### 其他
+
+- gen_solution.js：docx 全局模块回退解析（修复无法独立运行）、方案优势/售后模板改政企服务风格
+- seeds 知识库绑定修正：`自研产品Wiki` → 实际存在的 `浙江联通自研产品Wiki`
+- customer-360 本体环节改用英文类型代码；ontology_tools 文档补 contact 类型与 sign/decide 动词
+- agent 编译缓存特性记档：get_agent 结果不随配置热更新，资源中心改工具/persona 需重启服务
+
+### 验证
+
+- 新增 tests/test_xiaoxiao_extension.py（5 项）与 tests/test_workspace_files.py（6 项）全部通过；全量 pytest 回归失败集与 main 基线一致（33 项存量环境问题，零新增）
+- E2E 实测（deepseek-v4-flash + 真实 PG/RAGFlow/CRM）：客户 360 / 续约扫描 / 投诉审批闭环（工单 T0912102010、T0912103003）/ 方案 Word（下载 200、穿越 403）/ 拜访纪要 / 本体 A/B 全部通过
+- 前端 vite build 通过
+
 ## 0.13.2 (2026-09-10)
 
 ### 新增：Playwright MCP 浏览器自动化连接器

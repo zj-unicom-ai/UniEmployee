@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from app import runtime, traces, catalog, approvals, conversations, guard
 from app import db as dblayer
 from app.compiler import _init_model
+from app.paths import WORKSPACE_DATA
 # 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
 # 并在 sql_db_query 完成时取出结构化结果，翻译成 chart/sql SSE 事件。
 # 延迟 import 失败时退化为无操作，避免分析师模块异常拖垮其他员工流。
@@ -49,6 +50,8 @@ conv_emp_map: dict[str, str] = {}
 # 会话 → 属主 映射：新会话先落内存，首条消息时才写入 conversations.db。
 # 用于发送消息前校验"该会话属于当前用户"，避免拿着 conv_id 越权操作。
 conv_owner_map: dict[str, str] = {}
+# 新会话在第一条消息前尚未持久化，同样要保留其租户归属供附件/消息入口校验。
+conv_tenant_map: dict[str, str] = {}
 
 
 def sse(obj: dict) -> str:
@@ -175,6 +178,34 @@ def reconstruct(messages: list) -> list[dict]:
                         break
     return [t for t in turns
             if t["role"] == "user" or t["content"].strip() or t["tool_calls"]]
+
+
+async def _persist_partial_response(agent, config: dict, conv_id: str, bot_text: str) -> None:
+    """客户端断开时尽量保住已流出的回答，避免刷新后整段结果丢失。
+
+    LangGraph 只有在本轮正常结束后才会把最终 AIMessage 稳定写进
+    checkpoint。SSE 连接若在收尾前断开，前端已经看到的 token 可能只
+    存在于传输流里。这里用 aupdate_state 追加一条 AIMessage 做兜底。
+    """
+    text = (bot_text or "").strip()
+    if not text:
+        return
+    try:
+        states = [s async for s in agent.aget_state_history(config, limit=1)]
+        msgs = states[0].values.get("messages", []) if states else []
+        for m in reversed(msgs):
+            if isinstance(m, AIMessage):
+                latest = text_of(m).strip()
+                if latest and (latest == text or text in latest):
+                    return
+                break
+    except Exception:
+        # 读取失败不影响后续兜底写入。
+        pass
+    try:
+        await agent.aupdate_state(config, {"messages": [AIMessage(content=text)]})
+    except Exception:
+        logger.warning("断流回答写入 checkpoint 失败 conv=%s", conv_id, exc_info=True)
 
 
 async def recover_conversations(limit: int | None = None):
@@ -319,9 +350,75 @@ def first_message_text(input_) -> str:
         return ""
 
 
+class _WorkspaceFileWatcher:
+    """探测 workspace/data 下回合内新增/修改的产物文件，供 SSE 推 file 事件。
+
+    数字员工经 execute/write_file 生成的 Word/纪要/CSV 等产物，此前只以文本路径
+    出现在回答里，前端无法下载或预览。快照-对比目录（排除 uploads/ 与隐藏文件、
+    超大与超量截断），由 _stream_run 在文件型工具完成后推 {"type":"file", ...}，
+    前端渲染为可下载/可预览的文件卡片。
+    """
+    EXCLUDE_PARTS = {"uploads"}
+    MAX_FILE_SIZE = 100 * 1024 * 1024   # 超过 100MB 的文件不推卡片
+    MAX_PER_TURN = 10                    # 单回合最多推送 10 个文件
+
+    def __init__(self, user_id: str | None = None):
+        self.user_id = user_id or ""
+        self._seen: dict[str, float] = {}
+        self._emitted: set[str] = set()   # 本回合已推送过的文件，重复触碰不再推送
+        self.snapshot()
+
+    def _scan(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        root = WORKSPACE_DATA
+        scan_root = root / self.user_id if self.user_id else root
+        try:
+            for p in scan_root.rglob("*"):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(root)
+                if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
+                    continue
+                try:
+                    out[rel.as_posix()] = p.stat().st_mtime
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        return out
+
+    def snapshot(self) -> None:
+        self._seen = self._scan()
+
+    def diff(self) -> list[dict]:
+        """返回相对上次快照新增/修改的文件信息列表，并滚动快照。
+
+        同一回合内同一文件只推送一次（后续触碰不再重复emit，前端/DB 均按 path 去重）。
+        """
+        cur = self._scan()
+        fresh = [k for k, m in cur.items()
+                 if k not in self._seen or m > self._seen[k] + 1e-6]
+        self._seen = cur
+        infos = []
+        for rel in fresh[: self.MAX_PER_TURN]:
+            if rel in self._emitted:
+                continue
+            p = WORKSPACE_DATA / rel
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if st.st_size > self.MAX_FILE_SIZE:
+                continue
+            self._emitted.add(rel)
+            infos.append({"name": p.name, "path": rel, "size": st.st_size})
+        return infos
+
+
 async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str = "user",
                       datasource_id: str = "", data_source: str = "",
-                      model_override: str = ""):
+                      model_override: str = "", tenant_id: str = "default",
+                      auth_context: dict | None = None):
     """一次执行的统一事件翻译（新消息或审批 resume 都走这里）。
 
     data_source 是新版数据源选择参数（JSON 字符串 '{"kind":"database","id":"ds:xxx"}'），
@@ -367,13 +464,26 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             input_preview = m0.get("content", "") if isinstance(m0, dict) else str(m0)
     except Exception:
         pass
-    trace_run_id = traces.start_run(conv_id, emp_id, user_id,
+    trace_run_id = traces.start_run(conv_id, emp_id, user_id, tenant_id=tenant_id,
                                     input_preview=input_preview, kind=kind)
     tracer = traces.TraceHandler(trace_run_id)
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
+    file_watcher = _WorkspaceFileWatcher(user_id=user_id)
 
-    config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id},
+    config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id,
+                                 "auth_context": auth_context or {"user_id": user_id, "tenant_id": tenant_id,
+                                                                   "role": role}},
               "callbacks": [tracer]}
+    # 当前用户轮次（1-based）= checkpoint 中已有 HumanMessage 数 + 1。
+    # 产物文件按轮次落库（conversation_files.turn_no），历史恢复时挂回生成它的那条回答；
+    # 审批恢复路径 checkpoint 已含本轮 HumanMessage，U+1 仍指向同一轮。
+    turn_no = None
+    try:
+        pre_states = [s async for s in agent.aget_state_history(config, limit=1)]
+        pre_msgs = pre_states[0].values.get("messages", []) if pre_states else []
+        turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)) + 1
+    except Exception:
+        turn_no = None
     skill_stage_on = False
     bot_text = ""
 
@@ -434,7 +544,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                 if node == "__interrupt__":
                     tool_name, tool_args, inner_thread = _extract_interrupt(update)
                     record = approvals.create(conv_id, emp_id, tool_name, tool_args,
-                                              user_id=user_id, inner_thread=inner_thread)
+                                              user_id=user_id, tenant_id=tenant_id, inner_thread=inner_thread)
                     yield sse({"type": "approval_required", "approval_id": record["approval_id"],
                                "tool": tool_name, "args": tool_args})
                     tracer.flush_pending()
@@ -468,6 +578,17 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name in ("sql_db_query", "file_table_query") and _ANALYST_HOOK:
                             for item in analyst_pop_query_results(conv_id):
                                 yield sse({"type": "sql", "sql": item.get("sql", "")})
+                        # 产物文件探测：write_file/execute/edit_file/run_python 之后
+                        # 对比 workspace/data 快照，把新增/修改的产物推 file 事件，
+                        # 前端渲染成可下载卡片（此前只以文本路径出现在回答里，无法下载）。
+                        # 同步落库 conversation_files：file 事件是即时推送，
+                        # 历史会话恢复走详情接口的 files 字段。
+                        if name in ("write_file", "execute", "edit_file", "run_python",
+                                    "publish_briefing"):
+                            for f in file_watcher.diff():
+                                conversations.add_file(conv_id, f["name"], f["path"],
+                                                       f.get("size", 0), turn_no)
+                                yield sse({"type": "file", **f, "turn_no": turn_no})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,
@@ -514,6 +635,19 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             except Exception:
                 pass
             asyncio.create_task(_gen_title(conv_id, user_text, bot_text))
+    except asyncio.CancelledError:
+        tracer.flush_pending()
+        # 客户端刷新/切页/中止请求时，服务端会取消 SSE 生成器。
+        # 已经流给浏览器的 token 可能尚未进入 checkpoint；先尽力补写，
+        # 再把 Trace 从 running 收尾为 cancelled，避免后续排障误判为仍在执行。
+        try:
+            await asyncio.shield(_persist_partial_response(agent, config, conv_id, bot_text))
+        finally:
+            traces.finish_run(trace_run_id, status="cancelled",
+                              error="client disconnected before stream completed")
+            logger.info("SSE 客户端断开 conv=%s emp=%s run=%s partial_chars=%d",
+                        conv_id, emp_id, trace_run_id, len(bot_text or ""))
+        raise
     except Exception as e:
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="error", error=f"{type(e).__name__}: {e}")

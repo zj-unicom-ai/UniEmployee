@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app import auth
+from app import audit, auth, runtime
 from app.agent.analyst.datasource import manager as ds_manager
 from app.agent.analyst.datasource import schema_inspector
 from app.agent.analyst.terminology import manager as term_manager
@@ -362,16 +362,19 @@ async def upsert_annotation(ds_id: str, table_name: str, req: TableAnnotationUpd
 async def list_terminologies(
     datasource_id: str | None = None,
     include_disabled: bool = False,
+    user: dict = Depends(auth.get_current_user),
 ):
     """列出术语。可按 datasource_id 过滤，include_disabled=1 包含已禁用。"""
     return term_manager.list_terminologies(
         datasource_id=datasource_id,
-        include_disabled=include_disabled,
+        # 禁用项属于配置管理信息；普通用户只能看到运行时有效项。
+        include_disabled=include_disabled and _is_admin(user),
     )
 
 
 @router.get("/terminologies/{term_id}")
-async def get_terminology(term_id: str):
+async def get_terminology(term_id: str,
+                          user: dict = Depends(auth.get_current_user)):
     """获取单个术语。"""
     term = term_manager.get_terminology(term_id)
     if not term:
@@ -380,64 +383,91 @@ async def get_terminology(term_id: str):
 
 
 @router.post("/terminologies")
-async def create_terminology(req: TerminologyCreate):
-    """创建术语。"""
+async def create_terminology(req: TerminologyCreate, request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """创建全局术语（仅管理员）。"""
     try:
-        return term_manager.create_terminology(req.model_dump())
+        created = term_manager.create_terminology(req.model_dump())
+        audit.log("create", "analyst_terminology", created["id"], admin,
+                  request, after=created)
+        return created
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @router.put("/terminologies/{term_id}")
-async def update_terminology(term_id: str, req: TerminologyUpdate):
-    """更新术语（部分更新）。"""
+async def update_terminology(term_id: str, req: TerminologyUpdate,
+                             request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """更新术语（部分更新，仅管理员）。"""
+    before = term_manager.get_terminology(term_id)
     data = req.model_dump(exclude_none=True)
     updated = term_manager.update_terminology(term_id, data)
     if not updated:
         raise HTTPException(404, "术语不存在")
+    audit.log("update", "analyst_terminology", term_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
 @router.delete("/terminologies/{term_id}")
-async def delete_terminology(term_id: str):
-    """删除术语。"""
+async def delete_terminology(term_id: str, request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """删除术语（仅管理员）。"""
+    before = term_manager.get_terminology(term_id)
     if not term_manager.delete_terminology(term_id):
         raise HTTPException(404, "术语不存在")
+    audit.log("delete", "analyst_terminology", term_id, admin, request,
+              before=before)
     return {"ok": True}
 
 
 @router.post("/terminologies/{term_id}/synonyms")
-async def add_synonym(term_id: str, req: SynonymUpdate):
-    """追加单个同义词（幂等去重）。"""
+async def add_synonym(term_id: str, req: SynonymUpdate, request: Request,
+                      admin: dict = Depends(auth.require_admin)):
+    """追加单个同义词（幂等去重，仅管理员）。"""
+    before = term_manager.get_terminology(term_id)
     try:
         updated = term_manager.add_synonym(term_id, req.synonym)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not updated:
         raise HTTPException(404, "术语不存在")
+    audit.log("update", "analyst_terminology", term_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
 @router.delete("/terminologies/{term_id}/synonyms/{synonym}")
-async def remove_synonym(term_id: str, synonym: str):
-    """移除某个同义词（幂等）。"""
+async def remove_synonym(term_id: str, synonym: str, request: Request,
+                         admin: dict = Depends(auth.require_admin)):
+    """移除某个同义词（幂等，仅管理员）。"""
+    before = term_manager.get_terminology(term_id)
     updated = term_manager.remove_synonym(term_id, synonym)
     if not updated:
         raise HTTPException(404, "术语不存在")
+    audit.log("update", "analyst_terminology", term_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
 @router.post("/terminologies/{term_id}/toggle")
-async def toggle_terminology(term_id: str, enabled: int = 1):
-    """启用/禁用术语。"""
+async def toggle_terminology(term_id: str, request: Request,
+                             enabled: int = 1,
+                             admin: dict = Depends(auth.require_admin)):
+    """启用/禁用术语（仅管理员）。"""
+    before = term_manager.get_terminology(term_id)
     updated = term_manager.toggle_terminology(term_id, enabled)
     if not updated:
         raise HTTPException(404, "术语不存在")
+    audit.log("update", "analyst_terminology", term_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
 @router.post("/terminologies/generate-synonyms")
-async def generate_synonyms(req: Request, word: str = ""):
+async def generate_synonyms(req: Request, word: str = "",
+                            admin: dict = Depends(auth.require_admin)):
     """AI 生成同义词：调 LLM 为术语词生成 5 个候选同义词。
 
     用于术语配置页「AI 生成同义词」按钮，提升术语维护效率。
@@ -513,16 +543,18 @@ async def generate_synonyms(req: Request, word: str = ""):
 async def list_sql_examples(
     datasource_id: str | None = None,
     include_disabled: bool = False,
+    user: dict = Depends(auth.get_current_user),
 ):
     """列出 SQL 示例。可按 datasource_id 过滤。"""
     return ex_manager.list_sql_examples(
         datasource_id=datasource_id,
-        include_disabled=include_disabled,
+        include_disabled=include_disabled and _is_admin(user),
     )
 
 
 @router.get("/sql-examples/{ex_id}")
-async def get_sql_example(ex_id: str):
+async def get_sql_example(ex_id: str,
+                          user: dict = Depends(auth.get_current_user)):
     """获取单个 SQL 示例。"""
     ex = ex_manager.get_sql_example(ex_id)
     if not ex:
@@ -531,38 +563,56 @@ async def get_sql_example(ex_id: str):
 
 
 @router.post("/sql-examples")
-async def create_sql_example(req: SqlExampleCreate):
-    """创建 SQL 示例。"""
+async def create_sql_example(req: SqlExampleCreate, request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """创建全局 SQL 示例（仅管理员）。"""
     try:
-        return ex_manager.create_sql_example(req.model_dump())
+        created = ex_manager.create_sql_example(req.model_dump())
+        audit.log("create", "analyst_sql_example", created["id"], admin,
+                  request, after=created)
+        return created
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @router.put("/sql-examples/{ex_id}")
-async def update_sql_example(ex_id: str, req: SqlExampleUpdate):
-    """更新 SQL 示例（部分更新）。"""
+async def update_sql_example(ex_id: str, req: SqlExampleUpdate,
+                             request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """更新 SQL 示例（部分更新，仅管理员）。"""
+    before = ex_manager.get_sql_example(ex_id)
     data = req.model_dump(exclude_none=True)
     updated = ex_manager.update_sql_example(ex_id, data)
     if not updated:
         raise HTTPException(404, "SQL 示例不存在")
+    audit.log("update", "analyst_sql_example", ex_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
 @router.delete("/sql-examples/{ex_id}")
-async def delete_sql_example(ex_id: str):
-    """删除 SQL 示例。"""
+async def delete_sql_example(ex_id: str, request: Request,
+                             admin: dict = Depends(auth.require_admin)):
+    """删除 SQL 示例（仅管理员）。"""
+    before = ex_manager.get_sql_example(ex_id)
     if not ex_manager.delete_sql_example(ex_id):
         raise HTTPException(404, "SQL 示例不存在")
+    audit.log("delete", "analyst_sql_example", ex_id, admin, request,
+              before=before)
     return {"ok": True}
 
 
 @router.post("/sql-examples/{ex_id}/toggle")
-async def toggle_sql_example(ex_id: str, enabled: int = 1):
-    """启用/禁用 SQL 示例。"""
+async def toggle_sql_example(ex_id: str, request: Request,
+                             enabled: int = 1,
+                             admin: dict = Depends(auth.require_admin)):
+    """启用/禁用 SQL 示例（仅管理员）。"""
+    before = ex_manager.get_sql_example(ex_id)
     updated = ex_manager.toggle_sql_example(ex_id, enabled)
     if not updated:
         raise HTTPException(404, "SQL 示例不存在")
+    audit.log("update", "analyst_sql_example", ex_id, admin, request,
+              before=before, after=updated)
     return updated
 
 
@@ -583,56 +633,74 @@ async def list_all_data_sources(user: dict = Depends(auth.get_current_user)):
 
 
 @router.get("/kbs")
-async def list_kbs():
-    """列出资源中心全部知识库（供 xiaoshu 工作台绑定选择）。"""
+async def list_kbs(admin: dict = Depends(auth.require_admin)):
+    """列出可绑定知识库（仅管理员）。"""
     return ds_manager.list_all_kbs()
 
 
 @router.get("/kbs/bound")
-async def list_bound_kbs():
-    """列出 xiaoshu 已绑定的知识库。"""
+async def list_bound_kbs(admin: dict = Depends(auth.require_admin)):
+    """列出 xiaoshu 已绑定的知识库（仅管理员）。"""
     return ds_manager.list_employee_kbs(ds_manager.ANALYST_EMP_ID)
 
 
 @router.post("/kbs/{kb_id}")
-async def bind_kb(kb_id: str):
-    """绑定知识库到 xiaoshu（幂等）。"""
+async def bind_kb(kb_id: str, request: Request,
+                  admin: dict = Depends(auth.require_admin)):
+    """绑定知识库到 xiaoshu（仅管理员，幂等）。"""
     if not ds_manager.bind_kb(ds_manager.ANALYST_EMP_ID, kb_id):
-        raise HTTPException(400, "绑定失败")
+        raise HTTPException(404, "知识库不存在或已删除")
+    runtime.invalidate(ds_manager.ANALYST_EMP_ID)
+    audit.log("update", "analyst_kb_binding", kb_id, admin, request,
+              after={"employee_id": ds_manager.ANALYST_EMP_ID, "bound": True})
     return {"ok": True}
 
 
 @router.delete("/kbs/{kb_id}")
-async def unbind_kb(kb_id: str):
-    """解绑 xiaoshu 的知识库。"""
+async def unbind_kb(kb_id: str, request: Request,
+                    admin: dict = Depends(auth.require_admin)):
+    """解绑 xiaoshu 的知识库（仅管理员）。"""
     if not ds_manager.unbind_kb(ds_manager.ANALYST_EMP_ID, kb_id):
         raise HTTPException(404, "知识库未绑定")
+    runtime.invalidate(ds_manager.ANALYST_EMP_ID)
+    audit.log("update", "analyst_kb_binding", kb_id, admin, request,
+              after={"employee_id": ds_manager.ANALYST_EMP_ID, "bound": False})
     return {"ok": True}
 
 
 @router.get("/connectors")
-async def list_connectors():
-    """列出资源中心全部连接器（供 xiaoshu 工作台绑定选择）。"""
+async def list_connectors(admin: dict = Depends(auth.require_admin)):
+    """列出可绑定连接器（仅管理员）。"""
     return ds_manager.list_all_connectors()
 
 
 @router.get("/connectors/bound")
-async def list_bound_connectors():
-    """列出 xiaoshu 已绑定的连接器。"""
+async def list_bound_connectors(admin: dict = Depends(auth.require_admin)):
+    """列出 xiaoshu 已绑定的连接器（不返回命令/环境变量等敏感配置）。"""
     return ds_manager.list_employee_connectors(ds_manager.ANALYST_EMP_ID)
 
 
 @router.post("/connectors/{connector_id}")
-async def bind_connector(connector_id: str):
-    """绑定连接器到 xiaoshu（幂等）。"""
+async def bind_connector(connector_id: str, request: Request,
+                         admin: dict = Depends(auth.require_admin)):
+    """绑定连接器到 xiaoshu（仅管理员，幂等）。"""
     if not ds_manager.bind_connector(ds_manager.ANALYST_EMP_ID, connector_id):
-        raise HTTPException(400, "绑定失败")
+        raise HTTPException(404, "连接器不存在或已删除")
+    runtime.invalidate(ds_manager.ANALYST_EMP_ID)
+    audit.log("update", "analyst_connector_binding", connector_id, admin,
+              request, after={"employee_id": ds_manager.ANALYST_EMP_ID,
+                              "bound": True})
     return {"ok": True}
 
 
 @router.delete("/connectors/{connector_id}")
-async def unbind_connector(connector_id: str):
-    """解绑 xiaoshu 的连接器。"""
+async def unbind_connector(connector_id: str, request: Request,
+                           admin: dict = Depends(auth.require_admin)):
+    """解绑 xiaoshu 的连接器（仅管理员）。"""
     if not ds_manager.unbind_connector(ds_manager.ANALYST_EMP_ID, connector_id):
         raise HTTPException(404, "连接器未绑定")
+    runtime.invalidate(ds_manager.ANALYST_EMP_ID)
+    audit.log("update", "analyst_connector_binding", connector_id, admin,
+              request, after={"employee_id": ds_manager.ANALYST_EMP_ID,
+                              "bound": False})
     return {"ok": True}

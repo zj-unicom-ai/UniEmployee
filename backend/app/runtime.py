@@ -89,6 +89,9 @@ def build_spec(cfg: dict, model_override: str | None = None) -> EmployeeSpec:
         sops=cfg.get("sops", []),
         sop_text=cfg.get("sop_text", ""), connectors=cfg.get("connectors", []),
         skill_dirs=cfg.get("skill_dirs", {}),
+        subagents=cfg.get("subagents", []),
+        subagent_policy=cfg.get("subagent_policy", ""),
+        kind=cfg.get("kind", "composed"),
     )
 
 

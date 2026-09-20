@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -197,6 +198,11 @@ async def delete_skill(skill_id: str, request: Request,
         return {"error": "内置技能不允许删除"}
     affected = catalog.employees_using_skill(skill_id)
     catalog.delete_skill(skill_id)
+    # 同步清理自定义技能磁盘目录（校验落在 SKILLS_CUSTOM_DIR 直下，防路径穿越；
+    # 同 ID 再上传时 upload_skill 会重建目录，复活机制不受影响）
+    target = (SKILLS_CUSTOM_DIR / skill_id).resolve()
+    if target.parent == SKILLS_CUSTOM_DIR.resolve() and target.exists():
+        shutil.rmtree(target, ignore_errors=True)
     for emp_id in affected:
         runtime.invalidate(emp_id)
     audit.log("delete", "skill", skill_id, admin, request,
@@ -220,20 +226,23 @@ async def edit_tool(tool_id: str, body: dict, request: Request,
     def _tool_row():
         return next((t for t in catalog.catalog()["tools"] if t["id"] == tool_id), None)
     before = _tool_row()
-    ok = catalog.update_tool(tool_id, body.get("description", ""), body.get("needs_approval"))
+    # update_tool 内部同步重算受影响员工的 interrupt_on（审批策略派生源）
+    ok, affected = catalog.update_tool(tool_id, body.get("description", ""),
+                                       body.get("needs_approval"))
     if not ok:
         return {"error": "工具不存在"}
-    for e in catalog.employees_using_tool(tool_id):
+    for e in affected:
         runtime.invalidate(e)
     audit.log("update", "tool", tool_id, admin, request,
-              before=before, after=_tool_row())
-    return {"ok": True}
+              before=before,
+              after={**(_tool_row() or {}), "affected_employees": affected})
+    return {"ok": True, "invalidated": affected}
 
 
 @router.post("/knowledge-bases")
 async def create_kb(body: dict, request: Request,
                     admin: dict = Depends(auth.require_admin)):
-    kid = body.get("id") or ("kb_" + time.strftime("%Y%m%d%H%M%S"))
+    kid = body.get("id") or ("kb_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_kb(kid, body.get("name", kid), body.get("description", ""),
                       body.get("ragflow_dataset_id", ""))
     audit.log("create", "kb", kid, admin, request, after=catalog.get_kb(kid))
@@ -257,7 +266,7 @@ async def edit_kb(kb_id: str, body: dict, request: Request,
                   admin: dict = Depends(auth.require_admin)):
     before = catalog.get_kb(kb_id)
     ok = catalog.update_kb(kb_id, body.get("name", ""), body.get("description", ""),
-                           body.get("ragflow_dataset_id", ""))
+                           body.get("ragflow_dataset_id"))  # 缺省 None=保留原值
     if ok:
         for e in catalog.employees_using_kb(kb_id):
             runtime.invalidate(e)
@@ -280,7 +289,7 @@ async def del_kb(kb_id: str, request: Request,
 @router.post("/sops")
 async def create_sop(body: dict, request: Request,
                      admin: dict = Depends(auth.require_admin)):
-    sid = body.get("id") or ("sop_" + time.strftime("%Y%m%d%H%M%S"))
+    sid = body.get("id") or ("sop_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_sop(sid, body.get("name", sid), body.get("description", ""),
                        body.get("content", ""))
     audit.log("create", "sop", sid, admin, request, after=catalog.get_sop(sid))
@@ -315,12 +324,12 @@ async def del_sop(sop_id: str, request: Request,
 @router.post("/connectors")
 async def create_connector(body: dict, request: Request,
                            admin: dict = Depends(auth.require_admin)):
-    cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S"))
+    cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     catalog.create_connector(cid, body.get("name", cid), body.get("description", ""),
                              body.get("config", {}))
     audit.log("create", "connector", cid, admin, request,
               after=catalog.get_connector(cid))
-    return {"cid": cid}
+    return {"id": cid}
 
 
 @router.get("/connectors/{conn_id}")

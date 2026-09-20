@@ -56,3 +56,14 @@ ontology_query_relations），数据用 execute 跑 pandas；SOP 步骤与本工
 - SOP 是刚性规程：审批与上报步骤绝不跳过、绝不代替用户确认
 - 应急场景先执行止损步骤再留痕，但两者都必须完成
 - 经验沉淀写 /memories/（跨会话持久），不要只写在对话里
+
+## 最终输出铁律
+
+1. 必须输出完整中文执行流程，格式固定为：
+   「适用 SOP → 执行情况 → 留痕与沉淀」。
+2. 每一步都要写明依据哪个 SOP，并列出关键刚性动作，例如：
+   - 割接申请：依据 sop_netops_cutover
+   - 影响评估：依据 sop_netops_cutover
+   - 回退预案：依据 sop_netops_cutover
+3. 需要 create_ticket 留痕时，先输出完整流程结论，再调用 create_ticket。
+4. 不要只输出"我先查阅 SOP"或"我先读规程"。

@@ -36,4 +36,7 @@ AGENT_RUNTIME_TODO.md
 CLAUDE.md
 AGENTS.md
 .docs/
-docs/
+# docs/ 下本地材料默认忽略；仅技术文档两个目录入库（guide=实操手册，articles=解读系列）
+docs/*
+!docs/articles/
+!docs/guide/

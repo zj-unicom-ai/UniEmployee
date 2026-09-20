@@ -8,18 +8,35 @@
  *   node scripts/gen_solution.js <输出路径> <客户姓名> <企业名称> <需求分析> <产品清单JSON> <总金额> <备注>
  */
 
-// 解析 docx 依赖：优先项目根 node_modules，其次 NODE_PATH 环境变量（指向全局模块目录）
-process.env.NODE_PATH = [path.join(__dirname, "..", "..", "..", "..", "node_modules"),
-                         process.env.NODE_PATH].filter(Boolean).join(path.delimiter);
-require("module").Module._initPaths();
-
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
+
+// 解析 docx 依赖：优先项目根 node_modules，其次全局 node_modules（npm root -g），
+// 最后 NODE_PATH 环境变量。三处都没有时给出可执行的安装提示。
+let docx;
+try {
+  docx = require("docx");
+} catch (e) {
+  const { execSync } = require("child_process");
+  const globalRoot = execSync("npm root -g").toString().trim();
+  process.env.NODE_PATH = [
+    path.join(__dirname, "..", "..", "..", "..", "node_modules"),
+    globalRoot,
+    process.env.NODE_PATH,
+  ].filter(Boolean).join(path.delimiter);
+  require("module").Module._initPaths();
+  try {
+    docx = require("docx");
+  } catch (e2) {
+    console.error("docx 模块未找到，请先执行：npm install -g docx");
+    process.exit(1);
+  }
+}
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   Header, Footer, AlignmentType, HeadingLevel, BorderStyle, WidthType,
   ShadingType, PageNumber, PageBreak, LevelFormat,
-} = require("docx");
+} = docx;
 
 // ---- 解析命令行参数 ----
 const args = process.argv.slice(2);
@@ -206,11 +223,11 @@ const doc = new Document({
         // ---- 四、方案优势 ----
         new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("四、方案优势")] }),
         ...[
-          "全系产品原厂正品，享受完整质保服务",
-          "支持企业批量采购优惠，量大价优",
-          "免费上门安装调试（限市区范围内）",
-          "7×24 小时售后技术支持",
-          "提供 15 天价保服务，采购无忧",
+          "本地化服务团队，专属客户经理与技术保障团队双线对接",
+          "SLA 服务等级协议承诺，网络可用率 ≥ 99.9%（可按需升级）",
+          "7×24 小时网络监控告警，P1 级故障 15 分钟响应",
+          "云网一体的端到端交付，开通、组网、迁移统一负责",
+          "支持按需扩容与多期演进规划，保护既有投资",
         ].map((a) =>
           new Paragraph({
             numbering: { reference: "bullets", level: 0 },
@@ -222,13 +239,13 @@ const doc = new Document({
         new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun("五、售后服务承诺")] }),
         new Paragraph({
           spacing: { after: 100 },
-          children: [new TextRun({ text: "本方案所含产品均享受以下售后服务：", size: 22 })],
+          children: [new TextRun({ text: "本方案所含服务均按以下标准提供保障：", size: 22 })],
         }),
         ...[
-          "整机保修 1 年，主要部件保修 2 年",
-          "保修期内非人为损坏免费维修",
-          "客服热线：0571-8770XXXX（工作日 9:00-21:00）",
-          "维修寄修地址：浙江省杭州市滨江区XXXX",
+          "7×24 小时客服与故障受理热线，重大故障本地网范围内 30 分钟内到场",
+          "专属客户经理月度回访，季度提供网络运行质量报告",
+          "SLA 未达标按服务等级协议约定补偿",
+          "重大保障期（产线检修、业务大促等）提供现场驻场支持",
         ].map((s) =>
           new Paragraph({
             numbering: { reference: "bullets", level: 0 },

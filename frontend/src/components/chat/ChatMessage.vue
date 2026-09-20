@@ -27,6 +27,8 @@ emit: rated(msg, rating, reason)
       <div class="msg bot">
         <div v-if="msg.html" class="md" v-html="msg.html"></div>
         <div v-else-if="msg.content" class="md">{{ msg.content }}</div>
+        <!-- 报告/看板 HTML（REPORT_HTML_START/END 抽取通道），iframe 沙箱渲染 + 下载/新窗口 -->
+        <ReportViewer v-if="msg.reportHtml" :html="msg.reportHtml" style="margin: 8px 0 4px" />
         <div v-if="msg.error" class="msg-error">⚠ {{ msg.error }}</div>
         <div v-if="!msg.html && !msg.content && !msg.error" class="msg-loading">
           <span class="loading-dot">.</span>
@@ -104,6 +106,11 @@ emit: rated(msg, rating, reason)
         </div>
       </div>
 
+      <!-- 产物文件（数字员工生成的 Word/纪要/CSV 等，可下载/预览） -->
+      <div v-if="msg.files && msg.files.length" class="file-list">
+        <FileCard v-for="f in msg.files" :key="f.path" :file="f" />
+      </div>
+
       <!-- 审批卡片 -->
       <div v-if="msg.approval" class="approval-card">
         <div class="approval-head">
@@ -123,6 +130,8 @@ emit: rated(msg, rating, reason)
 <script setup>
 import { ref } from 'vue'
 import ReasonPopover from './ReasonPopover.vue'
+import FileCard from './FileCard.vue'
+import ReportViewer from '../agent/analyst/ReportViewer.vue'
 
 const props = defineProps({
   msg: { type: Object, required: true },

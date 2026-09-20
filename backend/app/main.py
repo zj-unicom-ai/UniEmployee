@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, catalog, conversations, ontology, runtime, scheduler
+from app import auth, catalog, conversations, ontology, runtime, scheduler, traces
 from app import db as dblayer
 from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
@@ -34,11 +34,12 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.13.2")
+APP_VERSION = os.environ.get("APP_VERSION", "0.19.1")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
 _PASSWORD_CHANGE_ALLOWED = {"/api/auth/login", "/api/auth/change-password", "/api/auth/me"}
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 @asynccontextmanager
@@ -64,6 +65,8 @@ async def lifespan(app):
     catalog.backfill_xiaoshu_skills()
     catalog.backfill_netops_upgrade()
     catalog.backfill_sandbox_backend()
+    catalog.backfill_ticket_approval()
+    catalog.backfill_market_intel_v2()
     # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
     # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
     catalog.backfill_workspace_paths()
@@ -85,12 +88,21 @@ async def lifespan(app):
     ontology.seed_demo_if_empty()
     ontology.seed_netops_demo_if_empty()
     ontology.seed_netops_resources_if_empty()
+    ontology.seed_crm_demo_if_empty()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )
     # 外部 IM 的身份映射与持久队列：仅执行幂等建表，不会启动任何频道连接。
     from app.im import jobs as im_jobs
     im_jobs.init()
+    # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
+    from app import automations as _automations
+    _automations.backfill_seeds()
+    # 上次进程意外退出可能留下 status=running 的 Trace；启动时收口为
+    # abandoned，避免运维排障时误判为仍在执行。
+    stale_runs = traces.finish_stale_running()
+    if stale_runs:
+        log.warning("已将上次进程遗留的 running Trace 标记为 abandoned：%d 条", stale_runs)
     # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）
@@ -142,6 +154,17 @@ async def request_logging_middleware(request: Request, call_next):
     token = request_id_var.set(rid)
     start = time.time()
     try:
+        # OIDC 登录完成后使用 HTTP-only 会话 cookie。对所有有副作用的 API
+        # 强制双提交 CSRF token；Bearer JWT 不会被浏览器自动附带，保持兼容。
+        if (request.method not in _SAFE_METHODS and request.url.path.startswith("/api/")
+                and request.cookies.get(auth.SESSION_COOKIE)
+                and not request.headers.get("Authorization")):
+            csrf_cookie = request.cookies.get(auth.CSRF_COOKIE, "")
+            csrf_header = request.headers.get("X-CSRF-Token", "")
+            if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
+                response = JSONResponse(status_code=403, content={"error": "csrf_validation_failed"})
+                response.headers["X-Request-Id"] = rid
+                return response
         if request.url.path.startswith("/api/") and request.url.path not in _PASSWORD_CHANGE_ALLOWED:
             try:
                 current = await auth.get_current_user(request.headers.get("Authorization"))
@@ -168,9 +191,8 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/health")
-async def health():
-    """健康检查（无需登录）：供容器探针 / 监控使用。"""
+def _dependency_health() -> tuple[dict, bool]:
+    """探测依赖状态；返回结构化结果与 readiness 布尔值。"""
     dbs: dict[str, str] = {}
     for name in DB_FILES:
         try:
@@ -187,13 +209,38 @@ async def health():
     except Exception as e:
         sandbox_status = f"error: {type(e).__name__}: {e}"
     all_ok = all(v == "ok" for v in dbs.values()) and not sandbox_status.startswith("error")
-    return {
+    payload = {
         "status": "ok" if all_ok else "degraded",
         "version": APP_VERSION,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "databases": dbs,
         "sandbox": sandbox_status,
     }
+    return payload, all_ok
+
+
+@app.get("/livez")
+async def livez():
+    """进程存活检查：不探测数据库等外部依赖。"""
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+
+@app.get("/readyz")
+async def readyz():
+    """依赖就绪检查：关键依赖不可用时返回 503。"""
+    payload, all_ok = _dependency_health()
+    return JSONResponse(status_code=200 if all_ok else 503, content=payload)
+
+
+@app.get("/health")
+async def health():
+    """兼容旧监控的结构化健康检查；HTTP 状态始终为 200。"""
+    payload, _ = _dependency_health()
+    return payload
 
 
 # 挂载 API 路由
@@ -202,12 +249,25 @@ app.include_router(app_router)
 
 # ---- 前端静态文件 ----
 _FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
-app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+# CI 后端测试与前端构建分属不同 job，测试时 dist/assets 尚未生成；
+# 延迟检查目录，生产环境正常构建后仍由同一路径提供静态文件。
+app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets"), check_dir=False), name="assets")
 
 
 @app.get("/")
 async def index():
     return FileResponse(_FRONTEND_DIST / "index.html")
+
+
+@app.get("/report-viewer.html")
+async def report_viewer():
+    """受控报告壳页面：报告内容由页面脚本放入 sandbox iframe。
+
+    主站 token / cookie 不会自动带到这里——壳页面读 localStorage 中的
+    报告 HTML 后注入沙箱 iframe，与主窗口隔离；避免报告 HTML 中潜在
+    脚本读取主站会话。
+    """
+    return FileResponse(_FRONTEND_DIST / "report-viewer.html")
 
 
 # SPA 回落：Vue Router 管理的路径也返回 index.html

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <title>数据分析报告</title>
+  <style>
+    :root, body { margin: 0; min-height: 100%; background: #fff; }
+    body { overflow: auto; }
+    iframe { display: block; width: 100%; min-height: 100vh; border: 0; }
+    .error { box-sizing: border-box; padding: 32px; color: #6b7280; font: 14px/1.6 system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="error" class="error" hidden>报告不存在或已过期，请返回分析页面重新打开。</div>
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search)
+      const id = params.get('id') || ''
+      const key = `uniemployee:report-viewer:${id}`
+      let record = null
+      try {
+        record = JSON.parse(localStorage.getItem(key) || 'null')
+      } catch {}
+
+      // 报告内容只在本浏览器保留 24 小时，支持刷新但避免无限积累。
+      if (!record || typeof record.html !== 'string' ||
+          Date.now() - Number(record.createdAt || 0) > 24 * 60 * 60 * 1000) {
+        try { localStorage.removeItem(key) } catch {}
+        document.getElementById('error').hidden = false
+        return
+      }
+
+      const iframe = document.createElement('iframe')
+      // 只允许报告自身运行图表脚本，不授予同源、表单、弹窗、顶层导航权限。
+      // 省略 allow-same-origin 是隔离主站 token 的关键。
+      iframe.setAttribute('sandbox', 'allow-scripts')
+      iframe.setAttribute('referrerpolicy', 'no-referrer')
+      iframe.srcdoc = record.html
+      document.body.replaceChildren(iframe)
+    })()
+  </script>
+</body>
+</html>

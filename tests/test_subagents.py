@@ -36,6 +36,33 @@ def test_catalog_persists_subagents():
     assert cfg["subagent_policy"] == "调研类任务必须委派"
 
 
+def test_runtime_build_spec_keeps_subagents():
+    cfg = {
+        "id": "emp_runtime_sub",
+        "name": "运行时子代理",
+        "role": "测试",
+        "model": "dummy-model",
+        "persona": "测试人设",
+        "kind": "composed",
+        "skills": [],
+        "tools": [],
+        "mcp_servers": {},
+        "kbs": [],
+        "sops": [],
+        "sop_text": "",
+        "connectors": [],
+        "skill_dirs": {},
+        "subagents": [{"name": "researcher", "tools": []}],
+        "subagent_policy": "必须委派 researcher",
+    }
+
+    spec = runtime.build_spec(cfg)
+
+    assert spec.subagents == [{"name": "researcher", "tools": []}]
+    assert spec.subagent_policy == "必须委派 researcher"
+    assert spec.kind == "composed"
+
+
 def test_backfill_subagents_for_existing_seed_employee():
     catalog.create_employee({
         "id": "xiaoxiao", "name": "客户经理", "role": "客户经理",
@@ -79,6 +106,8 @@ def test_compiler_passes_assembled_subagents(monkeypatch):
     tool_names = {t.name for t in subagents[0]["tools"]}
     assert "bocha_search" in tool_names
     assert "get_current_time" in tool_names
+    enabled = subagents[0]["middleware"][0].__dict__["_enabled_tools"]
+    assert enabled == frozenset({"ls", "read_file", "glob", "grep"})
     assert "子代理委派" in captured["system_prompt"]
     assert "researcher" in captured["system_prompt"]
     assert "调研类任务必须先委派 researcher" in captured["system_prompt"]

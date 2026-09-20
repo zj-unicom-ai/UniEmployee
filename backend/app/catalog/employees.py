@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 from .db import _conn
 
 
@@ -192,6 +193,7 @@ def catalog() -> dict:
                      "is_custom": bool(s["dir"] and s["dir"].startswith("skills-custom/"))}
                    for s in allrows("skills")],
         "tools": [{"id": t["id"], "name": t["name"], "description": t["description"],
+                    "source": t["source"],
                     "needs_approval": json.loads(t["needs_approval"]) if t["needs_approval"] else None,
                     "is_global": t["id"] in GLOBAL_TOOL_NAMES}
                   for t in allrows("tools")],
@@ -214,7 +216,8 @@ def catalog() -> dict:
 # ---------------------------------------------------------------------------
 
 def create_employee(data: dict) -> str:
-    emp_id = data.get("id") or ("emp_" + time.strftime("%Y%m%d%H%M%S"))
+    # 秒级时间戳同秒创建会互相覆盖（ON CONFLICT DO UPDATE），加 uuid 后缀保唯一
+    emp_id = data.get("id") or ("emp_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     interrupt_on = _build_interrupt_on(data.get("tools", []))
     subagents = json.dumps(data.get("subagents") or [], ensure_ascii=False)

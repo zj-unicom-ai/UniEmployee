@@ -40,8 +40,8 @@ RUN mkdir -p /app/backend/skills-custom /app/workspace/data
 
 EXPOSE 8787
 
-# 容器探针：连不上 /health 即视为不健康
+# 容器探针：依赖未就绪时 /readyz 返回 503，容器视为不健康
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8787/health', timeout=4)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8787/readyz', timeout=4)"
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

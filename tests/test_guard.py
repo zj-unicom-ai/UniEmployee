@@ -27,6 +27,29 @@ def test_settings_and_tool_whitelist():
     assert guard.tool_allowed("tool_x", "user")
 
 
+def test_unified_tool_allow_deny_policy_and_mcp_default_deny():
+    guard.set_setting("admin_only_tools", "")
+    guard.set_setting("tool_allowlist", "read_*, kb_search")
+    guard.set_setting("tool_denylist", "read_secret")
+    guard.set_setting("mcp_default_deny", "1")
+    guard.set_setting("mcp_allowlist", "crm.order_query")
+
+    assert guard.tool_allowed("read_table", "user")
+    assert not guard.tool_allowed("write_table", "user")
+    assert not guard.tool_allowed("read_secret", "user")
+    assert not guard.tool_allowed("crm.order_query", "user", source="mcp")
+    guard.set_setting("tool_allowlist", "read_*, kb_search, crm.order_query")
+    assert guard.tool_allowed("crm.order_query", "user", source="mcp",
+                              connector_granted=True)
+    # 全局 allowlist 仍需先放行 MCP 名称；此处验证显式 mcp allow 生效。
+    assert guard.tool_allowed("crm.order_query", "user", source="mcp")
+    assert guard.tool_allowed("anything", "admin", source="mcp")
+
+    for key, value in (("tool_allowlist", ""), ("tool_denylist", ""),
+                       ("mcp_default_deny", "1"), ("mcp_allowlist", "")):
+        guard.set_setting(key, value)
+
+
 def test_guard_logs():
     guard.log("input_blocked", "测试拦截记录", user_id="u1",
               extra={"word": "x"})

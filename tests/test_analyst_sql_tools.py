@@ -19,7 +19,8 @@ from app.agent.analyst.tools.tool_call_manager import (
 )
 from app.agent.analyst.tools.sql_tools import (
     sql_db_smart_search, sql_db_table_schema, sql_db_table_relationship,
-    sql_db_query, sql_db_query_checker,
+    sql_db_query, sql_db_query_checker, sql_db_profile,
+    sql_db_quality_check,
 )
 
 
@@ -464,6 +465,72 @@ def test_sql_db_query_invalid_sql_returns_error(sqlite_datasource):
         "query": "SELECT * FROM no_such_table",
     })
     assert "失败" in out or "error" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# sql_db_profile / sql_db_quality_check：分析前数据验证工具
+# ---------------------------------------------------------------------------
+
+def test_sql_db_profile_returns_table_shape_and_column_quality(sqlite_datasource):
+    out = sql_db_profile.invoke({
+        "datasource_id": sqlite_datasource,
+        "table_names": "customers,orders",
+    })
+    assert "数据画像结果" in out
+    assert "customers" in out
+    assert "orders" in out
+    assert "行数" in out
+    assert "字段数" in out
+    assert "非空率" in out
+
+
+def test_sql_db_profile_rejects_empty_table_names(sqlite_datasource):
+    out = sql_db_profile.invoke({
+        "datasource_id": sqlite_datasource,
+        "table_names": "",
+    })
+    assert "table_names" in out
+    assert "不能为空" in out
+
+
+def test_sql_db_quality_check_passes_clean_query(sqlite_datasource):
+    out = sql_db_quality_check.invoke({
+        "datasource_id": sqlite_datasource,
+        "query": "SELECT id, name FROM customers ORDER BY id",
+        "expected_min_rows": 2,
+    })
+    assert "数据质量检查结果" in out
+    assert "通过" in out
+    assert "缺失值检查通过" in out
+
+
+def test_sql_db_quality_check_warns_small_sample(sqlite_datasource):
+    out = sql_db_quality_check.invoke({
+        "datasource_id": sqlite_datasource,
+        "query": "SELECT id, name FROM customers ORDER BY id",
+        "expected_min_rows": 3,
+    })
+    assert "有风险" in out
+    assert "样本量较小" in out
+
+
+def test_sql_db_quality_check_blocks_empty_result(sqlite_datasource):
+    out = sql_db_quality_check.invoke({
+        "datasource_id": sqlite_datasource,
+        "query": "SELECT id, name FROM customers WHERE id = 9999",
+    })
+    assert "不通过" in out
+    assert "结果为空" in out
+
+
+def test_sql_db_quality_check_accepts_table_name(sqlite_datasource):
+    out = sql_db_quality_check.invoke({
+        "datasource_id": sqlite_datasource,
+        "table_name": "customers",
+        "expected_min_rows": 2,
+    })
+    assert "表 `customers`" in out
+    assert "通过" in out
 
 
 # ---------------------------------------------------------------------------

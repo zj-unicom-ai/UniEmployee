@@ -25,6 +25,7 @@ def _conn():
             conversation_id TEXT NOT NULL,
             employee_id     TEXT NOT NULL,
             user_id         TEXT DEFAULT 'default',
+            tenant_id       TEXT DEFAULT 'default',
             tool            TEXT,
             args            TEXT,
             inner_thread    TEXT,
@@ -33,6 +34,14 @@ def _conn():
             expires_at      TEXT
         )
     """)
+    cols = dblayer.table_columns(con, "approvals")
+    if "tenant_id" not in cols:
+        con.execute("ALTER TABLE approvals ADD COLUMN tenant_id TEXT DEFAULT 'default'")
+    enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
+    if enterprise_tenant != "default":
+        con.execute("UPDATE approvals SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
+                    (enterprise_tenant,))
+    con.commit()
     return con
 
 
@@ -70,7 +79,7 @@ def get(approval_id: str) -> dict | None:
 
 
 def create(conversation_id: str, employee_id: str, tool_name: str, tool_args: dict,
-           user_id: str = "default", inner_thread: str | None = None) -> dict:
+           user_id: str = "default", tenant_id: str = "default", inner_thread: str | None = None) -> dict:
     """创建审批单。
 
     inner_thread 非空时，表示这是 workflow 内层图审批（Point2：refund StateGraph
@@ -90,9 +99,9 @@ def create(conversation_id: str, employee_id: str, tool_name: str, tool_args: di
         expires_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + ttl))
         con.execute(
             "INSERT INTO approvals "
-            "(approval_id, conversation_id, employee_id, user_id, tool, args, inner_thread,"
-            " status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (approval_id, conversation_id, employee_id, user_id, tool_name,
+            "(approval_id, conversation_id, employee_id, user_id, tenant_id, tool, args, inner_thread,"
+            " status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (approval_id, conversation_id, employee_id, user_id, tenant_id, tool_name,
              json.dumps(tool_args, ensure_ascii=False, default=str), inner_thread,
              "pending", created_at, expires_at),
         )
@@ -101,6 +110,7 @@ def create(conversation_id: str, employee_id: str, tool_name: str, tool_args: di
         "conversation_id": conversation_id,
         "employee_id": employee_id,
         "user_id": user_id,
+        "tenant_id": tenant_id,
         "tool": tool_name,
         "args": tool_args,
         "inner_thread": inner_thread,
@@ -111,15 +121,20 @@ def create(conversation_id: str, employee_id: str, tool_name: str, tool_args: di
     return record
 
 
-def decide(approval_id: str, decision: str) -> dict | None:
+def decide(approval_id: str, decision: str, tenant_id: str | None = None) -> dict | None:
     with _conn() as con:
-        row = con.execute("SELECT * FROM approvals WHERE approval_id=?", (approval_id,)).fetchone()
+        sql, params = "SELECT * FROM approvals WHERE approval_id=?", [approval_id]
+        if tenant_id:
+            sql += " AND tenant_id=?"; params.append(tenant_id)
+        row = con.execute(sql, params).fetchone()
         if not row:
             return None
         record = _expire_if_needed(con, _row_to_dict(row))
         if record["status"] != "pending" or decision not in ("approve", "reject"):
             return None
-        con.execute("UPDATE approvals SET status=? WHERE approval_id=?",
-                    (decision, approval_id))
+        sql, params = "UPDATE approvals SET status=? WHERE approval_id=?", [decision, approval_id]
+        if tenant_id:
+            sql += " AND tenant_id=?"; params.append(tenant_id)
+        con.execute(sql, params)
         record["status"] = decision
         return record

@@ -38,6 +38,15 @@ export function renderMd(md) {
 
 // 报告 HTML 提取：从 markdown 文本中抽出 REPORT_HTML_START/END 包裹的整段 HTML
 // 让前端用 iframe srcdoc 渲染（renderMd 的 sanitize 会剥掉 script/style，必须独立通道）
+function isRenderableReportHtml(html) {
+  const s = (html || '').trim()
+  if (!s || s.length < 80) return false
+  return /<!doctype\s+html/i.test(s) ||
+    (/<html[\s>]/i.test(s) && /<\/html>/i.test(s)) ||
+    (/<(?:head|body|div|section|main|script|style|canvas|svg)[\s>]/i.test(s) &&
+      /<\/(?:div|section|main|script|style|canvas|svg)>/i.test(s))
+}
+
 export function extractReport(md) {
   const re = /<!--\s*REPORT_HTML_START\s*-->([\s\S]*?)<!--\s*REPORT_HTML_END\s*-->/
   const m = (md || '').match(re)
@@ -46,6 +55,9 @@ export function extractReport(md) {
   // 兼容模型把整段包在 ```html 围栏里的情况
   const fence = html.match(/^```(?:html)?\s*\n([\s\S]*?)\n```$/)
   if (fence) html = fence[1].trim()
+  if (!isRenderableReportHtml(html)) {
+    return { reportHtml: '', cleanedMd: md || '' }
+  }
   // 删掉报告段（含外层围栏），保留前后文本
   const cleanedMd = (md || '').replace(re, '').trim()
   return { reportHtml: html, cleanedMd }
@@ -122,6 +134,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.sql) msg.sql = ev.sql || ''
       else if (ev.sql) msg.sql += '\n;\n' + ev.sql
       touch()
+    } else if (ev.type === 'file') {
+      // 数字员工产物文件（Word 方案/纪要/CSV 等）：渲染成可下载/可预览的文件卡片
+      if (!msg.files) msg.files = []
+      if (!msg.files.some(f => f.path === ev.path)) {
+        msg.files.push({ name: ev.name, path: ev.path, size: ev.size })
+      }
+      touch()
     } else if (ev.type === 'subagent') {
       if (!msg.subagents) msg.subagents = []
       let sa = msg.subagents.find(s => s.name === ev.name)
@@ -141,11 +160,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         args: ev.args ? JSON.stringify(ev.args) : '',
         resolved: null,
       }
+      msg._streamTerminal = true
       setStage('skill', 'active', `审批中：${ev.tool}`)
       touch()
     } else if (ev.type === 'error') {
       // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
       msg.error = ev.message || '任务执行出错，请稍后重试'
+      msg._streamTerminal = true
       setStage('report', 'error', msg.error)
       touch()
     } else if (ev.type === 'message_end') {
@@ -154,6 +175,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       msg.message_id = ev.message_id
       msg.employee_id = ev.employee_id
       msg.conversation_id = ev.conversation_id
+      msg._streamTerminal = true
       touch()
     }
   }
@@ -174,6 +196,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       }
     }
     const msg = messages.value[msgIdx]
+    if (msg && !msg._streamTerminal) {
+      msg.error = msg._md || msg.html || msg.content
+        ? '连接已中断，当前结果可能不完整，请刷新历史或继续追问。'
+        : '连接已中断，未收到最终结果，请重试。'
+      setStage('report', 'error', msg.error)
+      touch()
+    }
     if (msg && msg.trace && !msg.trace.length) delete msg.trace
     scrollToBottom?.()
   }

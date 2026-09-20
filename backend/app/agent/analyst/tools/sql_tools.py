@@ -38,6 +38,13 @@ logger = logging.getLogger("app.agent.analyst.tools.sql_tools")
 _BM25_TOP_K = 20
 _MAX_RESULT_ROWS = 50
 
+_NUMERIC_TYPE_HINTS = (
+    "int", "integer", "bigint", "smallint", "tinyint",
+    "decimal", "numeric", "number", "real", "float", "double",
+    "money",
+)
+_TIME_TYPE_HINTS = ("date", "time", "timestamp", "datetime")
+
 
 # ---------------------------------------------------------------------------
 # SSE 事件流桥接：把 sql_db_query 的结构化结果按 conv_id 缓冲，
@@ -217,6 +224,31 @@ def _record_tool_call(session_id: str, tool_name: str,
     """记录工具调用。"""
     manager = get_tool_call_manager()
     manager.record_call(session_id, tool_name, success, query)
+
+
+def _quote_ident(identifier: str, db_type: str = "") -> str:
+    """按方言保守引用标识符，标识符来自 schema 白名单而非用户任意输入。"""
+    ident = str(identifier or "")
+    if db_type in ("mysql", "mariadb"):
+        return f"`{ident.replace('`', '``')}`"
+    if db_type in ("mssql", "sqlserver"):
+        return f"[{ident.replace(']', ']]')}]"
+    return f'"{ident.replace(chr(34), chr(34) + chr(34))}"'
+
+
+def _column_kind(col_type: str) -> str:
+    typ = (col_type or "").lower()
+    if any(h in typ for h in _NUMERIC_TYPE_HINTS):
+        return "numeric"
+    if any(h in typ for h in _TIME_TYPE_HINTS):
+        return "time"
+    return "text"
+
+
+def _format_pct(numerator: int | float, denominator: int | float) -> str:
+    if not denominator:
+        return "0.00%"
+    return f"{(float(numerator) / float(denominator) * 100):.2f}%"
 
 
 def _get_session_id(datasource_id: str, conversation_id: str = "") -> str:
@@ -560,6 +592,215 @@ def sql_db_query_checker(query: str) -> str:
     return "✅ SQL 查询语法检查通过，可以执行。"
 
 
+@tool
+def sql_db_profile(datasource_id: str = "", table_names: str = "",
+                   sample_limit: int = 100) -> str:
+    """生成数据表画像，用于正式分析前验证数据覆盖、缺失和字段分布。
+
+    Args:
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
+        table_names: 表名，多个表用逗号分隔
+        sample_limit: 每张表分类字段 Top 值抽样上限，默认 100
+    """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
+    if not table_names or not table_names.strip():
+        return "错误: table_names 不能为空，请传入需要画像的表名"
+    try:
+        sample_limit_int = int(sample_limit)
+    except Exception:
+        sample_limit_int = 100
+
+    ds = ds_manager.get_datasource(datasource_id) or {}
+    db_type = ds.get("db_type", "")
+    requested = [t.strip() for t in table_names.split(",") if t.strip()]
+    schema = schema_inspector.get_table_schema(datasource_id, requested)
+    parts = ["数据画像结果："]
+
+    for table_name in requested:
+        info = schema.get(table_name)
+        if not info:
+            parts.append(f"\n表 `{table_name}`：不存在或不可读取。")
+            continue
+        if not ds_manager.is_table_readable(datasource_id, table_name):
+            parts.append(f"\n表 `{table_name}`：未通过表名白名单校验，已跳过。")
+            continue
+
+        table_expr = _quote_ident(table_name, db_type)
+        columns = info.get("columns", {})
+        count_sql = f"SELECT COUNT(*) AS total_rows FROM {table_expr}"
+        count_result = ds_manager.execute_query(datasource_id, count_sql, limit=1)
+        if not count_result.get("success"):
+            parts.append(
+                f"\n表 `{table_name}`：行数统计失败：{count_result.get('error')}"
+            )
+            continue
+        total_rows = int((count_result.get("data") or [{}])[0].get("total_rows") or 0)
+        parts.append(f"\n表 `{table_name}`：")
+        parts.append(f"- 行数：{total_rows}")
+        parts.append(f"- 字段数：{len(columns)}")
+        if total_rows == 0:
+            parts.append("- 质量提示：空表，当前不适合支撑分析结论。")
+            continue
+
+        metric_exprs = []
+        column_kinds = {}
+        for col_name, col_info in columns.items():
+            col_expr = _quote_ident(col_name, db_type)
+            alias = re.sub(r"\W+", "_", col_name)
+            column_kinds[col_name] = _column_kind(col_info.get("type", ""))
+            metric_exprs.append(
+                f"SUM(CASE WHEN {col_expr} IS NULL THEN 1 ELSE 0 END) AS "
+                f"{_quote_ident(alias + '_nulls', db_type)}"
+            )
+            if column_kinds[col_name] in ("numeric", "time"):
+                metric_exprs.extend([
+                    f"MIN({col_expr}) AS {_quote_ident(alias + '_min', db_type)}",
+                    f"MAX({col_expr}) AS {_quote_ident(alias + '_max', db_type)}",
+                ])
+            if column_kinds[col_name] == "numeric":
+                metric_exprs.append(
+                    f"AVG({col_expr}) AS {_quote_ident(alias + '_avg', db_type)}"
+                )
+
+        stats_sql = f"SELECT {', '.join(metric_exprs)} FROM {table_expr}"
+        stats_result = ds_manager.execute_query(datasource_id, stats_sql, limit=1)
+        stats = (stats_result.get("data") or [{}])[0] if stats_result.get("success") else {}
+
+        for col_name, col_info in columns.items():
+            alias = re.sub(r"\W+", "_", col_name)
+            nulls = int(stats.get(f"{alias}_nulls") or 0)
+            kind = column_kinds[col_name]
+            line = (
+                f"- `{col_name}` ({col_info.get('type', '')})："
+                f"非空率 {_format_pct(total_rows - nulls, total_rows)}"
+            )
+            if kind in ("numeric", "time"):
+                line += f"，范围 {stats.get(alias + '_min')} ~ {stats.get(alias + '_max')}"
+            if kind == "numeric" and stats.get(alias + "_avg") is not None:
+                line += f"，均值 {stats.get(alias + '_avg')}"
+            parts.append(line)
+
+        text_cols = [name for name, kind in column_kinds.items() if kind == "text"][:3]
+        for col_name in text_cols:
+            col_expr = _quote_ident(col_name, db_type)
+            top_sql = (
+                f"SELECT {col_expr} AS value, COUNT(*) AS cnt "
+                f"FROM {table_expr} WHERE {col_expr} IS NOT NULL "
+                f"GROUP BY {col_expr} ORDER BY cnt DESC LIMIT 5"
+            )
+            top_result = ds_manager.execute_query(
+                datasource_id, top_sql, limit=max(1, min(sample_limit_int, 100))
+            )
+            if top_result.get("success") and top_result.get("data"):
+                values = ", ".join(
+                    f"{row.get('value')}({row.get('cnt')})"
+                    for row in top_result["data"][:5]
+                )
+                parts.append(f"- `{col_name}` Top 值：{values}")
+
+    parts.append("\n请基于以上画像判断数据是否足以支撑后续分析。")
+    return "\n".join(parts)
+
+
+@tool
+def sql_db_quality_check(datasource_id: str = "", query: str = "",
+                         table_name: str = "", expected_min_rows: int = 10) -> str:
+    """检查分析 SQL 或目标表的结果可信度，重点识别空结果、样本量、缺失和重复。
+
+    Args:
+        datasource_id: 数据源 ID（可选；不传时用当前会话选中的数据源）
+        query: 待分析的 SELECT SQL；为空时可传 table_name 检查整表
+        table_name: 目标表名（query 为空时使用）
+        expected_min_rows: 期望最小样本量，默认 10
+    """
+    datasource_id = _resolve_datasource_id(datasource_id)
+    if not datasource_id:
+        return "错误: 未指定数据源。请在对话页面选择数据源后再提问。"
+    _deny = _check_datasource_access(datasource_id)
+    if _deny:
+        return _deny
+
+    ds = ds_manager.get_datasource(datasource_id) or {}
+    db_type = ds.get("db_type", "")
+    source_label = "分析 SQL"
+    check_sql = (query or "").strip().rstrip(";")
+    if not check_sql:
+        if not table_name or not table_name.strip():
+            return "错误: query 和 table_name 至少传入一个"
+        if not ds_manager.is_table_readable(datasource_id, table_name):
+            return f"错误: 表 {table_name} 不存在或未通过白名单校验"
+        source_label = f"表 `{table_name}`"
+        check_sql = f"SELECT * FROM {_quote_ident(table_name.strip(), db_type)}"
+
+    result = ds_manager.execute_query(datasource_id, check_sql, limit=100)
+    if not result.get("success"):
+        return f"数据质量检查失败：{result.get('error')}"
+
+    rows = result.get("data") or []
+    columns = result.get("columns") or []
+    issues = []
+    warnings = []
+    positives = []
+
+    if not rows:
+        issues.append("结果为空，不能支撑业务结论。")
+    elif len(rows) < max(1, int(expected_min_rows)):
+        warnings.append(
+            f"样本量较小：当前仅取到 {len(rows)} 行，低于期望 {expected_min_rows} 行。"
+        )
+    else:
+        positives.append(f"样本量检查通过：当前检查 {len(rows)} 行。")
+
+    if rows and columns:
+        null_lines = []
+        for col in columns:
+            nulls = sum(1 for row in rows if row.get(col) is None)
+            if nulls:
+                null_lines.append(f"`{col}` 缺失 {nulls} 行（{_format_pct(nulls, len(rows))}）")
+        if null_lines:
+            warnings.append("字段缺失：" + "；".join(null_lines))
+        else:
+            positives.append("缺失值检查通过：抽样结果中未发现 NULL。")
+
+        seen = set()
+        duplicate_count = 0
+        for row in rows:
+            key = tuple(row.get(col) for col in columns)
+            if key in seen:
+                duplicate_count += 1
+            else:
+                seen.add(key)
+        if duplicate_count:
+            warnings.append(f"发现 {duplicate_count} 行完全重复记录，需确认是否影响口径。")
+        else:
+            positives.append("重复记录检查通过：未发现完全重复行。")
+
+    lines = [f"数据质量检查结果（{source_label}）："]
+    if issues:
+        lines.append("结论：不通过，当前数据不足以支撑分析。")
+    elif warnings:
+        lines.append("结论：有风险，可分析但需要在结论中说明限制。")
+    else:
+        lines.append("结论：通过，可进入正式分析。")
+
+    if positives:
+        lines.append("\n通过项：")
+        lines.extend(f"- {item}" for item in positives)
+    if warnings:
+        lines.append("\n风险项：")
+        lines.extend(f"- {item}" for item in warnings)
+    if issues:
+        lines.append("\n阻断项：")
+        lines.extend(f"- {item}" for item in issues)
+    lines.append("\n后续要求：分析结论必须引用真实查询结果，并说明以上风险项。")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # 导出工具列表（供 compiler.py 注册）
 # ---------------------------------------------------------------------------
@@ -570,4 +811,6 @@ ANALYST_SQL_TOOLS = [
     sql_db_table_relationship,
     sql_db_query,
     sql_db_query_checker,
+    sql_db_profile,
+    sql_db_quality_check,
 ]

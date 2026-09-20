@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import time
 import uuid
@@ -43,6 +44,7 @@ def _conn():
         conv_id     TEXT,
         employee_id TEXT,
         user_id     TEXT,
+        tenant_id   TEXT DEFAULT 'default',
         kind        TEXT,               -- message / resume
         input_preview TEXT,
         status      TEXT,               -- running / done / error / interrupted
@@ -68,6 +70,14 @@ def _conn():
         duration_ms INTEGER
     )""")
     con.execute("CREATE INDEX IF NOT EXISTS idx_runs_conv ON runs(conv_id)")
+    cols = dblayer.table_columns(con, "runs")
+    if "tenant_id" not in cols:
+        con.execute("ALTER TABLE runs ADD COLUMN tenant_id TEXT DEFAULT 'default'")
+    enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
+    if enterprise_tenant != "default":
+        con.execute("UPDATE runs SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
+                    (enterprise_tenant,))
+    con.execute("CREATE INDEX IF NOT EXISTS idx_runs_tenant ON runs(tenant_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id)")
     return con
 
@@ -88,14 +98,14 @@ def _clip(v: Any, n: int = _PREVIEW) -> str:
 # ---------------------------------------------------------------------------
 
 def start_run(conv_id: str, employee_id: str, user_id: str,
-              input_preview: str = "", kind: str = "message") -> str:
+              input_preview: str = "", kind: str = "message", tenant_id: str = "default") -> str:
     run_id = "r_" + uuid.uuid4().hex[:16]
     try:
         with _conn() as con:
             con.execute(
-                "INSERT INTO runs(run_id,conv_id,employee_id,user_id,kind,"
-                "input_preview,status,started_at) VALUES(?,?,?,?,?,?,?,?)",
-                (run_id, conv_id, employee_id, user_id, kind,
+                "INSERT INTO runs(run_id,conv_id,employee_id,user_id,tenant_id,kind,"
+                "input_preview,status,started_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (run_id, conv_id, employee_id, user_id, tenant_id, kind,
                  _clip(input_preview, 500), "running", _now()))
     except Exception:
         logger.warning("trace start_run 写库失败 run_id=%s conv_id=%s", run_id, conv_id, exc_info=True)
@@ -127,16 +137,35 @@ def finish_run(run_id: str, status: str = "done", error: str = ""):
         logger.warning("trace finish_run 更新失败 run_id=%s status=%s", run_id, status, exc_info=True)
 
 
+def finish_stale_running() -> int:
+    """启动时把上次进程遗留的 status='running' Trace 收口为 abandoned。
+
+    返回收口的条数。仅做 UPDATE，不抛异常——失败的清理不应拖垮服务启动。
+    """
+    try:
+        with _conn() as con:
+            cur = con.execute(
+                "UPDATE runs SET status='abandoned', "
+                "error='process exited before run completed' "
+                "WHERE status='running'"
+            )
+            return cur.rowcount or 0
+    except Exception:
+        logger.warning("trace finish_stale_running 清理失败", exc_info=True)
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # 查询（API 用）
 # ---------------------------------------------------------------------------
 
-def list_runs(conv_id: str) -> list[dict]:
+def list_runs(conv_id: str, tenant_id: str | None = None) -> list[dict]:
     try:
         with _conn() as con:
-            rows = con.execute(
-                "SELECT * FROM runs WHERE conv_id=? ORDER BY started_at DESC, run_id DESC",
-                (conv_id,)).fetchall()
+            sql, params = "SELECT * FROM runs WHERE conv_id=?", [conv_id]
+            if tenant_id:
+                sql += " AND tenant_id=?"; params.append(tenant_id)
+            rows = con.execute(sql + " ORDER BY started_at DESC, run_id DESC", params).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         logger.warning("trace list_runs 查询失败 conv_id=%s", conv_id, exc_info=True)
@@ -158,10 +187,13 @@ def employee_of_conv(conv_id: str) -> str | None:
         return None
 
 
-def get_run(run_id: str) -> dict | None:
+def get_run(run_id: str, tenant_id: str | None = None) -> dict | None:
     try:
         with _conn() as con:
-            r = con.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            sql, params = "SELECT * FROM runs WHERE run_id=?", [run_id]
+            if tenant_id:
+                sql += " AND tenant_id=?"; params.append(tenant_id)
+            r = con.execute(sql, params).fetchone()
             if not r:
                 return None
             evs = con.execute(
@@ -174,14 +206,15 @@ def get_run(run_id: str) -> dict | None:
         return None
 
 
-def token_stats() -> dict:
+def token_stats(tenant_id: str | None = None) -> dict:
     """返回 token 使用统计：总数 + 今日数。"""
     try:
         with _conn() as con:
-            total = con.execute("SELECT COALESCE(SUM(total_tokens),0) FROM runs WHERE status!='running'").fetchone()[0]
+            suffix, params = (" AND tenant_id=?", [tenant_id]) if tenant_id else ("", [])
+            total = con.execute("SELECT COALESCE(SUM(total_tokens),0) FROM runs WHERE status!='running'" + suffix, params).fetchone()[0]
             today = con.execute(
-                "SELECT COALESCE(SUM(total_tokens),0) FROM runs WHERE status!='running' AND DATE(started_at)=DATE('now')"
-            ).fetchone()[0]
+                "SELECT COALESCE(SUM(total_tokens),0) FROM runs WHERE status!='running' AND DATE(started_at)=DATE('now')" + suffix,
+                params).fetchone()[0]
         return {"total_tokens": total, "today_tokens": today}
     except Exception:
         logger.warning("trace token_stats 查询失败", exc_info=True)

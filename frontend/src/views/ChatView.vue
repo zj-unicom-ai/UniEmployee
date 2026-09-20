@@ -97,6 +97,7 @@ const modelOptions = computed(() =>
 
 const HINTS = {
   xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
+  'market-intel': '试试：\n① 最近有什么值得关注的行业动态？出一份今日简报\n② 声湃科技把 Mini3 降到 299 了，出个对标分析\n③ 刷到消息说光屿智能融资了 3 个亿，要不要紧？\n④ 简报好了，归档发布（走人工审批）',
 }
 
 // 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
@@ -190,13 +191,28 @@ async function openConversation(cid) {
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
+    // 产物文件按归属轮次（turn_no）挂到生成它的那条回答消息上；
+    // 无轮次信息的旧数据挂到最后一 条回答。实时生成走 file 事件直接进 msg.files。
+    const filesByTurn = {}
+    for (const f of (data.files || [])) {
+      const t = f.turn_no || 0
+      ;(filesByTurn[t] = filesByTurn[t] || []).push(f)
+    }
     messages.value = []
     stream.resetPipeline()
+    let userTurn = 0
+    let lastBot = null
+    const turnLastBot = {}
     for (const t of (data.turns || [])) {
       if (t.role === 'user') {
+        userTurn++
         messages.value.push({ role: 'user', content: t.content, time: fmtNow() })
       } else {
-        const msg = { role: 'bot', content: '', html: renderMd(t.content || ''), _md: t.content || '', trace: [], time: fmtNow() }
+        // 历史消息同样抽取 REPORT_HTML 包裹的看板/报告（与流式 useChatStream 行为一致），
+        // markdown 渲染的是去掉报告段后的剩余文本
+        const { reportHtml, cleanedMd } = extractReport(t.content || '')
+        const msg = { role: 'bot', content: '', html: renderMd(cleanedMd), _md: t.content || '', trace: [], time: fmtNow() }
+        if (reportHtml) msg.reportHtml = reportHtml
         if (t.tool_calls && t.tool_calls.length) {
           msg.trace = t.tool_calls.map(tc => ({
             type: 'tool',
@@ -207,8 +223,20 @@ async function openConversation(cid) {
           }))
         }
         messages.value.push(msg)
+        lastBot = msg
+        turnLastBot[userTurn] = msg
       }
     }
+    for (const group of Object.values(filesByTurn)) {
+      for (const f of group) {
+        const target = turnLastBot[f.turn_no] || lastBot
+        if (target) {
+          if (!target.files) target.files = []
+          if (!target.files.some(x => x.path === f.path)) target.files.push(f)
+        }
+      }
+    }
+    await loadHistory(data.employee_id)
     scrollToBottom()
   } catch {}
 }
@@ -257,7 +285,7 @@ function fmtNow() {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
 }
 
-import { renderMd } from '../composables/useChatStream.js'
+import { renderMd, extractReport } from '../composables/useChatStream.js'
 
 /* ---------- 初始化 ---------- */
 onMounted(async () => {
@@ -273,7 +301,9 @@ onMounted(async () => {
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
       if (!convId.value && data.length) await selectEmployee(data[0].id)
     } else if (data.length) {
-      await selectEmployee(data[0].id)
+      // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
+      const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
+      await selectEmployee(target ? target.id : data[0].id)
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message

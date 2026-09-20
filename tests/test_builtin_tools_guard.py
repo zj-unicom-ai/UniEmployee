@@ -10,13 +10,13 @@
   3. 通用工具无条件注入（GLOBAL_TOOL_NAMES）
   4. 声明未注册工具静默跳过
   5. 闭包工具（kb_search / ontology_*）声明即注入
+  6. deepagents 内置文件工具按角色裁剪
 
 与 test_guard.py 互补：后者测 guard 模块层（settings/sensitive/logs），
 本文件测 compiler 装配层（替身构造 + 角色 + 工具集组合）。
 
-注：AGENTS.md 提及的 FilesystemMiddleware / FS_TOOLS / fs_tools 字段 /
-GP 子代理继承 / read_file 强制必选，截至 v0.11.0 尚未实现，故本文件
-不覆盖这些规划特性，仅测已落地行为。
+注：deepagents 内置文件工具不经过 ALL_LOCAL_TOOLS，必须通过
+FilesystemMiddleware 白名单单独覆盖。
 """
 import asyncio
 import inspect
@@ -25,7 +25,7 @@ import pytest
 from pydantic import BaseModel
 from langchain_core.tools import tool as langchain_tool
 
-from app import guard
+from app import compiler, guard
 from app.compiler import _assemble_tools, _make_denied_tool, ALL_LOCAL_TOOLS, GLOBAL_TOOL_NAMES
 from app.spec import EmployeeSpec
 
@@ -82,6 +82,7 @@ def _spec(tools, **kw):
         persona=kw.get("persona", ""),
         tools=tools,
         mcp_servers={},
+        subagents=kw.get("subagents", []),
     )
 
 
@@ -190,14 +191,103 @@ def test_assemble_kb_search_closure_injected(monkeypatch):
     assert any(t.name == "kb_search" for t in tools)
 
 
+def test_assemble_closure_tools_follow_allow_deny_policy(monkeypatch):
+    """kb_search 等闭包工具不能绕过统一工具策略。"""
+    guard.set_setting("admin_only_tools", "")
+    guard.set_setting("tool_allowlist", "")
+    guard.set_setting("tool_denylist", "kb_search")
+    _mock_role(monkeypatch, "user")
+    spec = _spec(["kb_search"], id="kb_denied")
+    tools, _ = asyncio.run(_assemble_tools(spec, user_id="u_user"))
+    t = next(x for x in tools if x.name == "kb_search")
+    assert "无权限" in (getattr(t, "description", "") or "")
+    guard.set_setting("tool_denylist", "")
+
+
 def test_assemble_ontology_tools_injected(monkeypatch):
-    """声明 ontology_find_entities 或 ontology_query_relations → 两个都注入。"""
+    """声明任一通用本体查询工具 → 四个通用只读工具都注入。"""
     guard.set_setting("admin_only_tools", "")
     spec = _spec(["ontology_find_entities"], id="ont_emp")
     tools, _ = asyncio.run(_assemble_tools(spec, user_id=None))
     names = {t.name for t in tools}
     assert "ontology_find_entities" in names
     assert "ontology_query_relations" in names
+    assert "ontology_expand" in names
+    assert "ontology_find_paths" in names
+    assert "ontology_customer_360" not in names
+    assert "ontology_fault_impact" not in names
+
+
+def test_assemble_ontology_scenario_tools_injected(monkeypatch):
+    """场景化本体工具独立授权，并在声明时连带注入通用读工具。"""
+    guard.set_setting("admin_only_tools", "")
+    spec = _spec(["ontology_customer_360", "ontology_fault_impact"], id="ont_scene")
+    tools, _ = asyncio.run(_assemble_tools(spec, user_id=None))
+    names = {t.name for t in tools}
+    assert {
+        "ontology_find_entities", "ontology_query_relations",
+        "ontology_expand", "ontology_find_paths",
+        "ontology_customer_360", "ontology_fault_impact",
+    } <= names
+
+
+def test_subagent_inherits_calling_user_tool_policy(monkeypatch):
+    """子代理不能因为编译时缺少 user_id 而获得管理员工具。"""
+    guard.set_setting("admin_only_tools", "create_ticket")
+    _mock_role(monkeypatch, "user")
+    spec = _spec([], id="parent", subagents=[{
+        "name": "child", "tools": ["create_ticket"],
+    }])
+    subagents = asyncio.run(compiler._assemble_subagents(
+        spec, None, user_id="u_user"))
+    child_tool = next(t for t in subagents[0]["tools"]
+                      if t.name == "create_ticket")
+    assert "无权限" in (getattr(child_tool, "description", "") or "")
+
+
+# ---------- deepagents 内置文件工具裁剪 ----------
+
+def test_compile_agent_limits_builtin_fs_tools_for_non_admin(monkeypatch):
+    captured = {}
+
+    def fake_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(compiler, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(compiler, "_init_model", lambda model: model)
+    from app.catalog import users as _users
+    monkeypatch.setattr(_users, "get_user", lambda user_id: {
+        "id": user_id, "role": "user"})
+
+    asyncio.run(compiler.compile_agent(_spec([]), None, None, user_id="u1"))
+
+    middleware = captured["middleware"]
+    assert len(middleware) == 1
+    enabled = middleware[0].__dict__["_enabled_tools"]
+    assert enabled == frozenset({"ls", "read_file", "glob", "grep"})
+    assert "execute" not in enabled
+    assert "write_file" not in enabled
+
+
+def test_compile_agent_keeps_builtin_fs_tools_for_admin(monkeypatch):
+    captured = {}
+
+    def fake_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(compiler, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(compiler, "_init_model", lambda model: model)
+    from app.catalog import users as _users
+    monkeypatch.setattr(_users, "get_user", lambda user_id: {
+        "id": user_id, "role": "admin"})
+
+    asyncio.run(compiler.compile_agent(_spec([]), None, None, user_id="admin"))
+
+    enabled = captured["middleware"][0].__dict__["_enabled_tools"]
+    assert "execute" in enabled
+    assert "write_file" in enabled
 
 
 # ---------- ALL_LOCAL_TOOLS 注册表完整性 ----------

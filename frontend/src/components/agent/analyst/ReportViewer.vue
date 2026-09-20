@@ -1,7 +1,7 @@
 <!--
 数据分析 · 报告展示组件
 入参 html（string）：report-generation 技能输出的完整 HTML（含 ECharts CDN 与脚本）
-特性：iframe srcdoc 沙箱渲染 + 下载 .html + 新窗口打开 + 高度自适应
+特性：iframe srcdoc 沙箱渲染 + 下载 .html + 受控新窗口 + 高度自适应
 -->
 <template>
   <div class="report-viewer">
@@ -102,14 +102,28 @@ function download() {
 }
 
 function openInNew() {
-  // 新窗口打开（写 blob URL 避免 srcdoc 在新标签页失效）
+  const id = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  const storageKey = `uniemployee:report-viewer:${id}`
   try {
-    const blob = new Blob([props.html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
-    // 给浏览器时间加载后再回收
-    setTimeout(() => URL.revokeObjectURL(url), 30000)
+    // 新窗口打开真实的受控 viewer 页面，避免 about:blank 动态文档刷新后丢失。
+    // 报告内容只交给 viewer 壳页面，再由壳页面放进 sandbox iframe；报告脚本
+    // 没有 allow-same-origin，因此无法读取主站 localStorage。
+    localStorage.setItem(storageKey, JSON.stringify({
+      html: props.html,
+      createdAt: Date.now(),
+    }))
+    const url = `/report-viewer.html?id=${encodeURIComponent(id)}`
+    // 不把 noopener 作为 window.open feature 传入：部分浏览器会因此返回
+    // null，即使标签页实际已打开。viewer 是受控壳页面，拿到句柄后立即
+    // 切断 opener，报告本身仍运行在无 allow-same-origin 的 sandbox 中。
+    const win = window.open(url, '_blank')
+    if (!win) {
+      message.warning('新窗口被浏览器拦截，请允许本站弹窗后重试')
+    } else {
+      try { win.opener = null } catch {}
+    }
   } catch (e) {
+    try { localStorage.removeItem(storageKey) } catch {}
     message.error('打开失败：' + (e?.message || ''))
   }
 }

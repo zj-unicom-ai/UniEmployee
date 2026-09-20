@@ -5,8 +5,10 @@ import asyncio
 import sys
 
 from app import compiler
+from app import guard
 from app.spec import EmployeeSpec
 from app.catalog import seeds
+from langchain_core.tools import tool
 
 
 class _FakeMCPClient:
@@ -97,3 +99,53 @@ def test_streamable_http_alias_normalized():
         )
         servers = _run(spec)
         assert servers["svc"]["transport"] == "streamable_http"
+
+
+def test_mcp_tools_use_unified_capability_policy(monkeypatch):
+    """MCP 动态工具默认拒绝普通用户，明确 allow 后才可执行。"""
+    @tool
+    def order_query(order_id: str) -> str:
+        """测试 MCP 查询工具。"""
+        return order_id
+
+    class Client:
+        def __init__(self, servers):
+            pass
+
+        async def get_tools(self):
+            return [order_query]
+
+    monkeypatch.setattr(compiler, "MultiServerMCPClient", Client)
+    from app.catalog import users as _users
+    monkeypatch.setattr(_users, "get_user",
+                        lambda uid: {"id": uid, "role": "user"})
+    for key, value in (("admin_only_tools", ""), ("tool_allowlist", ""),
+                       ("tool_denylist", ""), ("mcp_default_deny", "1"),
+                       ("mcp_allowlist", "")):
+        guard.set_setting(key, value)
+
+    spec = EmployeeSpec(
+        id="emp_mcp_policy", name="测试", role="测试",
+        model="dummy-model", persona="人设",
+        mcp_servers={"crm": {"transport": "stdio", "command": "x"}},
+    )
+    tools, _ = asyncio.run(compiler._assemble_tools(
+        spec, user_id="u_user"))
+    denied = next(t for t in tools if t.name == "order_query")
+    assert "无权限" in (getattr(denied, "description", "") or "")
+
+    guard.set_setting("tool_allowlist", "order_query")
+    guard.set_setting("mcp_allowlist", "order_query")
+    tools, _ = asyncio.run(compiler._assemble_tools(
+        spec, user_id="u_user"))
+    allowed = next(t for t in tools if t.name == "order_query")
+    assert "无权限" not in (getattr(allowed, "description", "") or "")
+
+    # 连接器已绑定到员工时，不需要逐个把工具名加入 mcp_allowlist。
+    guard.set_setting("tool_allowlist", "")
+    guard.set_setting("mcp_allowlist", "")
+    bound_spec = spec.model_copy(update={"connectors": ["crm"]})
+    tools, _ = asyncio.run(compiler._assemble_tools(
+        bound_spec, user_id="u_user"))
+    granted = next(t for t in tools if t.name == "order_query")
+    assert "无权限" not in (getattr(granted, "description", "") or "")

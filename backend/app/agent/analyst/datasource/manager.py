@@ -739,8 +739,12 @@ def list_employee_kbs(emp_id: str) -> list[dict]:
         con.close()
 
 
-def list_employee_connectors(emp_id: str) -> list[dict]:
-    """列出员工已绑定的连接器（含 config）。"""
+def list_employee_connectors(emp_id: str, include_config: bool = False) -> list[dict]:
+    """列出员工已绑定的连接器。
+
+    默认不返回 config：其中可能包含命令参数、环境变量和凭据，只能由
+    编译器在服务端读取。需要展示管理元数据的接口不应把原始配置下发到浏览器。
+    """
     con = _catalog_conn()
     try:
         rows = con.execute(
@@ -757,6 +761,8 @@ def list_employee_connectors(emp_id: str) -> list[dict]:
                 d["config"] = json.loads(d["config"]) if isinstance(d["config"], str) else d.get("config", {})
             except (json.JSONDecodeError, TypeError):
                 d["config"] = {}
+            if not include_config:
+                d.pop("config", None)
             out.append(d)
         return out
     finally:
@@ -793,6 +799,11 @@ def bind_kb(emp_id: str, kb_id: str) -> bool:
     """绑定知识库到员工（幂等）。"""
     con = _catalog_conn()
     try:
+        exists = con.execute(
+            "SELECT 1 FROM knowledge_bases WHERE id=? AND deleted_at IS NULL",
+            (kb_id,)).fetchone()
+        if not exists:
+            return False
         con.execute(
             "INSERT OR IGNORE INTO employee_kbs (employee_id, kb_id) VALUES (?, ?)",
             (emp_id, kb_id)
@@ -821,6 +832,11 @@ def bind_connector(emp_id: str, connector_id: str) -> bool:
     """绑定连接器到员工（幂等）。"""
     con = _catalog_conn()
     try:
+        exists = con.execute(
+            "SELECT 1 FROM connectors WHERE id=? AND deleted_at IS NULL",
+            (connector_id,)).fetchone()
+        if not exists:
+            return False
         con.execute(
             "INSERT OR IGNORE INTO employee_connectors (employee_id, connector_id) "
             "VALUES (?, ?)",
