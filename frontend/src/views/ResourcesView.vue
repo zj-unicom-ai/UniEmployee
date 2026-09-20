@@ -10,7 +10,11 @@
         </div>
         <div class="card-grid">
           <div v-for="it in (catalog.skills || [])" :key="it.id" class="res-card tech-card">
-            <div class="card-head"><span class="card-name">{{ it.name }}</span><n-tag v-if="it.dir" size="tiny" round bordered>内置</n-tag></div>
+            <div class="card-head">
+              <span class="card-name">{{ it.name }}</span>
+              <n-tag v-if="!it.is_custom" size="tiny" round bordered>内置</n-tag>
+              <n-tag v-else type="info" size="tiny" round bordered>自定义</n-tag>
+            </div>
             <div class="card-id">{{ it.id }}</div>
             <div class="card-desc">{{ it.description }}</div>
             <div class="card-acts">
