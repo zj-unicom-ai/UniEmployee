@@ -73,11 +73,13 @@ const routes = [
       {
         path: 'analyst/kbs',
         name: 'analyst-kbs',
+        meta: { requiresAdmin: true },
         component: () => import('../views/agent/analyst/KnowledgeBaseManager.vue'),
       },
       {
         path: 'analyst/connectors',
         name: 'analyst-connectors',
+        meta: { requiresAdmin: true },
         component: () => import('../views/agent/analyst/ConnectorManager.vue'),
       },
       {
@@ -106,6 +108,12 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('token')
+  let user = null
+  try {
+    user = JSON.parse(localStorage.getItem('user') || 'null')
+  } catch (_) {
+    // 损坏的本地用户缓存按普通用户处理，后端仍是最终权限边界。
+  }
   // 落地页和登录页不需要登录
   if (to.name === 'landing' || to.name === 'login' || to.name === 'cases' || to.name === 'case-detail') {
     // 已登录用户访问登录页 → 跳到后台
@@ -117,6 +125,8 @@ router.beforeEach((to, from, next) => {
   } else if (!token) {
     // 受保护路由 → 跳登录
     next({ name: 'login', query: { next: to.fullPath } })
+  } else if (to.matched.some(record => record.meta.requiresAdmin) && user?.role !== 'admin') {
+    next({ name: 'home' })
   } else {
     next()
   }
