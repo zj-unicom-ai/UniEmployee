@@ -192,6 +192,7 @@ def catalog() -> dict:
                      "is_custom": bool(s["dir"] and s["dir"].startswith("skills-custom/"))}
                    for s in allrows("skills")],
         "tools": [{"id": t["id"], "name": t["name"], "description": t["description"],
+                    "source": t["source"],
                     "needs_approval": json.loads(t["needs_approval"]) if t["needs_approval"] else None,
                     "is_global": t["id"] in GLOBAL_TOOL_NAMES}
                   for t in allrows("tools")],
