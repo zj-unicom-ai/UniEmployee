@@ -39,7 +39,10 @@ async def list_employees(context=Depends(auth.get_auth_context)):
 @router.get("/catalog")
 async def public_catalog(context=Depends(auth.get_auth_context)):
     c = catalog.catalog()
-    c.pop("connectors", None)
+    c.pop("connectors", None)  # 连接器配置含密钥/命令，仅管理员可见
+    # SOP 全文属内部流程文档，普通用户仅可见目录（id/名称/描述）
+    for s in c.get("sops", []):
+        s.pop("content", None)
     return c
 
 

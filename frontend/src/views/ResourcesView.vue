@@ -18,7 +18,7 @@
             <div class="card-id">{{ it.id }}</div>
             <div class="card-desc">{{ it.description }}</div>
             <div class="card-acts">
-              <n-button size="tiny" quaternary @click="viewSkillContent(it)">查看内容</n-button>
+              <n-button v-if="isAdmin" size="tiny" quaternary @click="viewSkillContent(it)">查看内容</n-button>
               <n-button v-if="isAdmin" size="tiny" quaternary type="error" @click="delItem('skills', it.id)">删除</n-button>
             </div>
           </div>
