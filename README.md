@@ -26,51 +26,25 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 - 🧰 **多执行后端**：按员工选择 `state`、`local_shell`、`standard` 或 `sandbox` 后端；`net-ops` 可按会话路由到 OpenSandbox 容器，未启用沙箱时按当前配置回退本地后端。
 - 📱 **Web 聊天 + IM 扩展架构**：当前支持平台内 Web 聊天和平台内 IM 频道框架；微信 / 企业微信 / 飞书 / 钉钉等外部渠道仍在规划中。
 
-## 功能截图
+## 功能演示
 
-### 数字员工对话工作台
+一分钟视频速览 UniEmployee：数字员工对话工作台（流式回答、思考与工具调用过程实时可见）、HITL 人工审批、全链路执行 Trace、员工与资源中心配置、企业知识本体。
 
-与内置数字员工对话，流式回答并实时展示思考 / 工具调用过程；技能与知识库在运行时动态加载（SKILL.md 规程、FAQ 知识检索）。
+<!-- TEST variant-a: relative video tag -->
+<video src="assets/UniEmployee.mp4" controls width="960"></video>
 
-![对话工作台](assets/screenshots/00-chat-main.png)
+<!-- TEST variant-b: raw absolute video tag -->
+<video src="https://raw.githubusercontent.com/zj-unicom-ai/UniEmployee/docs/readme-demo-video/assets/UniEmployee.mp4" controls width="960"></video>
 
-### HITL 人工审批
+<!-- TEST variant-c: image syntax on mp4 -->
+![UniEmployee 平台介绍](assets/UniEmployee.mp4)
 
-高风险动作（如退款）触发流程中途中断，在对话流中弹出审批卡片，等待人工批准后自动继续执行、生成退款单。
-
-![人工审批](assets/screenshots/chat-approval.png)
-
-### 全链路可观测
-
-每次对话 / 审批恢复 = 一条 run，逐条回放模型与工具调用：输入输出、耗时、token 消耗。
-
-![执行记录](assets/screenshots/08-trace.png)
-
-### 数字员工配置
-
-人设、模型、技能、工具、知识库、SOP、连接器全部页面化配置。
-
-![员工配置](assets/screenshots/12-admin-employee.png)
-
-### 资源中心
-
-技能 / 工具 / 知识库 / SOP / 连接器统一管理，一键装配到员工。
-
-![资源中心-技能](assets/screenshots/02-resources-skills.png)
-
-### 企业知识本体
-
-知识按业务实体与关系组织为结构化语义资产，支持查询与溯源。
-
-![业务本体](assets/screenshots/10-ontology.png)
-
-### 会话历史
-
-![会话历史](assets/screenshots/07-history.png)
+<!-- TEST variant-d: thumbnail link (known-good control) -->
+[![UniEmployee 平台介绍视频](assets/screenshots/00-chat-main.png)](assets/UniEmployee.mp4)
 
 ## 目录
 
-- [功能截图](#功能截图)
+- [功能演示](#功能演示)
 - [快速开始](#快速开始)
 - [核心流程](#核心流程)
 - [五层能力模型](#五层能力模型)
