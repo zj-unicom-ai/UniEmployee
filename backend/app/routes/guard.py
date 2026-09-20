@@ -1,9 +1,7 @@
 """安全护栏管理端点：配置读写、敏感词 CRUD、拦截日志查询（仅 admin）。"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import audit
-from app import guard
-from app import auth
+from app import audit, auth, catalog, guard, runtime
 
 router = APIRouter(prefix="/api/admin/guard")
 
@@ -23,9 +21,14 @@ async def get_settings(_=Depends(_admin)):
 async def save_settings(body: dict, request: Request,
                         admin: dict = Depends(_admin)):
     before = guard.get_settings()
-    for key in ("sensitive_enabled", "admin_only_tools"):
+    for key in ("sensitive_enabled", "admin_only_tools", "tool_allowlist",
+                "tool_denylist", "mcp_default_deny", "mcp_allowlist"):
         if key in body:
             guard.set_setting(key, str(body[key]))
+    # capability policy 在 Agent 编译时生效；策略热改后必须清理所有员工缓存，
+    # 否则已缓存 Agent 仍可能保留旧的真实工具/拒绝替身。
+    for employee in catalog.list_employees_meta():
+        runtime.invalidate(employee["id"])
     audit.log("update", "guard_settings", "", admin, request,
               before=before, after=guard.get_settings())
     return {"ok": True, "settings": guard.get_settings()}

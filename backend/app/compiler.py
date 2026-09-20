@@ -272,7 +272,8 @@ def _build_user_context(user_id: str | None) -> str:
     return "\n".join(lines)
 
 
-def _make_denied_tool(orig_tool):
+def _make_denied_tool(orig_tool, reason: str = "工具能力策略拒绝",
+                      user_id: str = "", employee_id: str = ""):
     """生成与原工具同名同描述的「拒绝执行」替身（安全护栏）。
 
     场景：普通用户的员工声明了仅管理员可用的工具。替身保留原工具的
@@ -286,8 +287,12 @@ def _make_denied_tool(orig_tool):
 
     @tool(name, description=desc, args_schema=getattr(orig_tool, "args_schema", None))
     def _denied(**kwargs):
+        from app import guard
+        guard.log("tool_denied", f"工具 {name} 被能力策略拒绝",
+                  user_id=user_id, employee_id=employee_id,
+                  extra={"tool": name, "reason": reason})
         raise PermissionError(
-            f"工具 {name} 仅管理员授权账号可调用（安全护栏拦截）")
+            f"工具 {name} 当前不可用：{reason}（安全护栏拦截）")
     return _denied
 
 
@@ -304,8 +309,8 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
          目前含 get_current_time，让所有员工都能回答时间类问题；
       5. MCP 连接器工具（spec.mcp_servers 非空时拉起 stdio/sse 客户端）。
 
-    安全护栏：若调用方（user_id 对应角色）非 admin，白名单内的工具
-    被包装为「拒绝执行」版本（越权调用直接返回权限错误，不执行真实逻辑）。
+    安全护栏：所有本地、闭包和 MCP 工具都经过统一 capability policy；
+    被拒绝的工具保留 schema 但不执行真实逻辑，并写入 tool_denied 日志。
     """
     from app import guard as _guard
     from app.catalog import users as _users
@@ -314,26 +319,37 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
         _u = _users.get_user(user_id)
         _role = (_u or {}).get("role") or "user"
 
+    def _guard_tool(tool_obj, source: str = "local",
+                    connector_granted: bool = False):
+        if _guard.tool_allowed(
+                tool_obj.name, _role, source=source,
+                connector_granted=connector_granted):
+            return tool_obj
+        return _make_denied_tool(
+            tool_obj,
+            reason=("MCP 工具未进入普通用户允许列表"
+                    if source == "mcp" else "未通过工具 allow/deny 策略"),
+            user_id=user_id or "",
+            employee_id=spec.id,
+        )
+
     tools = []
     for name in spec.tools:
         if name == "kb_search":
             # 按员工 / 用户视角动态生成检索工具（运行时读 catalog，不固化快照）
-            tools.append(make_kb_search(spec, user_id))
+            tools.append(_guard_tool(make_kb_search(spec, user_id), "closure"))
         elif name == "start_refund":
             # 退款工具需注入运行时 checkpointer（支持后续 Point2 内层图 interrupt）
-            tools.append(make_start_refund(checkpointer))
+            tools.append(_guard_tool(make_start_refund(checkpointer), "closure"))
         elif name in ALL_LOCAL_TOOLS:
             t = ALL_LOCAL_TOOLS[name]
-            if _role != "admin" and not _guard.tool_allowed(name, _role):
-                tools.append(_make_denied_tool(t))
-            else:
-                tools.append(t)
+            tools.append(_guard_tool(t, "local"))
 
     # --- 通用工具：即使员工 tools=[] 也自动具备（去重避免重复）---
     have = {t.name for t in tools}
     for g in GLOBAL_TOOL_NAMES:
         if g in ALL_LOCAL_TOOLS and g not in have:
-            tools.append(ALL_LOCAL_TOOLS[g])
+            tools.append(_guard_tool(ALL_LOCAL_TOOLS[g], "local"))
 
     # --- 企业业务本体闭包工具：spec.tools 声明了 ontology_* 才注入（按用户 tenant 隔离）。
     #     与 kb_search 同理，是闭包工具不进 ALL_LOCAL_TOOLS；声明任一通用查询工具即注入
@@ -360,7 +376,7 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
                                      include_customer_360=onto_customer_360,
                                      include_fault_impact=onto_fault_impact):
             if t.name not in have:
-                tools.append(t)
+                tools.append(_guard_tool(t, "closure"))
 
     # --- MCP 连接器工具 ---
     mcp_client = None
@@ -386,8 +402,26 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             servers[name] = cfg
         try:
             mcp_client = MultiServerMCPClient(servers)
-            mcp_tools = await mcp_client.get_tools()
-            tools += mcp_tools
+            # 按 server 获取工具，保留 connector_id 归属；不能把多连接器
+            # 汇总后用最后一个 name 判断，否则会把未绑定连接器的工具误放行。
+            server_tools = []
+            if len(servers) == 1:
+                server_name = next(iter(servers))
+                try:
+                    mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                except TypeError:
+                    # 兼容旧版/测试替身客户端不支持 server_name 参数。
+                    mcp_tools = await mcp_client.get_tools()
+                server_tools.extend((server_name, t) for t in mcp_tools)
+            else:
+                for server_name in servers:
+                    mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                    server_tools.extend((server_name, t) for t in mcp_tools)
+            tools += [
+                _guard_tool(
+                    t, "mcp", connector_granted=(server_name in spec.connectors))
+                for server_name, t in server_tools
+            ]
         except Exception as e:
             # MCP 连接器失败不应拖垮服务：先降级，仅保留本地工具。
             # 后续由 MCP Manager 补齐重试、健康检查与进程回收。
@@ -437,9 +471,10 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
                 role="",
                 model=spec.model,
                 persona="",
-                tools=cfg.get("tools", []),
+            tools=cfg.get("tools", []),
             ),
             checkpointer,
+            user_id=user_id,
         )
         subagents.append({
             "name": cfg["name"],
