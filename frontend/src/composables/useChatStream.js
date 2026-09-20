@@ -160,11 +160,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         args: ev.args ? JSON.stringify(ev.args) : '',
         resolved: null,
       }
+      msg._streamTerminal = true
       setStage('skill', 'active', `审批中：${ev.tool}`)
       touch()
     } else if (ev.type === 'error') {
       // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
       msg.error = ev.message || '任务执行出错，请稍后重试'
+      msg._streamTerminal = true
       setStage('report', 'error', msg.error)
       touch()
     } else if (ev.type === 'message_end') {
@@ -173,6 +175,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       msg.message_id = ev.message_id
       msg.employee_id = ev.employee_id
       msg.conversation_id = ev.conversation_id
+      msg._streamTerminal = true
       touch()
     }
   }
@@ -193,6 +196,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       }
     }
     const msg = messages.value[msgIdx]
+    if (msg && !msg._streamTerminal) {
+      msg.error = msg._md || msg.html || msg.content
+        ? '连接已中断，当前结果可能不完整，请刷新历史或继续追问。'
+        : '连接已中断，未收到最终结果，请重试。'
+      setStage('report', 'error', msg.error)
+      touch()
+    }
     if (msg && msg.trace && !msg.trace.length) delete msg.trace
     scrollToBottom?.()
   }

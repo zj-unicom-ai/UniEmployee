@@ -180,6 +180,34 @@ def reconstruct(messages: list) -> list[dict]:
             if t["role"] == "user" or t["content"].strip() or t["tool_calls"]]
 
 
+async def _persist_partial_response(agent, config: dict, conv_id: str, bot_text: str) -> None:
+    """客户端断开时尽量保住已流出的回答，避免刷新后整段结果丢失。
+
+    LangGraph 只有在本轮正常结束后才会把最终 AIMessage 稳定写进
+    checkpoint。SSE 连接若在收尾前断开，前端已经看到的 token 可能只
+    存在于传输流里。这里用 aupdate_state 追加一条 AIMessage 做兜底。
+    """
+    text = (bot_text or "").strip()
+    if not text:
+        return
+    try:
+        states = [s async for s in agent.aget_state_history(config, limit=1)]
+        msgs = states[0].values.get("messages", []) if states else []
+        for m in reversed(msgs):
+            if isinstance(m, AIMessage):
+                latest = text_of(m).strip()
+                if latest and (latest == text or text in latest):
+                    return
+                break
+    except Exception:
+        # 读取失败不影响后续兜底写入。
+        pass
+    try:
+        await agent.aupdate_state(config, {"messages": [AIMessage(content=text)]})
+    except Exception:
+        logger.warning("断流回答写入 checkpoint 失败 conv=%s", conv_id, exc_info=True)
+
+
 async def recover_conversations(limit: int | None = None):
     """启动恢复：扫描 checkpointer 里 c_ 开头的历史线程，重建会话清单。
 
@@ -607,6 +635,19 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             except Exception:
                 pass
             asyncio.create_task(_gen_title(conv_id, user_text, bot_text))
+    except asyncio.CancelledError:
+        tracer.flush_pending()
+        # 客户端刷新/切页/中止请求时，服务端会取消 SSE 生成器。
+        # 已经流给浏览器的 token 可能尚未进入 checkpoint；先尽力补写，
+        # 再把 Trace 从 running 收尾为 cancelled，避免后续排障误判为仍在执行。
+        try:
+            await asyncio.shield(_persist_partial_response(agent, config, conv_id, bot_text))
+        finally:
+            traces.finish_run(trace_run_id, status="cancelled",
+                              error="client disconnected before stream completed")
+            logger.info("SSE 客户端断开 conv=%s emp=%s run=%s partial_chars=%d",
+                        conv_id, emp_id, trace_run_id, len(bot_text or ""))
+        raise
     except Exception as e:
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="error", error=f"{type(e).__name__}: {e}")

@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app import runtime, traces
 from app.streaming import _stream_run, conv_emp_map, employee_of
@@ -130,6 +130,55 @@ def test_tool_error_status_passed_through():
     tool_events = [e for e in events if e["type"] == "tool"]
     assert tool_events and tool_events[0]["status"] == "error"
     assert "URLError" in tool_events[0]["preview"]
+
+
+def test_cancelled_stream_marks_trace_and_persists_partial_answer():
+    """客户端断开 SSE 时，不应留下永久 running 的 Trace。"""
+
+    class CancelAgent:
+        def __init__(self):
+            self.updated_states = []
+
+        async def aget_state_history(self, *args, **kwargs):
+            if False:
+                yield None
+
+        async def astream(self, *args, **kwargs):
+            yield {"type": "messages", "data": (AIMessageChunk(content="已生成的部分回答"), None)}
+            raise asyncio.CancelledError()
+
+        async def aupdate_state(self, config, values):
+            self.updated_states.append(values)
+
+    async def run():
+        events = []
+        async for line in _stream_run("c_cancelled", {"messages": [{"role": "user", "content": "x"}]}):
+            events.append(json.loads(line[6:].strip()))
+        return events
+
+    conv_emp_map["c_cancelled"] = "xiaosu"
+    agent = CancelAgent()
+    finished = []
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime, "get_agent",
+                        lambda *a, **k: _async_return((agent, [])))
+    monkeypatch.setattr(runtime, "ensure_user_memory", _noop_async)
+    monkeypatch.setattr(traces, "start_run", lambda *a, **k: "r_cancelled")
+    monkeypatch.setattr(traces, "TraceHandler",
+                        lambda run_id: SimpleNamespace(flush_pending=lambda: None))
+    monkeypatch.setattr(traces, "finish_run",
+                        lambda run_id, status="done", error="": finished.append((run_id, status, error)))
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(run())
+    finally:
+        monkeypatch.undo()
+        conv_emp_map.pop("c_cancelled", None)
+
+    assert finished and finished[-1][1] == "cancelled"
+    assert agent.updated_states
+    msgs = agent.updated_states[0]["messages"]
+    assert msgs[0].content == "已生成的部分回答"
 
 
 async def _async_return(v):

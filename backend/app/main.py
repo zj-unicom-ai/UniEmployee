@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, catalog, conversations, ontology, runtime, scheduler
+from app import auth, catalog, conversations, ontology, runtime, scheduler, traces
 from app import db as dblayer
 from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
@@ -88,6 +88,11 @@ async def lifespan(app):
     # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
     from app import automations as _automations
     _automations.backfill_seeds()
+    # 上次进程意外退出可能留下 status=running 的 Trace；启动时收口为
+    # abandoned，避免运维排障时误判为仍在执行。
+    stale_runs = traces.finish_stale_running()
+    if stale_runs:
+        log.warning("已将上次进程遗留的 running Trace 标记为 abandoned：%d 条", stale_runs)
     # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）
