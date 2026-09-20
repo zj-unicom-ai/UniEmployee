@@ -26,47 +26,13 @@ Through its five-layer capability model — **Employee → Workflow/SOP → Skil
 - 🧰 **Multiple execution backends** — Employees can use `state`, `local_shell`, `standard`, or `sandbox`; `net-ops` can route each conversation to an OpenSandbox container.
 - 📱 **Web Chat + IM Extension Architecture** — In-platform web chat and IM channel framework are available today; external WeChat / WeCom / Feishu / DingTalk providers remain planned.
 
-## Screenshots
+## Demo
 
-### Digital Employee Chat Workspace
+A one-minute video tour of UniEmployee: the digital employee chat workspace (streaming answers with visible thinking / tool calls), HITL human approval, end-to-end execution traces, employee & resource-center configuration, and the enterprise knowledge ontology.
 
-Chat with built-in digital employees, with streaming answers and real-time thinking / tool-call traces; skills and knowledge bases load dynamically at runtime (SKILL.md playbooks, FAQ retrieval).
+[![UniEmployee introduction video](assets/UniEmployee-cover.png)](assets/UniEmployee.mp4)
 
-![Chat workspace](assets/screenshots/00-chat-main.png)
-
-### HITL Human Approval
-
-High-risk actions (e.g. refunds) interrupt the flow mid-way; an approval card appears in the conversation and execution continues automatically once approved.
-
-![Approval](assets/screenshots/chat-approval.png)
-
-### End-to-End Observability
-
-Every conversation / approval resume = one run. Replay every model and tool call: inputs, outputs, latency, token consumption.
-
-![Trace](assets/screenshots/08-trace.png)
-
-### Digital Employee Configuration
-
-Persona, model, skills, tools, knowledge bases, SOPs, and connectors — all configured through the UI.
-
-![Employee config](assets/screenshots/12-admin-employee.png)
-
-### Resource Center
-
-Skills / tools / knowledge bases / SOPs / connectors managed in one place, assembled onto employees in one click.
-
-![Resources](assets/screenshots/02-resources-skills.png)
-
-### Enterprise Knowledge Ontology
-
-Knowledge organized as structured semantic assets — business entities and relationships — with query and provenance support.
-
-![Ontology](assets/screenshots/10-ontology.png)
-
-### Conversation History
-
-![History](assets/screenshots/07-history.png)
+> Click the cover to play the full video (~80 s), or [open the video file directly](assets/UniEmployee.mp4).
 
 ## Getting Started
 
