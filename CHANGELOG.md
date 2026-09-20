@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.19.0 (2026-09-20)
+
+### 平台护栏升级：analyst 全局配置管理收紧 + 工具能力策略统一 allow/deny
+
+- **analyst 全局配置管理权限收紧到 admin**（#50）：术语 / SQL 示例 / 同义词 / KB 绑定 / 连接器绑定等全局配置操作一律 `Depends(auth.require_admin)` + 写 catalog 审计日志；`list_employee_connectors` 默认 `include_config=False` 不下发 MCP 密钥；前端 `analyst/kbs` 与 `analyst/connectors` 路由加 `requiresAdmin` 守卫，操作按钮按角色隐藏，连接器配置脱敏展示
+- **工具能力策略升级为统一 allow/deny**（#51）：工具护栏从「单一白名单」升级为 `tool_allowlist` / `tool_denylist` / `mcp_default_deny` / `mcp_allowlist` 四字段（fnmatch 通配），MCP 默认拒绝、按 server 分组授权；本地工具 / 闭包工具 / MCP 工具统一过 `_guard_tool`；子代理编译传 `user_id` 避免绕过护栏；热改护栏配置触发全员工具缓存失效；前端 ToolCallsPage 新增 allow/deny/MCP 配置 UI
+
+### 修复：报告新窗口会话隔离 + SSE 断流兜底
+
+- **报告新窗口改受控壳页面**（#52）：此前 ReportViewer.vue 用 Blob URL 打开报告，新窗口脚本能通过 `window.opener` 回连主站 cookie/token；改走 `/report-viewer.html` 受控壳页面，主站 token / cookie 不会自动带到该页，壳页面读 localStorage 中报告 HTML 后注入 `<iframe sandbox="allow-scripts">`（不放 `allow-same-origin` 防 DOM 操作主站）
+- **SSE 断流兜底 + 启动遗留 Trace 收口**（#53）：客户端断开 SSE 时服务端 `asyncio` 取消 `_stream_run` 生成器，此前 Trace 仍停留在 `running`、已流给浏览器的 token 不进 checkpoint，刷新后整段结果凭空消失。新增 `except asyncio.CancelledError` 分支：先 flush pending Trace + 调 `_persist_partial_response`（`asyncio.shield` 防一起被取消）把已流出 `bot_text` 追加为 AIMessage 写入 checkpoint + `finish_run(status='cancelled')`；启动时 `traces.finish_stale_running()` 把上次进程遗留的 `status='running'` Trace 收口为 `abandoned`，避免运维排障误判
+
+### 验证
+
+- 新增 `tests/test_analyst_permissions.py`（admin + 普通用户越权场景）、`tests/test_streaming_errors.py::test_cancelled_stream_marks_trace_and_persists_partial_answer`；扩展 `tests/test_guard.py` / `test_builtin_tools_guard.py` / `test_mcp_connectors.py` 覆盖 allow/deny 通配、MCP 默认拒绝 + 按 server 授权、子代理编译注入 user_id 场景
+- 各 PR 对应测试子集全绿（197 + 29 + 26 项）；`npx vite build` 通过；服务端路由注册冒烟通过
+
 ## 0.18.0 (2026-09-19)
 
 ### 企业身份与租户安全
