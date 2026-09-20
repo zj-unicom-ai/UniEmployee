@@ -240,6 +240,17 @@ async def index():
     return FileResponse(_FRONTEND_DIST / "index.html")
 
 
+@app.get("/report-viewer.html")
+async def report_viewer():
+    """受控报告壳页面：报告内容由页面脚本放入 sandbox iframe。
+
+    主站 token / cookie 不会自动带到这里——壳页面读 localStorage 中的
+    报告 HTML 后注入沙箱 iframe，与主窗口隔离；避免报告 HTML 中潜在
+    脚本读取主站会话。
+    """
+    return FileResponse(_FRONTEND_DIST / "report-viewer.html")
+
+
 # SPA 回落：Vue Router 管理的路径也返回 index.html
 @app.get("/{path:path}")
 async def spa_fallback(path: str):
