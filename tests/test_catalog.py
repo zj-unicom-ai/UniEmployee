@@ -297,6 +297,32 @@ def test_skill_upsert_and_delete():
     assert catalog.get_skill("sk1") is None
 
 
+def test_delete_skill_route_cleans_custom_dir(tmp_path, monkeypatch):
+    """删除自定义技能时同步清理 skills-custom 磁盘目录（路由层，防残留+复活幽灵）。"""
+    import asyncio
+
+    from app.routes import admin as admin_routes
+
+    monkeypatch.setattr(admin_routes, "SKILLS_CUSTOM_DIR", tmp_path)
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("dummy", encoding="utf-8")
+
+    catalog.upsert_skill("my-skill", "我的技能", "d", "skills-custom/my-skill")
+    res = asyncio.run(admin_routes.delete_skill(
+        "my-skill", request=None, admin={"id": "u1", "username": "admin"}))
+
+    assert res.get("ok") is True
+    assert catalog.get_skill("my-skill") is None
+    assert not skill_dir.exists()  # 磁盘目录已清理
+
+    # 内置技能仍受保护：不允许删除
+    catalog.upsert_skill("builtin-skill", "内置", "d", "skills/builtin-skill")
+    res2 = asyncio.run(admin_routes.delete_skill(
+        "builtin-skill", request=None, admin={"id": "u1", "username": "admin"}))
+    assert "error" in res2
+
+
 # ---- 市场情报 V2：发布审批工具 ----
 
 def test_backfill_market_intel_publish_tool():
