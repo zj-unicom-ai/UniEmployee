@@ -220,14 +220,17 @@ async def edit_tool(tool_id: str, body: dict, request: Request,
     def _tool_row():
         return next((t for t in catalog.catalog()["tools"] if t["id"] == tool_id), None)
     before = _tool_row()
-    ok = catalog.update_tool(tool_id, body.get("description", ""), body.get("needs_approval"))
+    # update_tool 内部同步重算受影响员工的 interrupt_on（审批策略派生源）
+    ok, affected = catalog.update_tool(tool_id, body.get("description", ""),
+                                       body.get("needs_approval"))
     if not ok:
         return {"error": "工具不存在"}
-    for e in catalog.employees_using_tool(tool_id):
+    for e in affected:
         runtime.invalidate(e)
     audit.log("update", "tool", tool_id, admin, request,
-              before=before, after=_tool_row())
-    return {"ok": True}
+              before=before,
+              after={**(_tool_row() or {}), "affected_employees": affected})
+    return {"ok": True, "invalidated": affected}
 
 
 @router.post("/knowledge-bases")
