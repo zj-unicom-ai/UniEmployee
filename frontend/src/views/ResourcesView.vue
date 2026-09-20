@@ -67,7 +67,9 @@
               <div class="card-desc">{{ d.document_count || 0 }} 文档 · {{ d.chunk_count || 0 }} 片段</div>
             </div>
           </div>
-          <div v-else class="res-empty">RAGFlow 未返回数据集</div>
+          <div v-else class="res-empty">
+            {{ ragflowError || (ragflowConfigured ? 'RAGFlow 未返回数据集' : 'RAGFlow 未配置（RAGFLOW_API_KEY）') }}
+          </div>
         </div>
       </n-tab-pane>
 
@@ -117,6 +119,9 @@
         </n-form-item>
         <n-form-item v-if="modalType === 'kbs'" label="RAGFlow Dataset">
           <n-select v-model:value="modalForm.ragflow_dataset_id" :options="ragflowOptions" clearable filterable placeholder="选择或留空使用全局 RAGFLOW_DATASET_IDS" />
+          <template v-if="ragflowError" #extra>
+            <span style="color:#d03050">{{ ragflowError }}</span>
+          </template>
         </n-form-item>
         <n-form-item v-if="modalType === 'skills'" label="技能文件">
           <n-upload
@@ -161,7 +166,7 @@
       <template #footer>
         <n-space>
           <n-button @click="viewSkillModalShow = false">关闭</n-button>
-          <n-button v-if="isAdmin" type="primary" @click="openModal('skills', viewSkill); viewSkillModalShow = false">编辑</n-button>
+          <n-button v-if="isAdmin && viewSkill?.is_custom" type="primary" @click="openModal('skills', viewSkill); viewSkillModalShow = false">编辑</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -185,6 +190,8 @@ const isAdmin = computed(() => auth.isAdmin)
 
 const catalog = ref({})
 const ragflowDatasets = ref([])
+const ragflowError = ref('')
+const ragflowConfigured = ref(true)
 const activeTab = ref('skills')
 const sopExpanded = reactive({})
 
@@ -238,8 +245,12 @@ async function loadRagflowDatasets() {
   try {
     const { data } = await api.get('/admin/ragflow/datasets')
     ragflowDatasets.value = data.datasets || []
-  } catch {
+    ragflowConfigured.value = !!data.configured
+    ragflowError.value = data.error || ''
+  } catch (e) {
     ragflowDatasets.value = []
+    ragflowConfigured.value = false
+    ragflowError.value = e.response?.data?.error || e.message || '加载失败'
   }
 }
 
@@ -362,7 +373,7 @@ function delItem(type, id) {
         await api.delete(`${base}/${id}`)
         message.success('已删除')
         await loadCatalog()
-      } catch (e) { message.error('删除失败：' + e.message) }
+      } catch (e) { message.error('删除失败：' + (e.response?.data?.error || e.message)) }
     },
   })
 }
