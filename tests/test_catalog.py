@@ -71,6 +71,62 @@ def test_employee_partial_update_keeps_other_fields():
     catalog.delete_employee(eid)
 
 
+# ---- 工具 ----
+
+def test_update_tool_syncs_interrupt_on():
+    """改工具审批策略须同步重算受影响员工的 interrupt_on（否则重编译仍读旧值）。"""
+    _seed_tool("start_refund")
+    _seed_tool("kb_search")
+    eid = catalog.create_employee({
+        "name": "审批同步员", "model": "openai:m", "backend": "state", "persona": "p",
+        "tools": ["start_refund", "kb_search"], "skills": [], "kbs": [], "sops": [], "connectors": [],
+    })
+    # 初始无审批
+    cfg = catalog.get_employee_config(eid)
+    assert cfg["interrupt_on"]["start_refund"] is False
+
+    # 开启审批：interrupt_on 即时重算
+    ok, affected = catalog.update_tool("start_refund", "新描述", ["approve", "reject"])
+    assert ok and affected == [eid]
+    cfg2 = catalog.get_employee_config(eid)
+    assert cfg2["interrupt_on"]["start_refund"]["allowed_decisions"] == ["approve", "reject"]
+    assert cfg2["interrupt_on"]["kb_search"] is False  # 未动工具不受影响
+
+    # 关闭审批：回退为 False
+    ok2, affected2 = catalog.update_tool("start_refund", "新描述", None)
+    assert ok2 and affected2 == [eid]
+    assert catalog.get_employee_config(eid)["interrupt_on"]["start_refund"] is False
+
+    catalog.delete_employee(eid)
+
+
+def test_update_tool_only_affects_linked_employees():
+    """未引用该工具的员工不进受影响列表；软删员工被排除；描述同步落库。"""
+    _seed_tool("t_a")
+    _seed_tool("t_b")
+    e1 = catalog.create_employee({
+        "id": "emp_tool_link_a", "name": "员工甲", "model": "openai:m", "backend": "state",
+        "persona": "p", "tools": ["t_a"], "skills": [], "kbs": [], "sops": [], "connectors": [],
+    })
+    e2 = catalog.create_employee({
+        "id": "emp_tool_link_b", "name": "员工乙", "model": "openai:m", "backend": "state",
+        "persona": "p", "tools": ["t_b"], "skills": [], "kbs": [], "sops": [], "connectors": [],
+    })
+    ok, affected = catalog.update_tool("t_a", "描述甲", ["approve", "reject"])
+    assert ok and affected == [e1]
+    assert catalog.get_employee_config(e2)["interrupt_on"]["t_b"] is False
+
+    tools = {t["id"]: t for t in catalog.catalog()["tools"]}
+    assert tools["t_a"]["description"] == "描述甲"
+
+    # 软删员工后不再受影响
+    catalog.delete_employee(e1)
+    ok2, affected2 = catalog.update_tool("t_a", "描述甲2", None)
+    assert ok2 and affected2 == []
+
+    catalog.delete_employee(e2)
+
+
 def test_backfill_employees_if_missing_adds_netops():
     """老库补种：net-ops 员工缺失时由 backfill 补回（含技能/工具/本体工具）。"""
     catalog.init()

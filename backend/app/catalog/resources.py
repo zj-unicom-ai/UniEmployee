@@ -88,16 +88,36 @@ def employees_using_sop(sop_id: str) -> list[str]:
 # 工具管理（工具由代码定义，页面只编辑元信息）
 # ---------------------------------------------------------------------------
 
-def update_tool(tool_id: str, description: str, needs_approval) -> bool:
+def update_tool(tool_id: str, description: str, needs_approval) -> tuple[bool, list[str]]:
+    """更新工具元信息，并同步重算引用该工具的员工的 interrupt_on。
+
+    审批策略（needs_approval）是 employees.interrupt_on 的派生源：员工保存时
+    由 _build_interrupt_on 存量落库。此处不同步的话，运行时 invalidate 重编译
+    读到的仍是旧值，审批开关实际不生效（对照 _migrate_remove_refund_gate）。
+    返回 (是否更新成功, 受影响员工 id 列表)。
+    """
+    from .employees import _build_interrupt_on
     con = _conn()
     cur = con.cursor()
     na = json.dumps(needs_approval, ensure_ascii=False) if needs_approval else None
     cur.execute("UPDATE tools SET description=?, needs_approval=? WHERE id=?",
                 (description, na, tool_id))
     ok = cur.rowcount > 0
+    affected: list[str] = []
+    if ok:
+        affected = [r[0] for r in cur.execute(
+            "SELECT et.employee_id FROM employee_tools et "
+            "JOIN employees e ON e.id=et.employee_id "
+            "WHERE et.tool_id=? AND e.deleted_at IS NULL", (tool_id,))]
+        for emp_id in affected:
+            tools = [r[0] for r in cur.execute(
+                "SELECT tool_id FROM employee_tools WHERE employee_id=?", (emp_id,))]
+            cur.execute("UPDATE employees SET interrupt_on=? WHERE id=?",
+                        (json.dumps(_build_interrupt_on(tools), ensure_ascii=False),
+                         emp_id))
     con.commit()
     con.close()
-    return ok
+    return ok, affected
 
 
 def employees_using_tool(tool_id: str) -> list[str]:
