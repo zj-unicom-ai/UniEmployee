@@ -265,7 +265,7 @@ async def edit_kb(kb_id: str, body: dict, request: Request,
                   admin: dict = Depends(auth.require_admin)):
     before = catalog.get_kb(kb_id)
     ok = catalog.update_kb(kb_id, body.get("name", ""), body.get("description", ""),
-                           body.get("ragflow_dataset_id", ""))
+                           body.get("ragflow_dataset_id"))  # 缺省 None=保留原值
     if ok:
         for e in catalog.employees_using_kb(kb_id):
             runtime.invalidate(e)
@@ -328,7 +328,7 @@ async def create_connector(body: dict, request: Request,
                              body.get("config", {}))
     audit.log("create", "connector", cid, admin, request,
               after=catalog.get_connector(cid))
-    return {"cid": cid}
+    return {"id": cid}
 
 
 @router.get("/connectors/{conn_id}")

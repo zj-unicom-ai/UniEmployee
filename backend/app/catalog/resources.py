@@ -143,6 +143,7 @@ def create_kb(kb_id: str, name: str, description: str = "", ragflow_dataset_id: 
 
 def update_kb(kb_id: str, name: str, description: str,
               ragflow_dataset_id: str | None = None) -> bool:
+    """更新知识库元信息；ragflow_dataset_id 传 None 表示保留原值不更新。"""
     con = _conn()
     cur = con.cursor()
     if ragflow_dataset_id is None:
