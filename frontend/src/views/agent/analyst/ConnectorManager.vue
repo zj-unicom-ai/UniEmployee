@@ -30,7 +30,7 @@
             <div class="card-desc">{{ c.description || '无描述' }}</div>
             <div class="card-meta">
               <n-tag size="tiny" type="warning">MCP</n-tag>
-              <span class="meta-text">{{ c.config?.command || '未配置命令' }}</span>
+              <span class="meta-text">连接器配置已托管（敏感信息不展示）</span>
             </div>
           </div>
           <div class="card-actions">

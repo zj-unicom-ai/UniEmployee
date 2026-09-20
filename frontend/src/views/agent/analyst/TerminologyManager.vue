@@ -29,11 +29,11 @@
             clearable
             style="width: 160px"
           />
-          <n-switch v-model:value="showDisabled" size="small">
+          <n-switch v-model:value="showDisabled" size="small" :disabled="!auth.isAdmin">
             <template #checked>含禁用</template>
             <template #unchecked>仅启用</template>
           </n-switch>
-          <n-button size="small" type="primary" @click="openCreate">+ 新增术语</n-button>
+          <n-button v-if="auth.isAdmin" size="small" type="primary" @click="openCreate">+ 新增术语</n-button>
         </n-space>
       </div>
 
@@ -55,7 +55,7 @@
             </n-tag>
           </div>
           <div v-if="term.description" class="term-desc">{{ term.description }}</div>
-          <div class="term-actions">
+          <div v-if="auth.isAdmin" class="term-actions">
             <n-button size="tiny" text @click="toggleEnabled(term)">
               {{ term.enabled ? '禁用' : '启用' }}
             </n-button>
@@ -152,10 +152,12 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import { useAuthStore } from '../../../stores/auth.js'
 import * as analystApi from '../../../api/analyst.js'
 
 const router = useRouter()
 const message = useMessage()
+const auth = useAuthStore()
 
 const currentTab = 'terminologies'
 function switchTab(name) {
