@@ -249,6 +249,8 @@ class FeishuProvider:
             options["reply_to"] = message.reply_to_message_id
         return await self.channel.send(
             message.receive_id,
-            {"text": message.text},
+            # 智能体输出天然包含标题、列表和代码块；交给 Channel SDK
+            # 转换为飞书 post 富文本。SDK 在格式被拒绝时会降级为纯文本。
+            {"markdown": message.text},
             options,
         )

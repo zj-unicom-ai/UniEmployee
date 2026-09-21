@@ -165,7 +165,9 @@ class SupervisorRegistry:
         if (
             legacy_id
             and os.environ.get("FEISHU_ENABLED", "0").strip() == "1"
-            and legacy_id not in channels
+            # 页面配置一旦存在，数据库就是唯一事实来源。不能再把旧环境变量
+            # 追加成第二个频道，否则同一 App 会建立重复长连接并重复消费消息。
+            and not channels
         ):
             channels[legacy_id] = {
                 "id": legacy_id,

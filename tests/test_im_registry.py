@@ -102,3 +102,21 @@ def test_registry_reconcile_stops_disabled_channel(monkeypatch):
 
     state = asyncio.run(scenario())
     assert state["status"] == "disabled"
+
+
+def test_database_channel_suppresses_legacy_environment_fallback(monkeypatch):
+    channels = [
+        {"id": "db-channel", "provider": "feishu", "enabled": True, "updated_at": "1"}
+    ]
+    credentials = {
+        "db-channel": ChannelCredential("db-channel", "db-app", "", "secret"),
+    }
+    _configure(monkeypatch, channels, credentials)
+    monkeypatch.setenv("FEISHU_ENABLED", "1")
+    monkeypatch.setenv("FEISHU_CHANNEL_ID", "legacy-channel")
+    monkeypatch.setenv("FEISHU_EMPLOYEE_ID", "legacy-employee")
+    monkeypatch.setenv("FEISHU_APP_ID", "legacy-app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "legacy-secret")
+
+    registry = registry_module.SupervisorRegistry()
+    assert set(registry._desired_specs()) == {"db-channel"}

@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+from app.im.contracts import OutboundMessage
 from app.im.credentials import ChannelCredential
 from app.im.providers.feishu import FeishuProvider, normalize_message
 
@@ -137,3 +138,35 @@ def test_raw_event_metadata_is_consumed_once():
         "evt_1",
     )
     assert instance._take_event_metadata("om_1") is None
+
+
+def test_provider_sends_agent_reply_as_markdown_post():
+    async def scenario():
+        calls = []
+
+        class FakeChannel:
+            async def send(self, receive_id, payload, options):
+                calls.append((receive_id, payload, options))
+                return SimpleNamespace(message_id="om_reply")
+
+        async def on_message(message):
+            return None
+
+        instance = provider(on_message)
+        instance.channel = FakeChannel()
+        result = await instance.send(OutboundMessage(
+            channel_id="ch",
+            receive_id="oc_1",
+            receive_id_type="chat_id",
+            reply_to_message_id="om_1",
+            text="## 处理结果\n\n- 已完成\n- 无异常",
+        ))
+        return calls, result
+
+    calls, result = asyncio.run(scenario())
+    assert result.message_id == "om_reply"
+    assert calls == [(
+        "oc_1",
+        {"markdown": "## 处理结果\n\n- 已完成\n- 无异常"},
+        {"receive_id_type": "chat_id", "reply_to": "om_1"},
+    )]
