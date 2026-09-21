@@ -30,9 +30,7 @@ Through its five-layer capability model — **Employee → Workflow/SOP → Skil
 
 A one-minute video tour of UniEmployee: the digital employee chat workspace (streaming answers with visible thinking / tool calls), HITL human approval, end-to-end execution traces, employee & resource-center configuration, and the enterprise knowledge ontology.
 
-[![UniEmployee introduction video](assets/UniEmployee-cover.png)](assets/UniEmployee.mp4)
-
-> Click the cover to open the video (~80 s, 9.5 MB; GitHub cannot play repo videos inline — use "View raw" to download and watch).
+https://github.com/user-attachments/assets/73de95eb-4b26-4ddb-9145-6e1e3c3ad2c2
 
 ## Getting Started
 
