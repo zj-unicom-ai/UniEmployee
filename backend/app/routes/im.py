@@ -6,6 +6,7 @@ provider 不是 web 时可通过 /channels/{id}/incoming 接收外部 IM 消息�
 """
 
 import json
+import logging
 import time
 
 import httpx
@@ -19,8 +20,12 @@ from app.models import (
 from app.streaming import _stream_run, reconstruct, conv_emp_map, conv_owner_map
 from app.im import jobs as im_jobs
 from app.im.registry import registry as im_registry
+from app.im.registration import RegistrationUnavailable
+from app.im.registration import registration_service as app_registration
 
 router = APIRouter(prefix="/api/im", tags=["im"])
+
+logger = logging.getLogger("app.routes.im")
 
 
 def _accessible_employee_map(user: dict) -> dict[str, dict]:
@@ -174,6 +179,88 @@ async def put_credentials(channel_id: str, body: dict = Body(...), user: dict = 
     )
     await im_registry.reconcile(force_channel_id=channel_id)
     return im_jobs.credential_summary(channel_id)
+
+
+async def _apply_scanned_credential(
+    channel_id: str, app_id: str, app_secret: str, open_id: str | None
+) -> None:
+    """扫码创建成功后的落库回调（路径 B）。
+
+    与手工填写路径（路径 A）**共用同一个 put_credential 和同一套下游**：加密存储、
+    指纹变化触发重连。扫码不返回 tenant_key，写空串，由事件头自动识别。
+    注意：不记录 open_id 与 App Secret。
+    """
+    im_jobs.put_credential(
+        channel_id=channel_id, app_id=app_id, app_secret=app_secret, tenant_key=""
+    )
+    await im_registry.reconcile(force_channel_id=channel_id)
+    logger.info("飞书扫码创建应用成功 channel=%s app_id=%s", channel_id, app_id)
+
+
+def _require_feishu_channel(channel_id: str) -> dict:
+    channel = conversations.get_channel(channel_id)
+    if not channel:
+        raise HTTPException(404, "频道不存在")
+    if channel.get("provider") != "feishu":
+        raise HTTPException(400, "当前仅支持为飞书频道扫码创建应用")
+    return channel
+
+
+@router.post("/channels/{channel_id}/registration/start")
+async def start_app_registration(
+    channel_id: str,
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    """发起飞书扫码一键创建应用（路径 B）。
+
+    立即返回二维码信息，轮询在后台任务里进行，不阻塞本次请求（最长 60 分钟）。
+    """
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可发起飞书应用扫码创建")
+    _require_feishu_channel(channel_id)
+    try:
+        return await app_registration.start(
+            channel_id=channel_id,
+            created_by=str(user.get("id") or ""),
+            on_success=_apply_scanned_credential,
+        )
+    except RegistrationUnavailable as exc:
+        # 环境不支持时前端应回退到手工填写 App ID/App Secret。
+        raise HTTPException(503, f"扫码创建暂不可用，请改为手工填写 App ID：{exc}") from exc
+
+
+@router.get("/channels/{channel_id}/registration/{session_id}")
+async def get_app_registration(
+    channel_id: str,
+    session_id: str,
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    """查询扫码流程状态（前端轮询）。成功后附带脱敏的凭据状态。"""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可查看飞书应用扫码状态")
+    _require_feishu_channel(channel_id)
+    snapshot = app_registration.get(session_id)
+    if snapshot is None or snapshot.get("channel_id") != channel_id:
+        raise HTTPException(404, "扫码会话不存在或已过期")
+    if snapshot.get("status") == "success":
+        snapshot = {**snapshot, "credential": im_jobs.credential_summary(channel_id)}
+    return snapshot
+
+
+@router.post("/channels/{channel_id}/registration/{session_id}/cancel")
+async def cancel_app_registration(
+    channel_id: str,
+    session_id: str,
+    user: dict = Depends(auth.get_current_user_or_fallback),
+):
+    """取消扫码流程，清理后台轮询任务。"""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可取消飞书应用扫码")
+    _require_feishu_channel(channel_id)
+    snapshot = app_registration.get(session_id)
+    if snapshot is None or snapshot.get("channel_id") != channel_id:
+        raise HTTPException(404, "扫码会话不存在或已过期")
+    return await app_registration.cancel(session_id)
 
 
 @router.delete("/channels/{channel_id}")

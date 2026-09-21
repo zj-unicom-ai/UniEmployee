@@ -130,6 +130,7 @@ async def lifespan(app):
         runtime.set_store(store)
         await runtime.warmup_all()
         await recover_conversations()
+        from app.im.registration import registration_service as app_registration
         from app.im.registry import registry as im_registry
         # 频道连接由独立 Registry 管理。单个飞书频道失败不得阻止 Web/API 启动。
         await im_registry.start()
@@ -137,6 +138,8 @@ async def lifespan(app):
         log.info("启动完成，开始接收请求")
         yield
         await im_registry.stop()
+        # 取消尚未完成的飞书扫码轮询任务，避免后台悬挂。
+        await app_registration.shutdown()
         await scheduler.stop()
         await runtime.shutdown_mcp()
         if dblayer.is_pg():
