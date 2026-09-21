@@ -30,9 +30,7 @@ UniEmployee 是一套面向企业的**数字员工构建与运行平台**：把�
 
 一分钟视频速览 UniEmployee：数字员工对话工作台（流式回答、思考与工具调用过程实时可见）、HITL 人工审批、全链路执行 Trace、员工与资源中心配置、企业知识本体。
 
-[![UniEmployee 平台介绍视频](assets/UniEmployee-cover.png)](assets/UniEmployee.mp4)
-
-> 点击封面打开视频文件（约 1 分 20 秒，9.5MB；GitHub 不支持网页内直接播放仓库视频，可 View raw 下载后观看）。
+https://github.com/user-attachments/assets/73de95eb-4b26-4ddb-9145-6e1e3c3ad2c2
 
 ## 目录
 
