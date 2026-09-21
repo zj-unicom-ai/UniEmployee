@@ -32,7 +32,7 @@ A one-minute video tour of UniEmployee: the digital employee chat workspace (str
 
 [![UniEmployee introduction video](assets/UniEmployee-cover.png)](assets/UniEmployee.mp4)
 
-> Click the cover to play the full video (~80 s), or [open the video file directly](assets/UniEmployee.mp4).
+> Click the cover to open the video (~80 s, 9.5 MB; GitHub cannot play repo videos inline — use "View raw" to download and watch).
 
 ## Getting Started
 
