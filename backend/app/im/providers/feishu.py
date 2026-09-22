@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from app.im.cards import ThrottlePolicy
+from app.im.cards.feishu import (
+    API_BASE,
+    FeishuCardSession,
+    tenant_access_token,
+)
 from app.im.contracts import NormalizedInbound, OutboundMessage
 from app.im.credentials import ChannelCredential
 
@@ -18,6 +25,26 @@ StatusHandler = Callable[[str, str | None], None]
 
 _EVENT_METADATA_TTL_SECONDS = 300.0
 _EVENT_METADATA_MAX_ITEMS = 2048
+
+_HTTP_TIMEOUT_SECONDS = 20.0
+
+# 等待态用的表情。飞书消息表情列表里的 "Typing"，语义就是"对方正在输入"。
+# 它不是一条消息、而是对**用户那条消息**的操作，所以不存在"提示一直挂着"
+# 的问题，也不占群里的消息位 —— 这正是它比"发一条已收到"更好的地方。
+TYPING_EMOJI = "Typing"
+
+# 等待态开关：默认开启，置 0/false/no/off 可关闭。
+ENV_TYPING_REACTION = "IM_TYPING_REACTION"
+
+
+def _typing_reaction_enabled() -> bool:
+    raw = os.environ.get(ENV_TYPING_REACTION, "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _clean(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
 
 # ---------------------------------------------------------------- SDK 缺陷绕行
 
@@ -84,6 +111,20 @@ def _pin_sdk_event_loop() -> None:
     lark_ws_client.Client.start = start_with_own_loop
     _SDK_LOOP_PATCHED = True
     logger.info("飞书 SDK 事件循环已改为按连接独立绑定（绕行 lark-channel-sdk 的模块级 loop）")
+
+
+def _response_json(response: Any) -> Mapping[str, Any]:
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _code(response: Any, payload: Mapping[str, Any]) -> int:
+    if getattr(response, "status_code", 0) >= 400:
+        return int(payload.get("code") or getattr(response, "status_code"))
+    return int(payload.get("code") or 0)
 
 
 def normalize_message(
@@ -169,6 +210,8 @@ class FeishuProvider:
         self.on_status = on_status
         self.channel: Any | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # 卡片与表情回应走 OpenAPI，不经 SDK 传输层，所以自备一个客户端。
+        self._http: Any | None = None
         self._event_metadata: OrderedDict[str, tuple[str, str, float]] = OrderedDict()
 
     def _notify_status(self, status: str, error: str | None = None) -> None:
@@ -281,8 +324,15 @@ class FeishuProvider:
             )
 
     async def connect(self, timeout: float = 30) -> None:
+        import httpx
+
         self._loop = asyncio.get_running_loop()
         self._notify_status("connecting")
+        self._http = httpx.AsyncClient(
+            timeout=_HTTP_TIMEOUT_SECONDS,
+            # 与 SDK 传输层一致：默认直连，代理必须显式配置。
+            trust_env=False,
+        )
         self.channel = self._build_channel()
         # SDK 负责验签、ACK、去重和重连；raw 回调只提取事件头元数据。
         self.channel.on("raw", self._capture_raw_event)
@@ -308,6 +358,9 @@ class FeishuProvider:
         if self.channel is not None:
             await self.channel.disconnect()
             self.channel = None
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
         self._event_metadata.clear()
 
     async def send(self, message: OutboundMessage) -> Any:
@@ -323,3 +376,99 @@ class FeishuProvider:
             {"markdown": message.text},
             options,
         )
+
+    # ------------------------------------------------------------ 卡片能力
+
+    def create_card_session(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        template_id: str = "",  # 飞书不需要模板，仅为与钉钉保持同一工厂契约
+        policy: ThrottlePolicy,
+        reply_to: str | None = None,
+    ) -> FeishuCardSession | None:
+        """构造卡片会话（尚未投放）；连接未就绪或目标不可用时返回 ``None``。
+
+        返回 ``None`` 表示「这条消息不走卡片」，由 Worker 退回文本回复 ——
+        这是能力协商，不是错误。飞书不需要模板，所以这里不看 ``template_id``：
+        卡片 JSON 直接在代码里构造（见 ``app.im.cards.feishu``）。
+        """
+        if self._http is None:
+            logger.debug("Feishu card session skipped: http client unavailable")
+            return None
+        receive_id = _clean(payload.get("reply_target")) or _clean(payload.get("chat_id"))
+        if not receive_id:
+            logger.debug("Feishu card session skipped: no receive target")
+            return None
+        return FeishuCardSession(
+            http=self._http,
+            credential=self.credential,
+            receive_id=receive_id,
+            receive_id_type=_clean(payload.get("reply_target_type")) or "chat_id",
+            reply_to=reply_to or None,
+            policy=policy,
+        )
+
+    # ------------------------------------------------------------ 等待态
+
+    async def start_typing(self, *, message_id: str) -> Any | None:
+        """给入站消息加一个 Typing 表情回应；失败返回 ``None``。
+
+        这是"智能体正在处理"的**最早**信号：卡片要先建卡再发送，而表情回应是
+        对既有消息的一次操作，几乎立刻可见。它同样不占消息位 —— 处理完就删掉。
+        """
+        if not _typing_reaction_enabled():
+            return None
+        if self._http is None or not message_id:
+            return None
+        try:
+            token = await tenant_access_token(self._http, self.credential)
+            response = await self._http.post(
+                f"{API_BASE}/im/v1/messages/{message_id}/reactions",
+                headers=self._auth_headers(token),
+                json={"reaction_type": {"emoji_type": TYPING_EMOJI}},
+            )
+            payload = _response_json(response)
+            reaction_id = str((payload.get("data") or {}).get("reaction_id") or "")
+            if _code(response, payload) != 0 or not reaction_id:
+                # 缺 im:message.reaction 权限时属预期：等待态是锦上添花，
+                # 不该因此影响正式回复，所以只记 debug。
+                logger.debug(
+                    "Feishu typing reaction failed channel=%s code=%s",
+                    self.credential.channel_id,
+                    payload.get("code"),
+                )
+                return None
+            return {"message_id": message_id, "reaction_id": reaction_id}
+        except Exception as exc:
+            logger.debug("Feishu typing reaction error channel=%s error=%s",
+                         self.credential.channel_id, exc)
+            return None
+
+    async def stop_typing(self, handle: Any | None) -> None:
+        """移除等待态；失败只记日志。
+
+        必须尽力删掉：reaction 是**持久**的，留着就会一直挂在用户消息下面。
+        """
+        if not handle or self._http is None:
+            return
+        message_id = handle.get("message_id")
+        reaction_id = handle.get("reaction_id")
+        if not message_id or not reaction_id:
+            return
+        try:
+            token = await tenant_access_token(self._http, self.credential)
+            await self._http.delete(
+                f"{API_BASE}/im/v1/messages/{message_id}/reactions/{reaction_id}",
+                headers=self._auth_headers(token),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Feishu typing reaction removal failed message=%s error=%s", message_id, exc
+            )
+
+    def _auth_headers(self, token: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }

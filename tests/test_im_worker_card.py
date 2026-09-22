@@ -36,7 +36,7 @@ def _inbox_row() -> dict:
 class FakeCard:
     """假卡片会话：记录生命周期调用，可按需让投放或收尾失败。"""
 
-    def __init__(self, *, open_error=None, finalize_error=None):
+    def __init__(self, *, open_error=None, finalize_error=None, truncated=False):
         self.out_track_id = "track_1"
         self.update_count = 0
         self.opened_with = None
@@ -45,6 +45,7 @@ class FakeCard:
         self.failed_with = None
         self._open_error = open_error
         self._finalize_error = finalize_error
+        self._truncated = truncated
 
     async def open(self, text):
         if self._open_error is not None:
@@ -59,21 +60,26 @@ class FakeCard:
         if self._finalize_error is not None:
             raise self._finalize_error
         self.finalized_with = text
+        # 契约：返回值表示「卡片是否装不下，需要补发文本」。
+        return self._truncated
 
     async def fail(self, text):
         self.failed_with = text
 
 
 class CardProvider:
-    """支持卡片的假 Provider。"""
+    """支持卡片的假 Provider，行为对齐钉钉：必须有模板，否则视为不支持卡片。"""
 
     def __init__(self, card):
         self.card = card
         self.sent: list = []
         self.template_id = None
 
-    def create_card_session(self, *, payload, template_id, policy):
+    def create_card_session(self, *, payload, template_id, policy, reply_to=None):
         self.template_id = template_id
+        if not template_id:
+            # 模板校验属于渠道自己的能力协商，不再由 Worker 统一判定。
+            return None
         return self.card
 
     async def send(self, message):
@@ -200,10 +206,11 @@ def test_finalize_failure_still_delivers_result_by_text(monkeypatch, card_env):
     assert order == ["card-open", "outbox", "card:finalize_failed"]
 
 
-def test_long_result_is_truncated_on_card_and_sent_by_text(monkeypatch, card_env):
+def test_truncated_card_result_is_also_sent_by_text(monkeypatch, card_env):
+    """卡片装不下时（钉钉会有这种情况）完整结果必须走文本补发。"""
     row = _inbox_row()
     order: list = []
-    card = FakeCard()
+    card = FakeCard(truncated=True)
     provider = CardProvider(card)
     _patch_jobs(monkeypatch, row, order)
     monkeypatch.setattr(worker, "run_agent_events", _events_of("长" * (MAX_CARD_CONTENT_CHARS + 400)))
@@ -212,9 +219,24 @@ def test_long_result_is_truncated_on_card_and_sent_by_text(monkeypatch, card_env
         worker.process_inbox_once(provider=provider, channel_id="chan_1", employee_id="xiaoshu")
     ) is True
 
-    assert len(card.finalized_with) <= MAX_CARD_CONTENT_CHARS
-    # 卡片装不下，完整结果改用文本补发。
+    # 截断判定由会话自己给出，Worker 只按返回值决定要不要补文本。
     assert order == ["card-open", "outbox", "card:truncated"]
+
+
+def test_card_that_fits_delivers_nothing_by_text(monkeypatch, card_env):
+    """飞书侧不截断，回归：会话说"装得下"时不该再补一条文本。"""
+    row = _inbox_row()
+    order: list = []
+    card = FakeCard()
+    provider = CardProvider(card)
+    _patch_jobs(monkeypatch, row, order)
+    monkeypatch.setattr(worker, "run_agent_events", _events_of("长" * (MAX_CARD_CONTENT_CHARS + 400)))
+
+    asyncio.run(
+        worker.process_inbox_once(provider=provider, channel_id="chan_1", employee_id="xiaoshu")
+    )
+
+    assert order == ["card-open", "card:completed"]
 
 
 def test_execution_error_marks_card_failed(monkeypatch, card_env):
@@ -276,6 +298,8 @@ def test_card_requires_template_id(monkeypatch):
     ) is True
 
     # 没配模板就发卡片只会得到一张空卡片，退文本更稳。
+    # 注意这个判断在**渠道**里而不是 Worker 里 —— 飞书不需要模板，把「必须有
+    # template_id」写进共享判定会让钉钉的约束泄漏给飞书。
     assert card.opened_with is None
     assert order == ["outbox"]
 

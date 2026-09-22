@@ -13,11 +13,10 @@ from typing import Any
 from app import conversations
 from app.im.cards import (
     WORKING_TEXT,
-    card_available,
+    card_enabled,
     card_factory,
     card_level,
     card_template_id,
-    clamp_card_content,
     policy_for,
 )
 from app.im.context import ActorContext
@@ -133,7 +132,7 @@ async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | Non
     返回 ``None`` 表示「这条消息走文本回复」，不是错误 —— 配置缺失、渠道不支持、
     连接未就绪、模板无权限都会走到这里，全部退化成改动前的行为。
     """
-    if not card_available():
+    if not card_enabled():
         return None
     factory = card_factory(provider)
     if factory is None:
@@ -142,6 +141,7 @@ async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | Non
         payload=row["payload"],
         template_id=card_template_id(),
         policy=policy_for(card_level()),
+        reply_to=row["provider_message_id"],
     )
     if session is None:
         return None
@@ -158,6 +158,54 @@ async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | Non
         level=card_level(),
     )
     return session
+
+
+# 等待态只对「刚到达」的消息有意义。给一条很旧的消息加表情回应，用户会看到
+# 一个不知从哪冒出来的 Typing 挂在历史消息下面（OpenClaw 踩过的坑）。
+TYPING_MAX_MESSAGE_AGE_SECONDS = 120.0
+
+
+def _typing_is_worth_adding(row: dict[str, Any]) -> bool:
+    raw = row.get("created_at")
+    if not raw:
+        return True
+    try:
+        created = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - created).total_seconds()
+    return age <= TYPING_MAX_MESSAGE_AGE_SECONDS
+
+
+async def _start_typing(provider: Any, *, row: dict[str, Any]) -> Any | None:
+    """按能力请求等待态信号；渠道不支持或失败时返回 ``None``。
+
+    用能力检测而不是 ``isinstance``，与卡片工厂同样的理由：Worker 不该反向
+    依赖具体 Provider，新增支持等待态的渠道也不必改这里。
+    """
+    starter = getattr(provider, "start_typing", None)
+    if not callable(starter) or not _typing_is_worth_adding(row):
+        return None
+    try:
+        return await starter(message_id=row["provider_message_id"])
+    except Exception as exc:
+        logger.debug("IM typing indicator start failed inbox=%s error=%s", row["id"], exc)
+        return None
+
+
+async def _stop_typing(provider: Any, handle: Any | None) -> None:
+    """移除等待态。必须无条件执行：表情回应是持久的，留着会一直挂在消息下面。"""
+    if handle is None:
+        return
+    stopper = getattr(provider, "stop_typing", None)
+    if not callable(stopper):
+        return
+    try:
+        await stopper(handle)
+    except Exception as exc:
+        logger.warning("IM typing indicator stop failed error=%s", exc)
 
 
 async def _abandon_card(session: Any | None, *, inbox_id: str, text: str) -> None:
@@ -179,7 +227,11 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
     if not row:
         return False
     inbox_id = row["id"]
+    typing: Any | None = None
     try:
+        # 等待态先于一切：它是最早可见的信号，也是对既有消息的操作，
+        # 所以不像「发一条已收到」那样会留下一条永不消失的消息。
+        typing = await _start_typing(provider, row=row)
         context = _context(row)
         thread, created = jobs.get_or_create_thread(
             context, channel_id=channel_id, employee_id=employee_id,
@@ -231,9 +283,10 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
         card_status = ""
         delivered_by_card = False
         if session is not None:
-            display, truncated = clamp_card_content(text)
+            # 截断与否由会话自己判断：各渠道的容量上限不一样（钉钉 3000 字符，
+            # 飞书不截断），把这条判定留在 Worker 里就会变成「钉钉的限制泄漏给飞书」。
             try:
-                await session.finalize(display)
+                truncated = await session.finalize(text)
             except Exception as exc:
                 logger.warning("IM card finalize failed inbox=%s error=%s", inbox_id, exc)
                 card_status = "finalize_failed"
@@ -262,6 +315,9 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
         logger.exception("IM inbox processing failed inbox=%s", inbox_id)
         jobs.finish_inbox(inbox_id, worker_id, error=f"{type(exc).__name__}: {exc}"[:500])
         return False
+    finally:
+        # 无论成功、失败还是提前返回，等待态都必须撤掉。
+        await _stop_typing(provider, typing)
 
 
 async def deliver_outbox_once(*, provider: Any, worker_id: str = "im-delivery",

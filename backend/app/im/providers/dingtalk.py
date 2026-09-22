@@ -557,6 +557,14 @@ class DingtalkProvider:
         """
         if self._http is None:
             return None
+        if not _clean(template_id):
+            # 钉钉的卡片必须有模板；没配模板就当作「本渠道不支持卡片」，
+            # 由 Worker 走文本回复，而不是发一张空卡片出去。
+            logger.debug(
+                "DingTalk card session skipped: template not configured channel=%s",
+                self.credential.channel_id,
+            )
+            return None
         space = self.card_space(payload)
         if space is None:
             logger.debug(

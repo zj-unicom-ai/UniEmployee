@@ -209,15 +209,18 @@ class DingtalkCardSession:
         self._last_text = text
         self._last_push_at = time.monotonic()
 
-    async def finalize(self, text: str) -> None:
-        """收尾：写入最终结果并让卡片转入「完成」态。
+    async def finalize(self, text: str) -> bool:
+        """收尾：写入最终结果并让卡片转入「完成」态；返回**内容是否被截断**。
 
-        失败必须抛出去 —— 调用方要据此改用文本消息补发，不能静默丢结果。
+        返回值决定 Worker 要不要再补一条文本消息，所以它必须如实反映卡片里
+        到底有没有被裁。失败则抛出去 —— 调用方要据此改用文本补发，不能静默丢结果。
         """
         if not self.opened:
             raise DingtalkCardError("卡片尚未投放，无法收尾")
+        _, truncated = clamp_card_content(text)
         await self._stream(text, finalize=True, is_error=False)
         self.finalized = True
+        return truncated
 
     async def fail(self, text: str) -> None:
         """把卡片标记为失败态；失败本身不再向上抛。"""
