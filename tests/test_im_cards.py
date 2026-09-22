@@ -9,11 +9,15 @@ import asyncio
 import pytest
 
 from app.im.cards import (
+    ENV_CARD_LEVEL,
+    ENV_CARD_LEVEL_PREFIX,
     LEVEL_STAGED,
     LEVEL_STREAM,
     LEVEL_TWO_STATE,
     MAX_CARD_CONTENT_CHARS,
     ThrottlePolicy,
+    card_channel,
+    card_level,
     clamp_card_content,
     policy_for,
 )
@@ -299,10 +303,123 @@ def test_levels_are_ordered_by_call_volume():
     stream = policy_for(LEVEL_STREAM)
     staged = policy_for(LEVEL_STAGED)
 
-    # 档位越高，单次回复允许的更新次数越多、间隔越短。
-    assert stream.max_updates > staged.max_updates > 0
+    # 「不限次数」是最密的一档：只有它没有上限，其余档都有正数上限。
+    assert stream.max_updates is None
+    assert staged.max_updates is not None and staged.max_updates > 0
     assert stream.min_interval_seconds < staged.min_interval_seconds
+
+
+def test_unlimited_policy_pushes_past_the_old_cap():
+    """``max_updates=None`` 表示不限次数，上限完全交给间隔。
+
+    这条守着「回复后半段不再静默」：此前 ``stream`` 档封顶 40 次，长回复在第 40
+    次之后就不再推送，收尾那次 PUT 会把攒下的内容一次性甩上屏 —— 观感就是
+    「打几个字 → 卡住 → 一大段突然蹦出来」。
+    """
+    policy = ThrottlePolicy(0.0, 1, None)
+    http = FakeHttp([_token_response()])
+    session = _session(http, policy=policy)
+
+    asyncio.run(session.open("正在处理"))
+    # 每次比上次长 1 个字符，确保满足 min_delta_chars。
+    for index in range(60):
+        asyncio.run(session.push("内" * (10 + index)))
+
+    assert session.update_count == 60
+    assert len(http.urls_ending("/v1.0/card/streaming")) == 60
 
 
 def test_unknown_level_falls_back_to_default():
     assert policy_for("not-a-level") == policy_for(LEVEL_STAGED)
+
+
+# ------------------------------------------------------------------ 档位解析
+
+
+@pytest.fixture
+def clean_level_env(monkeypatch):
+    """清掉两个档位环境变量，让渠道默认值生效。"""
+    monkeypatch.delenv(ENV_CARD_LEVEL, raising=False)
+    monkeypatch.delenv(f"{ENV_CARD_LEVEL_PREFIX}FEISHU", raising=False)
+    monkeypatch.delenv(f"{ENV_CARD_LEVEL_PREFIX}DINGTALK", raising=False)
+
+
+def test_feishu_defaults_to_the_densest_level(clean_level_env):
+    """飞书流式更新不计 QPS 配额，省调用没有收益，所以默认用最密档。
+
+    钉钉仍留在 `staged` —— 它的入站额度是真要省的。
+    """
+    assert card_level("feishu") == LEVEL_STREAM
+    assert card_level("dingtalk") == LEVEL_STAGED
+    assert card_level() == LEVEL_STAGED
+
+
+def test_channel_level_overrides_global(monkeypatch, clean_level_env):
+    """渠道级覆盖优先于全局：同一份部署里两个渠道要能各自定密度。"""
+    monkeypatch.setenv(ENV_CARD_LEVEL, LEVEL_STAGED)
+    monkeypatch.setenv(f"{ENV_CARD_LEVEL_PREFIX}FEISHU", LEVEL_TWO_STATE)
+
+    assert card_level("feishu") == LEVEL_TWO_STATE
+    assert card_level("dingtalk") == LEVEL_STAGED
+
+
+def test_global_level_still_wins_over_channel_default(monkeypatch, clean_level_env):
+    monkeypatch.setenv(ENV_CARD_LEVEL, LEVEL_TWO_STATE)
+
+    assert card_level("feishu") == LEVEL_TWO_STATE
+
+
+def test_global_level_masking_a_channel_default_is_logged(monkeypatch, clean_level_env, caplog):
+    """全局值压掉渠道默认时必须留痕。
+
+    这是个真实踩过的坑：.env 里一行历史遗留的 `IM_CARD_LEVEL=staged` 让
+    `CHANNEL_DEFAULT_LEVELS` 整段失效，而表面上一切正常 —— 卡片照发，只是
+    观感没变，排查时完全看不出配置被谁覆盖了。
+    """
+    monkeypatch.setattr(
+        "app.im.cards._MASKED_LEVEL_WARNED", set(), raising=False
+    )
+    monkeypatch.setenv(ENV_CARD_LEVEL, LEVEL_STAGED)
+
+    with caplog.at_level("WARNING", logger="app.im.cards"):
+        assert card_level("feishu") == LEVEL_STAGED
+
+    assert any("覆盖了渠道默认" in record.message for record in caplog.records)
+
+
+def test_no_warning_when_global_matches_the_channel_default(monkeypatch, clean_level_env, caplog):
+    """全局值与渠道默认一致时不该刷告警 —— 那是正常配置。"""
+    monkeypatch.setattr(
+        "app.im.cards._MASKED_LEVEL_WARNED", set(), raising=False
+    )
+    monkeypatch.setenv(ENV_CARD_LEVEL, LEVEL_STREAM)
+
+    with caplog.at_level("WARNING", logger="app.im.cards"):
+        assert card_level("feishu") == LEVEL_STREAM
+
+    assert not any("覆盖了渠道默认" in record.message for record in caplog.records)
+
+
+def test_invalid_channel_level_is_ignored(monkeypatch, clean_level_env):
+    monkeypatch.setenv(f"{ENV_CARD_LEVEL_PREFIX}FEISHU", "turbo")
+
+    assert card_level("feishu") == LEVEL_STREAM
+
+
+def test_card_channel_reads_provider_id():
+    class Declared:
+        PROVIDER_ID = "  Feishu "
+
+    class Undeclared:
+        pass
+
+    assert card_channel(Declared()) == "feishu"
+    assert card_channel(Undeclared()) == ""
+
+
+def test_registry_provider_ids_match_their_keys():
+    """`PROVIDER_ID` 是档位解析的锚点，必须与注册表的键一致。"""
+    from app.im.providers import PROVIDERS
+
+    for key, cls in PROVIDERS.items():
+        assert cls.PROVIDER_ID == key

@@ -13,6 +13,7 @@ from typing import Any
 from app import conversations
 from app.im.cards import (
     WORKING_TEXT,
+    card_channel,
     card_enabled,
     card_factory,
     card_level,
@@ -137,12 +138,25 @@ async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | Non
     factory = card_factory(provider)
     if factory is None:
         return None
-    session = factory(
-        payload=row["payload"],
-        template_id=card_template_id(),
-        policy=policy_for(card_level()),
-        reply_to=row["provider_message_id"],
-    )
+    # 档位按渠道解析：飞书没有省调用的理由（流式更新不计 QPS 配额），钉钉有。
+    level = card_level(card_channel(provider))
+    # 工厂调用本身也要兜底：契约不匹配（某个渠道的 create_card_session 少了参数）
+    # 或 Provider 内部抛错，都不该让**整条消息**失败 —— 本函数文档承诺的是降级成
+    # 文本回复。实测代价：钉钉因被多传 `reply_to` 抛 TypeError，inbox 直接记
+    # failed，用户侧表现为"发了消息完全没回复"，比退回文本严重得多。
+    try:
+        session = factory(
+            payload=row["payload"],
+            template_id=card_template_id(),
+            policy=policy_for(level),
+            reply_to=row["provider_message_id"],
+        )
+    except Exception as exc:
+        logger.warning(
+            "IM card session factory failed inbox=%s channel=%s error=%s: %s",
+            row["id"], card_channel(provider), type(exc).__name__, exc,
+        )
+        return None
     if session is None:
         return None
     try:
@@ -155,7 +169,7 @@ async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | Non
         channel_id=row["channel_id"],
         out_track_id=session.out_track_id,
         template_id=card_template_id(),
-        level=card_level(),
+        level=level,
     )
     return session
 

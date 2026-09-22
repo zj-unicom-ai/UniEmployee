@@ -196,6 +196,10 @@ def _markdown_title(text: str, fallback: str = "数字员工") -> str:
 class DingtalkProvider:
     """一个频道一个实例，由 Supervisor 管理连接和收发生命周期。"""
 
+    # 与 ``providers.PROVIDERS`` 的键一致。卡片档位这类「按渠道取值」的配置靠它
+    # 定位，所以改名要同步改那边（有测试守着这条一致性）。
+    PROVIDER_ID = "dingtalk"
+
     def __init__(
         self,
         credential: ChannelCredential,
@@ -548,12 +552,23 @@ class DingtalkProvider:
         return None
 
     def create_card_session(
-        self, *, payload: Mapping[str, Any], template_id: str, policy: ThrottlePolicy
+        self,
+        *,
+        payload: Mapping[str, Any],
+        template_id: str,
+        policy: ThrottlePolicy,
+        reply_to: str | None = None,
     ) -> DingtalkCardSession | None:
         """构造卡片会话（尚未投放）；连接未就绪或场域不可用时返回 ``None``。
 
         返回 ``None`` 表示「这条消息不走卡片」，由 Worker 退回文本回复 ——
         这是能力协商，不是错误，所以只记 debug。
+
+        ``reply_to`` 是**飞书需要**的参数（卡片要回在原消息下）；钉钉的卡片由
+        ``card_space()`` 从入站 payload 推导场域、用 sessionWebhook 投放，用不到它。
+        这里保留同名参数只为与工厂契约一致 —— Worker 对所有渠道用同一组关键字调用
+        （见 ``worker._open_card_session``），少一个参数就抛 ``TypeError``，而那是
+        **整条消息失败**而不是降级成文本。
         """
         if self._http is None:
             return None

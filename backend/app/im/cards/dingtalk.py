@@ -187,7 +187,12 @@ class DingtalkCardSession:
 
     def _should_push(self, text: str) -> bool:
         policy = self._policy
-        if policy.max_updates <= 0 or self.update_count >= policy.max_updates:
+        limit = policy.max_updates
+        if limit == 0:
+            # 0 = 明确不做中间更新（两态档），只投放与收尾各一次。
+            return False
+        if limit is not None and self.update_count >= limit:
+            # None = 不限次数；此时速率完全由 min_interval_seconds 兜住。
             return False
         if len(text) - len(self._last_text) < policy.min_delta_chars:
             return False

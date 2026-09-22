@@ -29,8 +29,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -55,9 +57,34 @@ SUMMARY_GENERATING = "[生成中...]"
 SUMMARY_MAX_CHARS = 50
 
 # 打字机密度是**卡片配置**，不是代码参数：我们只管发全量，逐字上屏由平台渲染。
-# 所以调这两个值不会改变观感，也不会省下任何接口调用。
-PRINT_FREQUENCY_MS = 50
-PRINT_STEP = 1
+#
+# 上屏速率 = print_step / print_frequency_ms。**它必须 ≥ 模型产出速率**，
+# 否则每次推送都要把积压的那一段"追赶"上屏（官方 `fast` 策略的行为），
+# 观感就是「打几个字 → 蹦出一段」。
+#
+# 这里不取理论值，取真机实测值（data/db/traces.db 的 llm 事件）：
+#
+#   回复字数    LLM 耗时    产出速率
+#     425 字     2.07s     206 字/秒
+#     790 字     3.01s     262 字/秒
+#     294 字     2.19s     134 字/秒
+#
+# 也就是 **模型 2 秒左右就把整条回复吐完**，而 OpenClaw 沿用的 1 字/50ms
+# = 20 字/秒 只有它的十分之一 —— 425 字要让打字机打完得 21 秒，收尾关流式时
+# 必然有 380 多字整块落地。所以默认取 **8 字/20ms = 400 字/秒**，留出约一倍余量：
+# 上屏速率一旦快于模型，就不存在积压，观感等于"随模型产出逐字浮现"。
+#
+# 调这两个值不省也不费任何接口调用，纯观感；模型明显更快时可再调大
+# （IM_FEISHU_PRINT_STEP 每 +1 约 +50 字/秒）。注意飞书要求**两个字段必须成对
+# 出现**，只给一个会报 11311 printFrequencyMs or printStep is nil。
+PRINT_FREQUENCY_MS = 20
+PRINT_STEP = 8
+# 关流式会终止打字机，收尾前最多留这么久让上屏追平（见 _let_typewriter_catch_up）。
+CATCHUP_MAX_SECONDS = 2.0
+# 显式写出 fast：客户端各版本的默认值可能不同，官方也建议"前置指定流式参数"。
+PRINT_STRATEGY = "fast"
+ENV_PRINT_FREQUENCY_MS = "IM_FEISHU_PRINT_FREQUENCY_MS"
+ENV_PRINT_STEP = "IM_FEISHU_PRINT_STEP"
 
 # tenant_access_token 有效期 7200 秒；提前刷新，避免边界上刚好过期。
 TOKEN_REFRESH_MARGIN_SECONDS = 300.0
@@ -185,20 +212,55 @@ def truncate_summary(text: str, limit: int = SUMMARY_MAX_CHARS) -> str:
     return clean[: max(limit - 3, 0)] + "..."
 
 
+def _positive_int(name: str, fallback: int) -> int:
+    """读一个正整数环境变量；缺失/非法/非正数都退回默认值并记日志。
+
+    静默吞掉一个写错的值比报错更难查 —— 卡片照常发出去，只是观感没变。
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return fallback
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("飞书打字机配置不是整数，已忽略 %s=%r", name, raw)
+        return fallback
+    if value < 1:
+        logger.warning("飞书打字机配置需 ≥1，已忽略 %s=%r", name, raw)
+        return fallback
+    return value
+
+
+def print_config() -> tuple[int, int]:
+    """返回 ``(print_frequency_ms, print_step)``，可由环境变量覆盖。"""
+    return (
+        _positive_int(ENV_PRINT_FREQUENCY_MS, PRINT_FREQUENCY_MS),
+        _positive_int(ENV_PRINT_STEP, PRINT_STEP),
+    )
+
+
+def print_rate_chars_per_second() -> float:
+    """当前配置对应的上屏速率（字/秒），用于估算收尾该等多久。"""
+    frequency_ms, step = print_config()
+    return step / frequency_ms * 1000.0
+
+
 def build_streaming_card_json(initial_text: str) -> dict[str, Any]:
     """构造开启流式模式的卡片 JSON（2.0 结构）。
 
     初始文案随建卡一次性写入，所以卡片一出现就带「正在处理」，不需要额外一条
     提示消息 —— 这与钉钉侧「投放时直接带初始文案」是同一个思路。
     """
+    frequency_ms, step = print_config()
     return {
         "schema": SCHEMA_VERSION,
         "config": {
             "streaming_mode": True,
             "summary": {"content": SUMMARY_GENERATING},
             "streaming_config": {
-                "print_frequency_ms": {"default": PRINT_FREQUENCY_MS},
-                "print_step": {"default": PRINT_STEP},
+                "print_frequency_ms": {"default": frequency_ms},
+                "print_step": {"default": step},
+                "print_strategy": PRINT_STRATEGY,
             },
         },
         "body": {
@@ -320,7 +382,12 @@ class FeishuCardSession:
 
     def _should_push(self, text: str) -> bool:
         policy = self._policy
-        if policy.max_updates <= 0 or self.update_count >= policy.max_updates:
+        limit = policy.max_updates
+        if limit == 0:
+            # 0 = 明确不做中间更新（两态档），只投放与收尾各一次。
+            return False
+        if limit is not None and self.update_count >= limit:
+            # None = 不限次数；此时速率完全由 min_interval_seconds 兜住。
             return False
         if len(text) - len(self._text) < policy.min_delta_chars:
             return False
@@ -363,12 +430,33 @@ class FeishuCardSession:
         display = sanitize_markdown_for_card(merged)
         if display != self._pushed:
             # 收尾这次无论如何都要写，不受节流约束。
+            previous_len = len(self._pushed)
             await self._put_content(display)
             self._text = merged
             self._pushed = display
+            await self._let_typewriter_catch_up(previous_len)
         await self._close_streaming(merged)
         self.finalized = True
         return False
+
+    async def _let_typewriter_catch_up(self, previous_len: int) -> None:
+        """关流式前留一点时间让上屏追平，避免最后一段整块落地。
+
+        收尾是「写全量 → 立刻关流式」，而关流式会终止打字机 —— 这次写入新增的
+        字符若还没打完，就会在这一刻一次性出现。等待时间按
+        ``新增字数 / 上屏速率`` 估算，上限 ``CATCHUP_MAX_SECONDS``：
+        这是观感优化，不该拖着回复不交付。
+
+        只对**已有过中间推送**的卡片有意义：首次写入与初始文案没有前缀关系，
+        属协议规定的全屏直出，不存在"未上屏"的部分。
+        """
+        if self.update_count <= 0:
+            return
+        pending = len(self._pushed) - previous_len
+        rate = print_rate_chars_per_second()
+        if pending <= 0 or rate <= 0:
+            return
+        await asyncio.sleep(min(pending / rate, CATCHUP_MAX_SECONDS))
 
     async def fail(self, text: str) -> None:
         """把卡片标为失败态；失败本身不再向上抛。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
@@ -50,6 +51,56 @@ def _clean(value: Any) -> str:
 
 _SDK_LOOP_PATCHED = False
 
+# 每个线程在 start() 之前登记的"本连接的循环"。用线程本地而不是共享全局，
+# 是因为后者会被并发启动的多个飞书渠道互相覆盖（见 _ContextLoop 的说明）。
+_SDK_LOOP_LOCAL = threading.local()
+
+# SDK 导入时自己求值出来的那个模块级循环，作为最终兜底：
+# 上下文无法判定时退回补丁前的行为，保证"不更差"。
+_SDK_FALLBACK_LOOP: Any = None
+
+
+def _current_sdk_loop() -> Any:
+    """解析"此刻该用哪个循环"，优先级见 :class:`_ContextLoop`。"""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    registered = getattr(_SDK_LOOP_LOCAL, "loop", None)
+    if registered is not None and not registered.is_closed():
+        return registered
+    return _SDK_FALLBACK_LOOP
+
+
+class _ContextLoop:
+    """把 SDK 的模块级 ``loop`` 换成"按调用上下文解析"的代理。
+
+    第一版绕行（只把全局指向"本连接的循环"）漏了一件事：**全局只有一个位置**。
+    两个飞书渠道并发启动时后写者覆盖前者，于是 A 连接在 ``_connect()`` 里执行
+    ``loop.create_task(self._receive_message_loop(conn))`` 时读到的是 B 的循环
+    ⇒ 接收循环被挂到别人的循环上、而 ``conn`` 属于 A 的循环，抛
+    ``RuntimeError: got Future ... attached to a different loop``（打在
+    ``conn.recv()``），**连接建好即死**。
+
+    更麻烦的是它不抛错给 Registry（``supervisor.start()`` 已正常返回），于是既不
+    重试、``status`` 还停在 ``connected`` —— 表现为"渠道是好的、消息就是收不到"。
+
+    解析顺序（三种都指向"该连接自己的循环"）：
+
+    1. **当前正在运行的循环**。SDK 里所有的 ``loop.create_task(...)`` 都发生在协程内
+       （``_connect`` / ``_receive_message_loop`` / ``_schedule_handle_message``），
+       此刻正在运行的必然就是本连接 ``run_until_complete`` 的那个 ⇒ 精确命中。
+    2. **本线程登记的循环**。``start()`` 的入口与收尾
+       （``loop.run_until_complete(...)``、``loop.create_task(self._ping_loop())``）
+       跑在没有运行循环的线程池线程上，靠 ``start_with_own_loop`` 登记的线程本地值区分。
+    3. 兜底用 SDK 导入时那个循环，使上下文无法判定时的行为与补丁前一致。
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_current_sdk_loop(), name)
+
 
 def _pin_sdk_event_loop() -> None:
     """让 lark-channel-sdk 的 WebSocket 用一张连接自己的事件循环。
@@ -82,17 +133,23 @@ def _pin_sdk_event_loop() -> None:
     ``在事件循环内导入`` → ``This event loop is already running``
     ``在事件循环启动前导入`` → 该错误消失
 
-    所以这里给每个 ``Client`` 实例绑一张自己的循环，并在每次 ``start()`` 前
-    把它指给全局。属于对第三方缺陷的**定点绕行**：SDK 一旦改成 ``self.loop``
-    或把全局去掉，这段就该删。整个过程对失败免疫 —— 补丁没打上只是回到原状。
+    第二层问题（2026-09-22 真机确认）：全局只有**一个位置**，同进程的多个飞书渠道
+    并发启动会互相覆盖，先建好的连接其接收循环被挂到别人的循环上 —— 详见
+    :class:`_ContextLoop`。所以这里不是"把全局指向本连接"，而是把全局替换成一个
+    **按调用上下文解析的代理**，让每个连接各拿自己的循环。
+
+    属于对第三方缺陷的**定点绕行**：SDK 一旦改成 ``self.loop`` 或把全局去掉，
+    这段就该删。整个过程对失败免疫 —— 补丁没打上只是回到原状。
     """
-    global _SDK_LOOP_PATCHED
+    global _SDK_LOOP_PATCHED, _SDK_FALLBACK_LOOP
     if _SDK_LOOP_PATCHED:
         return
     try:
         from lark_channel.ws import client as lark_ws_client
     except Exception:  # pragma: no cover - SDK 缺失时由 _build_channel 负责报错
         return
+
+    _SDK_FALLBACK_LOOP = getattr(lark_ws_client, "loop", None)
 
     original_start = getattr(lark_ws_client.Client, "start", None)
     if original_start is None:  # pragma: no cover - SDK 内部结构变化
@@ -104,13 +161,18 @@ def _pin_sdk_event_loop() -> None:
         if loop is None or loop.is_closed():
             loop = asyncio.new_event_loop()
             self._uniemployee_loop = loop
-        # original_start 里引用的是模块全局名字，所以赋值必须发生在调用之前。
-        lark_ws_client.loop = loop
+        # 登记到"本线程"，**不要**再写共享全局 —— 那正是并发覆盖的根源。
+        _SDK_LOOP_LOCAL.loop = loop
         return original_start(self)
 
     lark_ws_client.Client.start = start_with_own_loop
+    # 全局常驻代理：original_start 内所有对模块全局 loop 的引用都经它解析，
+    # 每个连接各拿自己的循环，互不覆盖。
+    lark_ws_client.loop = _ContextLoop()
     _SDK_LOOP_PATCHED = True
-    logger.info("飞书 SDK 事件循环已改为按连接独立绑定（绕行 lark-channel-sdk 的模块级 loop）")
+    logger.info(
+        "飞书 SDK 事件循环已改为按连接独立绑定（绕行 lark-channel-sdk 的模块级 loop）"
+    )
 
 
 def _response_json(response: Any) -> Mapping[str, Any]:
@@ -197,6 +259,10 @@ def normalize_message(
 
 class FeishuProvider:
     """一个频道一个实例，由 Supervisor 管理连接和收发生命周期。"""
+
+    # 与 ``providers.PROVIDERS`` 的键一致。卡片档位这类「按渠道取值」的配置靠它
+    # 定位，所以改名要同步改那边（有测试守着这条一致性）。
+    PROVIDER_ID = "feishu"
 
     def __init__(
         self,

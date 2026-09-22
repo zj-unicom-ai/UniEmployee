@@ -10,9 +10,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger("app.im.cards")
 
 LEVEL_STREAM = "stream"
 LEVEL_STAGED = "staged"
@@ -32,21 +35,37 @@ class ThrottlePolicy:
 
     - ``min_interval_seconds``：两次更新之间的最小间隔；
     - ``min_delta_chars``：相对上次推送至少新增多少字符才值得再推一次；
-    - ``max_updates``：单次回复的更新次数硬上限（``0`` 表示不做中间更新）。
+    - ``max_updates``：单次回复的中间更新次数上限。三档语义 ——
+      ``None`` 表示**不限次数**（速率完全交给 ``min_interval_seconds`` 管），
+      ``0`` 表示**不做任何中间更新**（只投放与收尾），正数表示硬上限。
     """
 
     min_interval_seconds: float
     min_delta_chars: int
-    max_updates: int
+    max_updates: int | None
 
 
 POLICIES: dict[str, ThrottlePolicy] = {
-    # 约 20~40 次调用/回复，适合配额充裕（专业版）的场景。
-    LEVEL_STREAM: ThrottlePolicy(0.4, 1, 40),
-    # 约 4~7 次/回复，与标准版入站额度同量级，作为默认。
+    # 0.4s 一次（≈2.5 次/秒），**不限次数**：上限交给间隔去管，速率仍在飞书
+    # 「单卡片 10 次/秒」之内。飞书默认用这一档，理由见 CHANNEL_DEFAULT_LEVELS。
+    LEVEL_STREAM: ThrottlePolicy(0.4, 1, None),
+    # 约 4~7 次/回复，与标准版入站额度同量级；为配额敏感的渠道（钉钉）保留。
     LEVEL_STAGED: ThrottlePolicy(2.0, 32, 6),
     # 只投放与收尾各一次，中间不更新。
     LEVEL_TWO_STATE: ThrottlePolicy(0.0, 0, 0),
+}
+
+# 渠道默认档位。没有条目就用 DEFAULT_LEVEL。
+#
+# 这个表存在的原因是「同一个档位在不同渠道的代价不同」：
+#
+# - 飞书：官方明示**流式更新模式下不触发接口 QPS 限制**（只需守单卡片 10 次/秒），
+#   所以"省调用次数"在这里没有收益。而 `staged` 的 `max_updates=6` 会把回复的
+#   后半段变成**长时间不更新**，收尾那次 PUT 再一口气把攒下的内容甩上屏 ——
+#   用户看到的就是「打几个字 → 卡住 → 一大段突然蹦出来」。
+# - 钉钉：入站额度是真的要省，所以仍用 `staged`。
+CHANNEL_DEFAULT_LEVELS: dict[str, str] = {
+    "feishu": LEVEL_STREAM,
 }
 
 
@@ -147,6 +166,11 @@ def card_factory(provider: Any) -> Any | None:
 ENV_CARD_ENABLED = "IM_CARD_ENABLED"
 ENV_CARD_TEMPLATE_ID = "DINGTALK_CARD_TEMPLATE_ID"
 ENV_CARD_LEVEL = "IM_CARD_LEVEL"
+# 渠道级档位覆盖：IM_CARD_LEVEL_<渠道标识>，例如 IM_CARD_LEVEL_FEISHU=two_state。
+ENV_CARD_LEVEL_PREFIX = "IM_CARD_LEVEL_"
+
+# 「全局档位掩盖了渠道默认」的告警只报一次，避免每条消息刷日志。
+_MASKED_LEVEL_WARNED: set[tuple[str, str]] = set()
 
 
 def card_enabled() -> bool:
@@ -164,9 +188,48 @@ def card_template_id() -> str:
     return os.environ.get(ENV_CARD_TEMPLATE_ID, "").strip()
 
 
-def card_level() -> str:
+def card_level(channel: str = "") -> str:
+    """解析卡片档位，优先级：渠道专属 > 全局 > 渠道默认 > 全局默认。
+
+    ``channel`` 传 provider 标识（``feishu`` / ``dingtalk``，见
+    :func:`card_channel`）。不传则只按全局配置解析，行为与改动前一致。
+
+    渠道级覆盖（如 ``IM_CARD_LEVEL_FEISHU=staged``）解决的是「同一份部署里两个
+    渠道需要不同密度」—— 全局那一个值表达不了，而两边的代价结构本就不同。
+    """
+    if channel:
+        scoped = os.environ.get(f"{ENV_CARD_LEVEL_PREFIX}{channel.strip().upper()}", "")
+        scoped = scoped.strip().lower()
+        if scoped in POLICIES:
+            return scoped
     raw = os.environ.get(ENV_CARD_LEVEL, "").strip().lower()
-    return raw if raw in POLICIES else DEFAULT_LEVEL
+    if raw in POLICIES:
+        # 全局值会**覆盖渠道默认**。这正是个容易踩的坑：`CHANNEL_DEFAULT_LEVELS`
+        # 是按渠道代价结构定的，一个历史遗留的全局值会让它整段失效，而表面上
+        # 一切正常（卡片照发，只是观感没变）。所以这里留一条一次性告警。
+        prefer = CHANNEL_DEFAULT_LEVELS.get(channel.strip().lower())
+        key = (channel, raw)
+        if prefer and prefer != raw and key not in _MASKED_LEVEL_WARNED:
+            _MASKED_LEVEL_WARNED.add(key)
+            logger.warning(
+                "卡档位：全局 %s=%s 覆盖了渠道默认 %s=%s（channel=%s）；"
+                "只想改单渠道请用 %s%s",
+                ENV_CARD_LEVEL, raw, "CHANNEL_DEFAULT_LEVELS", prefer, channel,
+                ENV_CARD_LEVEL_PREFIX, channel.strip().upper(),
+            )
+        return raw
+    return CHANNEL_DEFAULT_LEVELS.get(channel.strip().lower(), DEFAULT_LEVEL)
+
+
+def card_channel(provider: Any) -> str:
+    """读 Provider 自报的渠道标识；没声明就返回空串。
+
+    用它而不是 ``isinstance``，与 :func:`card_factory` 同样的理由：Worker 不该
+    反向依赖具体 Provider。标识由各 Provider 的 ``PROVIDER_ID`` 类属性给出，
+    取值与 ``providers.PROVIDERS`` 的键一致（有测试守着这条一致性）。
+    """
+    value = getattr(provider, "PROVIDER_ID", "")
+    return value.strip().lower() if isinstance(value, str) else ""
 
 
 # 注意：这里刻意**没有**「卡片是否可用」的统一判定。
@@ -179,9 +242,11 @@ def card_level() -> str:
 
 
 __all__ = [
+    "CHANNEL_DEFAULT_LEVELS",
     "DEFAULT_LEVEL",
     "ENV_CARD_ENABLED",
     "ENV_CARD_LEVEL",
+    "ENV_CARD_LEVEL_PREFIX",
     "ENV_CARD_TEMPLATE_ID",
     "LEVEL_LABELS",
     "LEVEL_STAGED",
@@ -191,6 +256,7 @@ __all__ = [
     "POLICIES",
     "ThrottlePolicy",
     "WORKING_TEXT",
+    "card_channel",
     "card_enabled",
     "card_factory",
     "card_level",

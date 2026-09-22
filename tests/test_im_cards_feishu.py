@@ -135,10 +135,119 @@ def test_open_embeds_card_json_with_streaming_mode_and_initial_text():
     card = json.loads(body["data"])
     # streaming_mode 必须开，否则后续流式更新直接 300309 报错。
     assert card["config"]["streaming_mode"] is True
-    # 打字机密度是卡片配置项，不是代码参数。
-    assert card["config"]["streaming_config"]["print_step"] == {"default": 1}
+    # 打字机密度是卡片配置项，不是代码参数。两个字段**必须成对出现** ——
+    # 真机实测只给一个会报 11311（printFrequencyMs or printStep is nil）。
+    streaming = card["config"]["streaming_config"]
+    assert streaming["print_step"] == {"default": card_link.PRINT_STEP}
+    assert streaming["print_frequency_ms"] == {"default": card_link.PRINT_FREQUENCY_MS}
+    # 显式写 fast：客户端各版本默认值可能不同，官方也建议前置指定。
+    assert streaming["print_strategy"] == "fast"
     assert card["body"]["elements"][0]["element_id"] == "content"
     assert card["body"]["elements"][0]["content"] == "正在处理"
+
+
+def test_default_print_rate_keeps_up_with_the_model():
+    """上屏速率必须 ≥ 模型产出速率，否则每次推送都要"追赶"上屏积压。
+
+    真机实测（data/db/traces.db 的 llm 事件）本项目模型约 130~300 字/秒：
+    425 字 / 2.07s、790 字 / 3.01s。上屏慢于它时，收尾关流式那一刻会把没打完
+    的部分整块落地 —— 观感就是「打几个字 → 一大段蹦出来」。
+    """
+    rate = card_link.print_rate_chars_per_second()
+
+    assert rate >= 300.0, f"默认上屏速率 {rate} 字/秒追不上模型产出"
+
+
+def test_print_rate_can_be_raised_to_match_a_faster_model(monkeypatch):
+    """上屏速率 = print_step / print_frequency_ms；这个旋钮要真的接上。"""
+    monkeypatch.setenv("IM_FEISHU_PRINT_FREQUENCY_MS", "20")
+    monkeypatch.setenv("IM_FEISHU_PRINT_STEP", "12")
+
+    assert card_link.print_rate_chars_per_second() == 600.0
+
+
+def test_print_rate_env_falls_back_on_bad_values(monkeypatch):
+    for bad in ("", "fast", "0", "-2"):
+        monkeypatch.setenv("IM_FEISHU_PRINT_STEP", bad)
+        assert card_link.print_config()[1] == card_link.PRINT_STEP
+    monkeypatch.delenv("IM_FEISHU_PRINT_STEP")
+
+    monkeypatch.setenv("IM_FEISHU_PRINT_FREQUENCY_MS", "abc")
+    assert card_link.print_config()[0] == card_link.PRINT_FREQUENCY_MS
+
+
+def test_finalize_waits_for_the_typewriter_before_closing(monkeypatch):
+    """收尾是「写全量 → 立刻关流式」，而关流式会终止打字机。
+
+    所以要先留出时间让本次新增的字符打完，否则它们会在关流式那一刻整块落地
+    —— 这正是「最后一大段突然蹦出来」的来源。
+    """
+    slept: list[float] = []
+    marks: list[int] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+        marks.append(len(http.requests))
+
+    monkeypatch.setattr(card_link.asyncio, "sleep", fake_sleep)
+    http = FakeHttp([_token_response(), _created_response(), _sent_response()])
+    session = _session(http)
+    asyncio.run(session.open(WORKING_TEXT))
+    asyncio.run(session.push("一" * 400))  # 先有一次中间推送，之后写入属"续打"
+    slept.clear()
+    marks.clear()
+
+    asyncio.run(session.finalize("一" * 800))  # 新增 400 字
+
+    expected = 400 / card_link.print_rate_chars_per_second()
+    assert slept == [pytest.approx(expected)]
+    # 顺序必须是「先写内容、再等、最后关流式」；反了就白等。
+    assert marks[0] == len(http.requests) - 1
+    assert http.requests[-1][0] == "PATCH"
+    assert http.requests[-1][1].endswith("/settings")
+
+
+def test_finalize_skips_catchup_cap_for_huge_pending(monkeypatch):
+    """等待是观感优化，不能拖着回复不交付 —— 必须封顶。"""
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(card_link.asyncio, "sleep", fake_sleep)
+    http = FakeHttp(
+        [_token_response(), _created_response(), _sent_response()]
+        + [FakeResponse() for _ in range(4)]
+    )
+    session = _session(http)
+    asyncio.run(session.open(WORKING_TEXT))
+    asyncio.run(session.push("一" * 10))
+    slept.clear()
+
+    asyncio.run(session.finalize("一" * 60_000))
+
+    assert slept == [card_link.CATCHUP_MAX_SECONDS]
+
+
+def test_finalize_does_not_wait_when_nothing_was_pushed_yet(monkeypatch):
+    """首次写入与初始文案没有前缀关系，属协议规定的全屏直出。
+
+    那种情况下没有"未上屏"的概念，等待纯属白等。
+    """
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(card_link.asyncio, "sleep", fake_sleep)
+    http = FakeHttp([_token_response(), _created_response(), _sent_response()])
+    session = _session(http)
+    asyncio.run(session.open(WORKING_TEXT))
+
+    assert session.update_count == 0
+    asyncio.run(session.finalize("直接给出的答案"))
+
+    assert slept == []
 
 
 def test_open_without_reply_target_creates_message_in_chat():

@@ -70,13 +70,18 @@ class FakeCard:
 class CardProvider:
     """支持卡片的假 Provider，行为对齐钉钉：必须有模板，否则视为不支持卡片。"""
 
+    # 默认当钉钉用；要验渠道级档位时改成 "feishu"。
+    PROVIDER_ID = "dingtalk"
+
     def __init__(self, card):
         self.card = card
         self.sent: list = []
         self.template_id = None
+        self.policy = None
 
     def create_card_session(self, *, payload, template_id, policy, reply_to=None):
         self.template_id = template_id
+        self.policy = policy
         if not template_id:
             # 模板校验属于渠道自己的能力协商，不再由 Worker 统一判定。
             return None
@@ -188,6 +193,50 @@ def test_card_open_failure_falls_back_to_text(monkeypatch, card_env):
     assert len(provider.sent) == 1
     assert provider.sent[0].text == worker.PROGRESS_NOTICE_TEXT
     assert order == ["outbox"]
+
+
+def test_card_factory_contract_mismatch_falls_back_to_text(monkeypatch, card_env):
+    """工厂调用本身抛错也必须降级成文本，不能让整条消息失败。
+
+    回归（2026-09-22 真机）：钉钉 Provider 的 ``create_card_session`` 缺
+    ``reply_to`` 参数，而 Worker 对所有渠道统一传这一组关键字 → ``TypeError``
+    冒到 ``process_inbox_once`` 外层，inbox 直接记 ``failed``，
+    用户侧表现为"发了消息完全没回复"，比退回文本严重得多。
+    """
+
+    class ContractMismatchProvider(CardProvider):
+        """签名少了 reply_to，等价于早期钉钉 Provider 的形态。"""
+
+        def create_card_session(self, *, payload, template_id, policy):
+            return self.card
+
+    row = _inbox_row()
+    order: list = []
+    card = FakeCard()
+    provider = ContractMismatchProvider(card)
+    _patch_jobs(monkeypatch, row, order)
+    monkeypatch.setattr(worker, "run_agent_events", _events_of("答案"))
+
+    assert asyncio.run(
+        worker.process_inbox_once(provider=provider, channel_id="chan_1", employee_id="xiaoshu")
+    ) is True
+
+    assert card.opened_with is None
+    # 与"卡片投放失败"同样的降级：一条提示 + 正式回复进 Outbox。
+    assert len(provider.sent) == 1
+    assert provider.sent[0].text == worker.PROGRESS_NOTICE_TEXT
+    assert order == ["outbox"]
+
+
+def test_dingtalk_card_factory_accepts_reply_to():
+    """契约回归：Worker 统一传 reply_to，钉钉必须接受同名参数（可忽略其值）。"""
+    import inspect
+
+    from app.im.providers.dingtalk import DingtalkProvider
+
+    params = inspect.signature(DingtalkProvider.create_card_session).parameters
+    assert "reply_to" in params
+    assert params["reply_to"].default is None
 
 
 def test_finalize_failure_still_delivers_result_by_text(monkeypatch, card_env):
@@ -354,3 +403,30 @@ def test_approval_required_reaches_card(monkeypatch, card_env):
     )
 
     assert "审批" in card.finalized_with
+
+
+def test_card_policy_follows_the_channel(monkeypatch, card_env):
+    """档位按渠道解析：钉钉要省入站额度，飞书没有配额压力。
+
+    飞书若沿用钉钉的 `staged` 档，`max_updates=6` 会让回复后半段完全停止推送，
+    收尾那次再把攒下的几百字一次性甩上屏 —— 用户侧就是「打几个字 → 卡住 →
+    一大段突然蹦出来」。所以这里断言两边拿到的策略确实不同。
+    """
+    monkeypatch.delenv("IM_CARD_LEVEL", raising=False)
+    row = _inbox_row()
+    order: list = []
+    _patch_jobs(monkeypatch, row, order)
+    monkeypatch.setattr(worker, "run_agent_events", _events_of("你好"))
+
+    dingtalk = CardProvider(FakeCard())
+    asyncio.run(
+        worker.process_inbox_once(provider=dingtalk, channel_id="chan_1", employee_id="xiaoshu")
+    )
+    assert dingtalk.policy.max_updates == 6
+
+    feishu = CardProvider(FakeCard())
+    feishu.PROVIDER_ID = "feishu"
+    asyncio.run(
+        worker.process_inbox_once(provider=feishu, channel_id="chan_1", employee_id="xiaoshu")
+    )
+    assert feishu.policy.max_updates is None
