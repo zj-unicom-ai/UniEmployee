@@ -2,7 +2,7 @@
 
 协议层细节见 `tests/test_im_registration.py`；这里盯的是前端要用的契约：
 
-- 仅 admin 可用（401/403），且只对飞书频道开放（非飞书频道 400）
+- 仅 admin 可用（401/403），且只对登记了扫码 Flow 的渠道开放（未登记的渠道 400）
 - 会话必须属于该频道（拿别的频道查不到 → 404）
 - 启动响应不含 `device_code`，任何响应都不含 App Secret
 - 扫码成功后写入的是同一个 `put_credential`，并触发频道重连（下游与手工填写无分叉）
@@ -89,7 +89,7 @@ def _create_channel(client: TestClient, provider: str = "feishu") -> str:
             "description": "扫码回归",
             "provider": provider,
             "enabled": True,
-            "employee_ids": ["xiaoshu"] if provider == "feishu" else [],
+            "employee_ids": ["xiaoshu"] if provider in {"feishu", "dingtalk"} else [],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -189,17 +189,17 @@ def test_registration_endpoints_require_admin(monkeypatch):
         ).status_code == 403
 
 
-def test_registration_only_accepts_feishu_channel_and_matching_session(monkeypatch):
+def test_registration_rejects_non_scan_channel_and_matching_session(monkeypatch):
     app, _, _ = _app(monkeypatch, ADMIN, {"error": "authorization_pending"})
 
     with TestClient(app) as client:
         web_id = _create_channel(client, provider="web")
         feishu_id = _create_channel(client)
 
-        # 非飞书频道直接拒绝，避免把协议用在错误的地方。
+        # 未登记扫码 Flow 的渠道直接拒绝，避免把协议用在错误的地方。
         rejected = client.post(f"/api/im/channels/{web_id}/registration/start")
         assert rejected.status_code == 400
-        assert "飞书" in rejected.json()["detail"]
+        assert "不支持扫码" in rejected.json()["detail"]
 
         # 未知会话 → 404（服务重启后会话只在内存里，前端据此提示重来）。
         assert client.get(

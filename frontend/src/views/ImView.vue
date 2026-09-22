@@ -3,7 +3,7 @@
     <div class="toolbar">
       <div>
         <h2>IM 频道</h2>
-        <p>管理 Web、飞书等消息频道及其运行状态。</p>
+        <p>管理 Web、飞书、钉钉等消息频道及其运行状态。</p>
       </div>
       <n-button v-if="isAdmin" type="primary" @click="openCreate">新建频道</n-button>
     </div>
@@ -23,7 +23,7 @@
                   {{ item.enabled ? '已启用' : '已停用' }}
                 </n-tag>
                 <n-tag
-                  v-if="item.provider === 'feishu'"
+                  v-if="isLongConnection(item.provider)"
                   size="small"
                   :type="runtimeTag(item.runtime?.status)"
                 >
@@ -35,7 +35,7 @@
             <p>{{ item.description || '暂无描述' }}</p>
             <div class="meta">类型：{{ providerLabel(item.provider) }}</div>
             <div class="meta">默认员工：{{ item.employees?.[0]?.name || '未配置' }}</div>
-            <template v-if="item.provider === 'feishu'">
+            <template v-if="isLongConnection(item.provider)">
               <div class="meta">凭证：{{ item.config?.configured ? '已配置' : '未配置' }}</div>
               <div class="meta">最近连接：{{ formatTime(item.runtime?.last_connected_at) }}</div>
               <div class="meta">最近入站：{{ formatTime(item.runtime?.last_inbound_at) }}</div>
@@ -54,7 +54,7 @@
               <n-space>
                 <n-button size="small" @click="edit(item)">编辑</n-button>
                 <n-button
-                  v-if="item.provider === 'feishu' && isAdmin"
+                  v-if="supportsScan(item.provider) && isAdmin"
                   size="small"
                   @click="openScan(item)"
                 >
@@ -64,7 +64,7 @@
                   {{ item.enabled ? '停用' : '启用' }}
                 </n-button>
                 <n-button
-                  v-if="item.provider === 'feishu'"
+                  v-if="isLongConnection(item.provider)"
                   size="small"
                   :disabled="!item.enabled"
                   @click="reconnect(item)"
@@ -72,7 +72,7 @@
                   重新连接
                 </n-button>
                 <n-button
-                  v-if="item.provider === 'feishu'"
+                  v-if="isLongConnection(item.provider)"
                   size="small"
                   @click="openDeadLetters(item)"
                 >
@@ -109,7 +109,7 @@
           <n-select
             v-model:value="form.employee_id"
             :options="employeeOptions"
-            placeholder="飞书频道必须选择一个员工"
+            placeholder="长连接频道必须选择一个员工"
             filterable
           />
         </n-form-item>
@@ -117,19 +117,18 @@
           <n-switch v-model:value="form.enabled" />
         </n-form-item>
 
-        <template v-if="form.provider === 'feishu'">
-          <n-divider>飞书凭证</n-divider>
-          <n-form-item label="接入方式">
+        <template v-if="isLongConnection(form.provider)">
+          <n-divider>{{ providerLabel(form.provider) }}凭证</n-divider>
+          <n-form-item v-if="supportsScan(form.provider)" label="接入方式">
             <n-radio-group v-model:value="form.credential_mode" size="small">
               <n-radio-button value="scan">扫码一键创建</n-radio-button>
-              <n-radio-button value="manual">手工填写 App ID</n-radio-button>
+              <n-radio-button value="manual">手工填写 {{ credentialFieldLabels.id }}</n-radio-button>
             </n-radio-group>
           </n-form-item>
 
-          <template v-if="form.credential_mode === 'scan'">
+          <template v-if="supportsScan(form.provider) && form.credential_mode === 'scan'">
             <n-alert class="form-note" type="info" :show-icon="false">
-              由你的飞书账号在本企业内自动创建应用并预置权限，App Secret 不经过浏览器。
-              代价：应用形态固定为「个人智能体」、预置权限不可裁剪、默认仅创建者本人可见。
+              {{ scanCredentialHint }}
             </n-alert>
             <p class="hint">
               {{ editing ? '保存后请在该频道卡片上点击「扫码创建应用」。' : '保存频道后会自动弹出二维码。' }}
@@ -137,10 +136,10 @@
           </template>
 
           <template v-else>
-            <n-form-item label="App ID">
+            <n-form-item :label="credentialFieldLabels.id">
               <n-input v-model:value="form.app_id" />
             </n-form-item>
-            <n-form-item label="App Secret">
+            <n-form-item :label="credentialFieldLabels.secret">
               <n-input
                 v-model:value="form.app_secret"
                 type="password"
@@ -148,10 +147,7 @@
                 :placeholder="editing && editing.config?.configured ? '留空表示不更换' : ''"
               />
             </n-form-item>
-            <p class="hint">
-              企业自建应用：形态、权限、可见范围都能在飞书开发者后台自由配置，生产与群聊机器人推荐这种方式。
-              飞书外部租户标识会从事件中自动识别；不会映射为平台租户或继承平台权限。
-            </p>
+            <p class="hint">{{ manualCredentialHint }}</p>
           </template>
         </template>
       </n-form>
@@ -172,9 +168,16 @@
       @update:show="onScanShowChange"
     >
       <n-alert class="scan-note" type="warning" :show-icon="false">
-        扫码创建的应用形态固定为「个人智能体」、预置权限不可裁剪，且<strong>默认仅创建者本人可见</strong>；
-        要在群聊里 <code>@</code> 机器人，需先在飞书开发者后台放开可见范围（待办 T-1）。
-        生产级企业自建应用请改用「手工填写 App ID / App Secret」。
+        <template v-if="scanChannel?.provider === 'feishu'">
+          扫码创建的应用形态固定为「个人智能体」、预置权限不可裁剪，且<strong>默认仅创建者本人可见</strong>；
+          要在群聊里 <code>@</code> 机器人，需先在飞书开发者后台放开可见范围（待办 T-1）。
+          生产级企业自建应用请改用「手工填写 App ID / App Secret」。
+        </template>
+        <template v-else>
+          扫码会在你的钉钉企业内新建一个机器人应用，凭据由钉钉直接下发、不经过浏览器。
+          应用形态与权限范围由钉钉侧决定，建好后可在钉钉开发者后台按需调整。
+          若要复用已有应用，请改用「手工填写 Client ID / Client Secret」。
+        </template>
         <template v-if="scanChannel?.config?.configured">
           <br />该频道当前已有凭据，扫码会新建一个应用并覆盖原凭据。
         </template>
@@ -184,7 +187,9 @@
         <div v-if="scanStatus === 'pending'" class="scan-pending">
           <div class="qr-box" v-html="scanQrSvg" />
           <div class="scan-side">
-            <p class="scan-step">用手机飞书扫描二维码，并在飞书内确认授权</p>
+            <p class="scan-step">
+              用手机{{ scanProviderLabel }}扫描二维码，并在{{ scanProviderLabel }}内确认授权
+            </p>
             <p v-if="scanSession?.user_code" class="scan-code">{{ scanSession.user_code }}</p>
             <p class="meta">剩余有效期：{{ remainingText }}</p>
             <p class="meta">授权成功后自动写入凭据并重连，无需再填 App Secret。</p>
@@ -261,6 +266,21 @@ import api from '../api.js'
 const SCAN_POLL_MIN_MS = 2000
 const SCAN_POLL_FALLBACK_SECONDS = 5
 
+// 长连接渠道：由后端 Provider 建立 WebSocket 收发消息，因此有运行状态、重连与失败投递。
+// 其余渠道（web / wecom）走 Webhook 或平台内置聊天，没有常驻连接。
+const LONG_CONNECTION_PROVIDERS = ['feishu', 'dingtalk']
+// 扫码一键创建应用：由后端 im/registration.py 的 RegistrationFlow 实现 Device Flow。
+// 飞书走单端点 + action，钉钉走三个独立路径，两者共用同一套会话与接口。
+const SCAN_PROVIDERS = ['feishu', 'dingtalk']
+
+function isLongConnection(provider) {
+  return LONG_CONNECTION_PROVIDERS.includes(provider)
+}
+
+function supportsScan(provider) {
+  return SCAN_PROVIDERS.includes(provider)
+}
+
 const items = ref([])
 const employees = ref([])
 const loading = ref(false)
@@ -301,7 +321,7 @@ const form = reactive({
 const providerOptions = [
   { label: 'Web', value: 'web' },
   { label: '飞书', value: 'feishu' },
-  { label: '钉钉（后续开发）', value: 'dingtalk', disabled: true },
+  { label: '钉钉', value: 'dingtalk' },
   { label: '企业微信（后续开发）', value: 'wecom', disabled: true },
 ]
 
@@ -317,9 +337,23 @@ const employeeOptions = computed(() =>
   employees.value.map((item) => ({ label: item.name || item.id, value: item.id })),
 )
 
-const scanModalTitle = computed(() =>
-  scanChannel.value?.name ? `扫码创建飞书应用 · ${scanChannel.value.name}` : '扫码创建飞书应用',
-)
+// 扫码相关文案全部按渠道切换：飞书那套「个人智能体 / 仅创建者可见」的代价在钉钉不存在。
+const scanProviderLabel = computed(() => providerLabel(scanChannel.value?.provider) || '')
+
+const scanModalTitle = computed(() => {
+  const base = `扫码创建${scanProviderLabel.value}应用`
+  return scanChannel.value?.name ? `${base} · ${scanChannel.value.name}` : base
+})
+
+const scanCredentialHint = computed(() => {
+  const { secret } = credentialFieldLabelsFor(form.provider)
+  if (form.provider === 'dingtalk') {
+    return `由你的钉钉账号在本企业内自动创建机器人应用，${secret} 不经过浏览器。`
+      + '应用形态与权限范围由钉钉侧决定，建好后可在开发者后台按需调整。'
+  }
+  return `由你的飞书账号在本企业内自动创建应用并预置权限，${secret} 不经过浏览器。`
+    + '代价：应用形态固定为「个人智能体」、预置权限不可裁剪、默认仅创建者本人可见。'
+})
 
 const scanStatus = computed(() => scanSession.value?.status || 'idle')
 
@@ -332,13 +366,26 @@ const remainingText = computed(() => {
 })
 
 const scanResult = computed(() => {
+  const fields = credentialFieldLabelsFor(scanChannel.value?.provider)
   const map = {
-    denied: { status: 'warning', title: '飞书端取消了授权', detail: '本次未创建任何应用。' },
+    denied: {
+      status: 'warning',
+      title: scanProviderLabel.value ? `${scanProviderLabel.value}端取消了授权` : '授权已取消',
+      detail: '本次未创建任何应用。',
+    },
     expired: { status: 'warning', title: '二维码已过期', detail: '二维码超过有效期，请重新生成。' },
     timeout: { status: 'warning', title: '二维码已过期', detail: '二维码超过有效期，请重新生成。' },
     cancelled: { status: 'info', title: '已取消', detail: '后台轮询任务已清理。' },
-    error: { status: 'error', title: '创建失败', detail: '可重新发起，或改用手工填写 App ID。' },
-    idle: { status: 'error', title: '扫码创建暂不可用', detail: '请改用手工填写 App ID / App Secret。' },
+    error: {
+      status: 'error',
+      title: '创建失败',
+      detail: `可重新发起，或改用手工填写 ${fields.id}。`,
+    },
+    idle: {
+      status: 'error',
+      title: '扫码创建暂不可用',
+      detail: `请改用手工填写 ${fields.id} / ${fields.secret}。`,
+    },
   }
   return map[scanStatus.value] || map.idle
 })
@@ -348,9 +395,10 @@ const scanResultDetail = computed(
 )
 
 const scanSuccessDescription = computed(() => {
+  const { id } = credentialFieldLabelsFor(scanChannel.value?.provider)
   const appId = scanSession.value?.app_id || '—'
   const configured = scanCredential.value?.configured === false ? '未配置' : '已配置'
-  return `App ID：${appId} · 凭证状态：${configured}`
+  return `${id}：${appId} · 凭证状态：${configured}`
 })
 
 function runtimeLabel(status) {
@@ -377,6 +425,25 @@ function runtimeTag(status) {
 function providerLabel(provider) {
   return { web: 'Web', feishu: '飞书', dingtalk: '钉钉', wecom: '企业微信' }[provider] || provider
 }
+
+// 两边凭证字段语义相同（应用标识 + 密钥），只是平台叫法不同：飞书是 App ID/Secret，
+// 钉钉是 Client ID/Secret。表单直接复用 form.app_id / form.app_secret 两个字段。
+function credentialFieldLabelsFor(provider) {
+  return provider === 'dingtalk'
+    ? { id: 'Client ID', secret: 'Client Secret' }
+    : { id: 'App ID', secret: 'App Secret' }
+}
+
+const credentialFieldLabels = computed(() => credentialFieldLabelsFor(form.provider))
+
+const manualCredentialHint = computed(() => (
+  form.provider === 'dingtalk'
+    ? '钉钉自建应用：在钉钉开放平台创建「企业内部应用」后，把应用信息里的 Client ID / Client Secret 填到这里。'
+      + '机器人收发消息走 Stream 模式长连接，无需公网回调地址，也不用填写加签或 Token；'
+      + '企业标识会从消息中自动识别，不会映射为平台租户或继承平台权限。'
+    : '企业自建应用：形态、权限、可见范围都能在飞书开发者后台自由配置，生产与群聊机器人推荐这种方式。'
+      + '飞书外部租户标识会从事件中自动识别；不会映射为平台租户或继承平台权限。'
+))
 
 function formatTime(value) {
   if (!value) return '—'
@@ -440,18 +507,15 @@ async function save() {
     error.value = '请输入频道名称'
     return
   }
-  if (form.provider === 'feishu' && !form.employee_id) {
-    error.value = '飞书频道必须选择一个默认员工'
+  if (isLongConnection(form.provider) && !form.employee_id) {
+    error.value = `${providerLabel(form.provider)}频道必须选择一个默认员工`
     return
   }
   // 只有手工填写方式才强制两串凭据；扫码方式由后端在建应用后自动写入。
-  if (
-    form.provider === 'feishu'
-    && form.credential_mode === 'manual'
-    && !editing.value
-    && (!form.app_id || !form.app_secret)
-  ) {
-    error.value = '手工填写方式需要同时提供 App ID 和 App Secret'
+  const manualCredential = isLongConnection(form.provider)
+    && !(supportsScan(form.provider) && form.credential_mode === 'scan')
+  if (manualCredential && !editing.value && (!form.app_id || !form.app_secret)) {
+    error.value = `手工填写方式需要同时提供 ${credentialFieldLabels.value.id} 和 ${credentialFieldLabels.value.secret}`
     return
   }
 
@@ -469,19 +533,20 @@ async function save() {
       : '/im/channels'
     const saved = await api[editing.value ? 'put' : 'post'](url, payload)
     const channelId = editing.value?.id || saved.data.id
-    if (form.provider === 'feishu' && form.app_id && form.app_secret) {
+    if (isLongConnection(form.provider) && form.app_id && form.app_secret) {
       await api.put(`/im/channels/${channelId}/credentials`, {
         app_id: form.app_id.trim(),
         app_secret: form.app_secret,
       })
     }
     const createdWithScan =
-      form.provider === 'feishu' && form.credential_mode === 'scan' && !editing.value
+      supportsScan(form.provider) && form.credential_mode === 'scan' && !editing.value
     showForm.value = false
     await load()
     if (createdWithScan && isAdmin.value) {
       // 新建频道选扫码：直接把二维码推出来，省掉「回卡片找按钮」这一步。
-      await openScan({ id: channelId, name: form.name.trim() })
+      // provider 必须带上，扫码文案按渠道切换（飞书的代价说明不适用于钉钉）。
+      await openScan({ id: channelId, name: form.name.trim(), provider: form.provider })
     }
   } catch (e) {
     error.value = e.response?.data?.detail || '保存失败'

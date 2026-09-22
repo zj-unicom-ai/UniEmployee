@@ -13,7 +13,12 @@ from typing import Any
 from app import conversations
 from app.im import jobs
 from app.im.credentials import ChannelCredential
-from app.im.providers.feishu import FeishuProvider
+from app.im.providers import (
+    create_provider,
+    credential_label,
+    provider_label,
+    supported_providers,
+)
 from app.im.supervisor import ImSupervisor
 
 logger = logging.getLogger("app.im.registry")
@@ -32,6 +37,7 @@ def _safe_error(exc: BaseException | str) -> str:
 @dataclass(frozen=True, slots=True)
 class ChannelSpec:
     channel_id: str
+    provider: str
     employee_id: str
     credential: ChannelCredential
     fingerprint: tuple[str, ...]
@@ -46,7 +52,7 @@ class RuntimeEntry:
 
 
 class SupervisorRegistry:
-    """按频道独立启停飞书连接；单频道失败不影响应用和其他频道。"""
+    """按频道独立启停长连接；单频道失败不影响应用和其他频道。"""
 
     def __init__(self) -> None:
         self._entries: dict[str, RuntimeEntry] = {}
@@ -104,13 +110,16 @@ class SupervisorRegistry:
 
     def _spec_for(self, channel: dict[str, Any]) -> ChannelSpec | None:
         channel_id = channel["id"]
+        provider = str(channel.get("provider") or "").strip() or "web"
+        label = provider_label(provider)
         if not channel.get("enabled", True):
             self._set_state(channel_id, "disabled", last_error=None)
             return None
 
         employee_ids = conversations.list_employee_ids_for_channel(channel_id)
         legacy_employee = ""
-        if os.environ.get("FEISHU_CHANNEL_ID", "").strip() == channel_id:
+        # 只有飞书保留了环境变量过渡配置；新渠道一律以数据库为唯一事实来源。
+        if provider == "feishu" and os.environ.get("FEISHU_CHANNEL_ID", "").strip() == channel_id:
             legacy_employee = os.environ.get("FEISHU_EMPLOYEE_ID", "").strip()
         if not employee_ids and legacy_employee:
             employee_ids = [legacy_employee]
@@ -118,7 +127,7 @@ class SupervisorRegistry:
             self._set_state(
                 channel_id,
                 "unconfigured",
-                last_error="飞书频道必须且只能绑定一个默认数字员工",
+                last_error=f"{label}频道必须且只能绑定一个默认数字员工",
             )
             return None
 
@@ -131,12 +140,13 @@ class SupervisorRegistry:
                 last_error=f"凭证读取失败：{_safe_error(exc)}",
             )
             return None
-        credential = credential or self._legacy_credential(channel_id)
+        if credential is None and provider == "feishu":
+            credential = self._legacy_credential(channel_id)
         if credential is None:
             self._set_state(
                 channel_id,
                 "unconfigured",
-                last_error="尚未配置飞书 App ID/App Secret",
+                last_error=f"尚未配置{label} {credential_label(provider)}",
             )
             return None
 
@@ -150,16 +160,19 @@ class SupervisorRegistry:
         )
         return ChannelSpec(
             channel_id=channel_id,
+            provider=provider,
             employee_id=employee_ids[0],
             credential=credential,
             fingerprint=fingerprint,
         )
 
     def _desired_specs(self) -> dict[str, ChannelSpec]:
+        # 只有已登记 provider 的频道才建立长连接；web 与未实现渠道不进 Registry。
+        runners = supported_providers()
         channels = {
             row["id"]: row
             for row in conversations.list_channels()
-            if row.get("provider") == "feishu"
+            if row.get("provider") in runners
         }
         legacy_id = os.environ.get("FEISHU_CHANNEL_ID", "").strip()
         if (
@@ -253,26 +266,29 @@ class SupervisorRegistry:
             async def placeholder(message) -> None:
                 return None
 
-            provider = FeishuProvider(
-                spec.credential,
-                on_message=placeholder,
-                on_status=provider_status,
-            )
-            supervisor = ImSupervisor(
-                provider=provider,
-                channel_id=spec.channel_id,
-                employee_id=spec.employee_id,
-                on_inbound=lambda: self._set_state(
-                    spec.channel_id, "connected", last_inbound_at=_now()
-                ),
-                on_outbound=lambda: self._set_state(
-                    spec.channel_id, "connected", last_outbound_at=_now()
-                ),
-            )
-            provider.on_message = supervisor._on_message
-            entry.supervisor = supervisor
+            provider = None
+            supervisor = None
             started = False
             try:
+                provider = create_provider(
+                    spec.provider,
+                    spec.credential,
+                    on_message=placeholder,
+                    on_status=provider_status,
+                )
+                supervisor = ImSupervisor(
+                    provider=provider,
+                    channel_id=spec.channel_id,
+                    employee_id=spec.employee_id,
+                    on_inbound=lambda: self._set_state(
+                        spec.channel_id, "connected", last_inbound_at=_now()
+                    ),
+                    on_outbound=lambda: self._set_state(
+                        spec.channel_id, "connected", last_outbound_at=_now()
+                    ),
+                )
+                provider.on_message = supervisor._on_message
+                entry.supervisor = supervisor
                 await supervisor.start()
                 started = True
                 self._set_state(
@@ -294,12 +310,13 @@ class SupervisorRegistry:
                     reconnect_count=state["reconnect_count"] + 1,
                 )
                 logger.warning(
-                    "IM channel failed channel=%s error=%s",
+                    "IM channel failed channel=%s provider=%s error=%s",
                     spec.channel_id,
+                    spec.provider,
                     _safe_error(exc),
                 )
             finally:
-                if started or provider.channel is not None:
+                if supervisor is not None and (started or provider.channel is not None):
                     try:
                         await supervisor.stop()
                     except Exception:

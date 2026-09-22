@@ -16,6 +16,8 @@ langchain-mcp-adapters==0.3.0
 langchain-openai==1.4.1
 fastmcp==3.4.4
 httpx==0.28.1
+# 钉钉 Stream 模式长连接（backend/app/im/providers/dingtalk.py 直接 import）
+websockets==15.0.1
 tzdata==2025.2
 python-docx==1.2.0
 # 数据分析员工（analyst）依赖

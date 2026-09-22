@@ -19,9 +19,11 @@ from app.models import (
 )
 from app.streaming import _stream_run, reconstruct, conv_emp_map, conv_owner_map
 from app.im import jobs as im_jobs
+from app.im.providers import credential_label, provider_label, supported_providers
 from app.im.registry import registry as im_registry
 from app.im.registration import RegistrationUnavailable
 from app.im.registration import registration_service as app_registration
+from app.im.registration import scan_provider_label, supported_scan_providers
 
 router = APIRouter(prefix="/api/im", tags=["im"])
 
@@ -62,7 +64,7 @@ def _channel_item(ch: dict, user: dict) -> dict:
         item["inbound_url"] = f"/api/im/channels/{ch['id']}/incoming"
     if user.get("role") == "admin":
         item["config"] = ch.get("config") or {}
-        if item["provider"] == "feishu":
+        if item["provider"] in supported_providers():
             item["config"] = {**item["config"], **(im_jobs.credential_summary(ch["id"]) or {"configured": False})}
             item["runtime"] = im_registry.status(ch["id"])
     return item
@@ -168,11 +170,15 @@ async def put_credentials(channel_id: str, body: dict = Body(...), user: dict = 
     channel = conversations.get_channel(channel_id)
     if not channel:
         raise HTTPException(404, "频道不存在")
-    if channel.get("provider") != "feishu":
-        raise HTTPException(400, "当前仅支持配置飞书凭证")
+    provider = channel.get("provider") or "web"
+    if provider not in supported_providers():
+        raise HTTPException(400, f"当前仅支持配置{provider_label(provider)}渠道凭证")
+    # app_id / app_secret 是通道无关的存储字段：飞书对应 App ID/App Secret，
+    # 钉钉对应 Client ID/Client Secret，语义一致，不做第二套存储。
     required = ("app_id", "app_secret")
+    label = credential_label(provider)
     if any(not str(body.get(k, "")).strip() for k in required):
-        raise HTTPException(400, "app_id、app_secret 均不能为空")
+        raise HTTPException(400, f"{label} 均不能为空")
     im_jobs.put_credential(
         channel_id=channel_id, app_id=str(body["app_id"]).strip(),
         app_secret=str(body["app_secret"]), tenant_key=str(body.get("tenant_key", "")).strip(),
@@ -187,22 +193,32 @@ async def _apply_scanned_credential(
     """扫码创建成功后的落库回调（路径 B）。
 
     与手工填写路径（路径 A）**共用同一个 put_credential 和同一套下游**：加密存储、
-    指纹变化触发重连。扫码不返回 tenant_key，写空串，由事件头自动识别。
+    指纹变化触发重连。飞书不返回 tenant_key、钉钉也不返回，这里统一写空串，由事件头
+    或 Provider 的兜底逻辑自行识别租户。
     注意：不记录 open_id 与 App Secret。
     """
     im_jobs.put_credential(
         channel_id=channel_id, app_id=app_id, app_secret=app_secret, tenant_key=""
     )
     await im_registry.reconcile(force_channel_id=channel_id)
-    logger.info("飞书扫码创建应用成功 channel=%s app_id=%s", channel_id, app_id)
+    logger.info("扫码创建应用成功 channel=%s app_id=%s", channel_id, app_id)
 
 
-def _require_feishu_channel(channel_id: str) -> dict:
+def _require_scan_channel(channel_id: str) -> dict:
+    """扫码接口的渠道守卫：只有登记了 RegistrationFlow 的 provider 才能走。
+
+    钉钉与飞书共用同一套扫码会话机制，差异在各自的 Flow 里。
+    """
     channel = conversations.get_channel(channel_id)
     if not channel:
         raise HTTPException(404, "频道不存在")
-    if channel.get("provider") != "feishu":
-        raise HTTPException(400, "当前仅支持为飞书频道扫码创建应用")
+    provider = channel.get("provider") or "web"
+    if provider not in supported_scan_providers():
+        raise HTTPException(
+            400,
+            f"{provider_label(provider)}渠道不支持扫码创建应用，"
+            f"请改用手工填写{credential_label(provider)}",
+        )
     return channel
 
 
@@ -211,22 +227,28 @@ async def start_app_registration(
     channel_id: str,
     user: dict = Depends(auth.get_current_user_or_fallback),
 ):
-    """发起飞书扫码一键创建应用（路径 B）。
+    """发起扫码一键创建应用（路径 B，支持飞书与钉钉）。
 
-    立即返回二维码信息，轮询在后台任务里进行，不阻塞本次请求（最长 60 分钟）。
+    立即返回二维码信息，轮询在后台任务里进行，不阻塞本次请求（飞书 60 分钟 /
+    钉钉 120 分钟，由各自 begin 返回的 expires_in 决定）。
     """
     if user.get("role") != "admin":
-        raise HTTPException(403, "仅管理员可发起飞书应用扫码创建")
-    _require_feishu_channel(channel_id)
+        raise HTTPException(403, "仅管理员可发起应用扫码创建")
+    channel = _require_scan_channel(channel_id)
+    provider = channel.get("provider") or "feishu"
+    label = scan_provider_label(provider)
     try:
         return await app_registration.start(
             channel_id=channel_id,
             created_by=str(user.get("id") or ""),
             on_success=_apply_scanned_credential,
+            provider=provider,
         )
     except RegistrationUnavailable as exc:
-        # 环境不支持时前端应回退到手工填写 App ID/App Secret。
-        raise HTTPException(503, f"扫码创建暂不可用，请改为手工填写 App ID：{exc}") from exc
+        # 环境不支持时前端应回退到手工填写凭据。
+        raise HTTPException(
+            503, f"{label}扫码创建暂不可用，请改为手工填写凭据：{exc}"
+        ) from exc
 
 
 @router.get("/channels/{channel_id}/registration/{session_id}")
@@ -237,8 +259,8 @@ async def get_app_registration(
 ):
     """查询扫码流程状态（前端轮询）。成功后附带脱敏的凭据状态。"""
     if user.get("role") != "admin":
-        raise HTTPException(403, "仅管理员可查看飞书应用扫码状态")
-    _require_feishu_channel(channel_id)
+        raise HTTPException(403, "仅管理员可查看应用扫码状态")
+    _require_scan_channel(channel_id)
     snapshot = app_registration.get(session_id)
     if snapshot is None or snapshot.get("channel_id") != channel_id:
         raise HTTPException(404, "扫码会话不存在或已过期")
@@ -255,8 +277,8 @@ async def cancel_app_registration(
 ):
     """取消扫码流程，清理后台轮询任务。"""
     if user.get("role") != "admin":
-        raise HTTPException(403, "仅管理员可取消飞书应用扫码")
-    _require_feishu_channel(channel_id)
+        raise HTTPException(403, "仅管理员可取消应用扫码")
+    _require_scan_channel(channel_id)
     snapshot = app_registration.get(session_id)
     if snapshot is None or snapshot.get("channel_id") != channel_id:
         raise HTTPException(404, "扫码会话不存在或已过期")
@@ -284,8 +306,9 @@ async def reconnect_channel(
     channel = conversations.get_channel(channel_id)
     if not channel:
         raise HTTPException(404, "频道不存在")
-    if channel.get("provider") != "feishu":
-        raise HTTPException(400, "当前频道不是飞书频道")
+    provider = channel.get("provider") or "web"
+    if provider not in supported_providers():
+        raise HTTPException(400, f"当前频道不是{provider_label(provider)}长连接频道")
     if not channel.get("enabled", True):
         raise HTTPException(409, "频道已停用，请先启用")
     return await im_registry.reconnect(channel_id)

@@ -1,6 +1,7 @@
 import asyncio
 
 from app.im.credentials import ChannelCredential
+from app.im import providers as providers_module
 from app.im import registry as registry_module
 
 
@@ -29,7 +30,9 @@ class FakeProvider:
 
 def _configure(monkeypatch, channels, credentials):
     monkeypatch.setenv("FEISHU_ENABLED", "0")
-    monkeypatch.setattr(registry_module, "FeishuProvider", FakeProvider)
+    # Provider 现在通过注册表分派；测试替换注册表条目而不是 Registry 里的类引用。
+    monkeypatch.setitem(providers_module.PROVIDERS, "feishu", FakeProvider)
+    monkeypatch.setitem(providers_module.PROVIDERS, "dingtalk", FakeProvider)
     monkeypatch.setattr(
         registry_module.conversations, "list_channels", lambda: list(channels)
     )

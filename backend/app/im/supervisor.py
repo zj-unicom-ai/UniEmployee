@@ -1,4 +1,4 @@
-"""飞书 Provider 与 Inbox/Outbox Worker 的生命周期管理。"""
+"""IM Provider 与 Inbox/Outbox Worker 的生命周期管理（协议无关）。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class ImSupervisor:
     def __init__(
         self,
         *,
-        provider: FeishuProvider,
+        provider: Any,
         channel_id: str,
         employee_id: str,
         on_inbound: Callable[[], None] | None = None,

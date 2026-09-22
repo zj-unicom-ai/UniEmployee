@@ -53,11 +53,31 @@ def _is_retryable_delivery_error(exc: Exception) -> bool:
 
 def _context(row: dict[str, Any]) -> ActorContext:
     payload = row["payload"]
-    return ActorContext.isolated_feishu(
+    return ActorContext.isolated(
+        provider=payload.get("provider") or "feishu",
         app_id=payload["app_id"], tenant_key=payload["tenant_key"],
         sender_open_id=payload["sender_open_id"], chat_id=payload["chat_id"],
         chat_type=payload["chat_type"],
     )
+
+
+def _delivery_message_id(result: Any) -> str:
+    """不同 Provider 的回执形状不同，这里做统一的容错提取。"""
+    for candidate in (
+        getattr(result, "message_id", None),
+        getattr(result, "provider_message_id", None),
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    payload = getattr(result, "data", None)
+    if not isinstance(payload, dict):
+        # 有的 Provider 直接返回 dict 回执。
+        payload = result if isinstance(result, dict) else {}
+    for key in ("message_id", "processQueryKey", "messageId", "id"):
+        candidate = payload.get(key)
+        if candidate:
+            return str(candidate)
+    return ""
 
 
 async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str,
@@ -90,9 +110,13 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
             text = "该请求需要在 UniEmployee 平台完成审批。"
         if not text.strip():
             text = "员工未返回文本结果。"
+        payload = row["payload"]
         jobs.create_outbox(inbox_id, OutboundMessage(
-            channel_id=channel_id, receive_id=context.chat_id,
-            receive_id_type="chat_id", reply_to_message_id=row["provider_message_id"],
+            channel_id=channel_id,
+            # 回复目标由入站消息携带：飞书是 chat_id，钉钉是临时 sessionWebhook。
+            receive_id=payload.get("reply_target") or context.chat_id,
+            receive_id_type=payload.get("reply_target_type") or "chat_id",
+            reply_to_message_id=row["provider_message_id"],
             text=text,
         ))
         jobs.finish_inbox(inbox_id, worker_id)
@@ -118,9 +142,9 @@ async def deliver_outbox_once(*, provider: Any, worker_id: str = "im-delivery",
             receive_id_type=row["receive_id_type"], text=row["content"],
             reply_to_message_id=row.get("reply_to_message_id"),
         ))
-        message_id = getattr(result, "message_id", None) or getattr(result, "data", {}).get("message_id", "")
+        message_id = _delivery_message_id(result)
         if not message_id:
-            raise RuntimeError("飞书未返回消息 ID")
+            raise RuntimeError("投递通道未返回消息 ID")
         jobs.finish_outbox(row["id"], worker_id, provider_message_id=message_id)
         return True
     except Exception as exc:

@@ -28,6 +28,10 @@ class NormalizedInbound:
     text: str
     root_id: str | None = None
     parent_id: str | None = None
+    # 回复目标由 Provider 决定：飞书是 receive_id（chat_id），钉钉是入站消息
+    # 携带的临时 sessionWebhook URL。Worker 不解释它的语义，只把它透传给 Provider。
+    reply_target: str | None = None
+    reply_target_type: str = "chat_id"
     received_at: str = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
@@ -47,7 +51,7 @@ class NormalizedInbound:
             raise ValueError(f"不支持的 chat_type: {self.chat_type!r}")
 
     def persisted_payload(self) -> dict[str, Any]:
-        """仅返回处理必需字段，不包含原始飞书事件。"""
+        """仅返回处理必需字段，不包含原始 IM 事件。"""
         return {
             "provider": self.provider,
             "app_id": self.app_id,
@@ -58,6 +62,8 @@ class NormalizedInbound:
             "text": self.text,
             "root_id": self.root_id,
             "parent_id": self.parent_id,
+            "reply_target": self.reply_target,
+            "reply_target_type": self.reply_target_type,
             "received_at": self.received_at,
         }
 

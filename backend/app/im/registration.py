@@ -1,19 +1,26 @@
-"""飞书「扫码一键创建应用」（路径 B）的协议实现与会话管理。
+"""IM「扫码一键创建应用」（路径 B）的协议实现与会话管理。
 
-对应文档：`docs/飞书扫码一键接入方案.md`
-  - §2.1  两条接入路径的差异（本模块只服务路径 B）
-  - §3    协议链路（init / begin / poll 三个动作、轮询状态机）
-  - §7.2  后端改动（3 个接口不能阻塞 HTTP 请求，轮询必须放进后台任务）
-  - 附录 C OpenClaw 参考实现（轮询状态机用「返回值」而非「异常」）
+两个渠道各有一套 Device Flow，形态不同但思路同构：
 
-协议是 OAuth 2.0 Device Authorization Grant（RFC 8628），端点
-`{accounts}/oauth/v1/app/registration`，只有三个 POST，无需 SDK。
+| 维度 | 飞书 | 钉钉 |
+|---|---|---|
+| 端点 | 单端点 + `action` 参数 | **三个独立路径** |
+| 请求体 | **只接受 form-urlencoded** | JSON（2026-09-21 实测表单也收） |
+| 错误表达 | `error` / `error_description` | `errcode` / `errmsg`（`!= 0` 即失败） |
+| 轮询状态 | `polling` / `slow_down` / `access_denied` / `expired_token` | `WAITING` / `SUCCESS` / `FAIL` / `EXPIRED` |
+| 形态参数 | `archetype=PersonalAgent`（服务端唯一合法值） | **没有这个协议位** |
+| 二维码 | 追加 `from` / `tp` 营销参数 | 原样使用，不追加 |
+| 域名切换 | `tenant_brand=lark` 切到 larksuite | 无 |
+| 兜底有效期 | 600（实测返回 3600） | 7200 |
 
-为什么自实现而不用 `lark-oapi`（结论同文档 §7.1）：
-1. SDK 的异步版 `aregister_app()` 没有 `cancel_event`，做不出「取消」接口；
-2. SDK 内部 HTTP 客户端的代理策略不可控，而本机实测必须显式 `trust_env=False`
-   才能绕开代理引入的弱证书（否则轮询会随机 TLS 失败）；
-3. 服务端只接受 `archetype=PersonalAgent`，SDK 在能力上不比自实现多任何可能。
+**共用**的部分（会话存储、后台轮询任务、取消、TTL 清理、状态快照、脱敏）在
+`AppRegistrationService`；**差异**全部收敛进 `RegistrationFlow` 的两个子类。
+新增支持扫码的渠道 = 写一个 Flow 子类 + 在 `FLOWS` 登记一行。
+
+Flow 实例是**每个会话一个**，因此可以合法持有自己的可变状态（飞书的域名切换、
+钉钉的失败重试窗口都挂在实例上），不需要往会话里塞 provider 私有的字段。
+
+对应文档：`docs/飞书扫码一键接入方案.md`（飞书侧）、`docs/钉钉接入开发计划.md` §2.4（钉钉侧）。
 """
 
 from __future__ import annotations
@@ -32,6 +39,8 @@ import httpx
 
 logger = logging.getLogger("app.im.registration")
 
+# ---------- 飞书 ----------
+
 FEISHU_ACCOUNTS_URL = "https://accounts.feishu.cn"
 LARK_ACCOUNTS_URL = "https://accounts.larksuite.com"
 REGISTRATION_PATH = "/oauth/v1/app/registration"
@@ -40,18 +49,31 @@ REGISTRATION_PATH = "/oauth/v1/app/registration"
 # 400 / invalid_request（code 20099）。不要"顺手改成企业形态"——没有这个选项。
 ARCHETYPE = "PersonalAgent"
 
+# 二维码渠道标识：只是给飞书侧统计来源用，换成自己的标识不影响扫码。
+QR_FROM = "uniemployee"
+QR_TP = "ue_web_scan"
+
+# ---------- 钉钉 ----------
+
+DINGTALK_BASE_URL = "https://oapi.dingtalk.com"
+DINGTALK_INIT_PATH = "/app/registration/init"
+DINGTALK_BEGIN_PATH = "/app/registration/begin"
+DINGTALK_POLL_PATH = "/app/registration/poll"
+# 实测（2026-09-21）：服务端接受任意 source 字符串（用它自己的值也返回 errcode 0）。
+DINGTALK_SOURCE = "UniEmployee"
+# 钉钉轮询间隔下限：服务端可能返回很小的值，参考实现按 2s 兜底（抽成常量便于测试）。
+MIN_POLL_INTERVAL_SECONDS = 2.0
+# 钉钉的 `FAIL` 是**可自愈的瞬时态**（官方与社区两套参考实现都这么处理），
+# 在窗口内继续轮询，超窗才判失败。窗口值与两个参考实现一致。
+DINGTALK_RETRY_WINDOW_SECONDS = 120.0
+
+# ---------- 共用 ----------
+
 REQUEST_TIMEOUT_SECONDS = 10.0
-DEFAULT_POLL_INTERVAL_SECONDS = 5.0
-# 兜底值：实测服务端返回 expires_in=3600，取不到时才用 600。
-DEFAULT_EXPIRE_SECONDS = 600.0
 MAX_POLL_INTERVAL_SECONDS = 60.0
 SLOW_DOWN_INCREMENT_SECONDS = 5.0
 # 终态会话在内存中的保留时长（前端刷新页面后仍能读到结果）。
 SESSION_TTL_SECONDS = 600.0
-
-# 二维码渠道标识：只是给飞书侧统计来源用，换成自己的标识不影响扫码。
-QR_FROM = "uniemployee"
-QR_TP = "ue_web_scan"
 
 STATUS_PENDING = "pending"
 STATUS_SUCCESS = "success"
@@ -64,6 +86,13 @@ STATUS_CANCELLED = "cancelled"
 _TERMINAL_STATUSES = frozenset(
     {STATUS_SUCCESS, STATUS_DENIED, STATUS_EXPIRED, STATUS_TIMEOUT, STATUS_ERROR, STATUS_CANCELLED}
 )
+
+# 单次轮询的判定结果，供 `AppRegistrationService._poll_loop` 消费。
+POLL_PENDING = "pending"
+POLL_SUCCESS = "success"
+POLL_DENIED = "denied"
+POLL_EXPIRED = "expired"
+POLL_ERROR = "error"
 
 _URL_PATTERN = re.compile(r"(?:wss?|https?)://\S+")
 
@@ -98,6 +127,11 @@ def _number(data: dict[str, Any], *keys: str, default: float) -> float:
     return default
 
 
+def _text(data: dict[str, Any], key: str) -> str:
+    value = data.get(key)
+    return str(value).strip() if value is not None else ""
+
+
 def _decorate_qr_url(url: str) -> str:
     parts = urlsplit(url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
@@ -107,9 +141,288 @@ def _decorate_qr_url(url: str) -> str:
 
 
 @dataclass(slots=True)
+class RegistrationBegin:
+    """`begin` 动作的归一化结果。"""
+
+    device_code: str
+    qr_url: str
+    user_code: str
+    interval: float
+    expire_in: float
+
+
+@dataclass(slots=True)
+class PollOutcome:
+    """单次轮询的归一化判定。
+
+    `kind == POLL_PENDING` 表示"还没结果，继续轮"；`interval` 非空时用来调大间隔
+    （只有飞书的 `slow_down` 会用到）。
+    """
+
+    kind: str
+    client_id: str = ""
+    client_secret: str = ""
+    open_id: str | None = None
+    error: str | None = None
+    interval: float | None = None
+
+
+class RegistrationFlow:
+    """一条渠道的扫码注册协议。
+
+    子类只需实现 `check_environment` / `begin` / `poll` 三个方法，并声明
+    `provider` 与 `label`。实例**按会话创建**，可以持有可变状态。
+    """
+
+    provider: str = ""
+    label: str = ""
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        self._http = http
+
+    async def _send(
+        self, url: str, payload: dict[str, Any], *, as_json: bool
+    ) -> tuple[int, dict[str, Any]]:
+        """统一的 POST：返回 `(status_code, json_body)`，非 JSON 响应退化为空字典。"""
+        if as_json:
+            response = await self._http.post(url, json=payload)
+        else:
+            response = await self._http.post(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return response.status_code, data
+
+    async def check_environment(self) -> None:
+        """环境自检：不满足时应抛 `RegistrationUnavailable` 让页面回退手工填写。"""
+        raise NotImplementedError
+
+    async def begin(self) -> RegistrationBegin:
+        raise NotImplementedError
+
+    async def poll(self, device_code: str) -> PollOutcome:
+        raise NotImplementedError
+
+
+class FeishuRegistrationFlow(RegistrationFlow):
+    """飞书：OAuth 2.0 Device Authorization Grant（RFC 8628），单端点 + 三个 action。"""
+
+    provider = "feishu"
+    label = "飞书"
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        super().__init__(http)
+        self._domain = FEISHU_ACCOUNTS_URL
+        self._domain_switched = False
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # 实测：该接口只接受 form-urlencoded，用 JSON body 会被判 invalid_request。
+        # （S0 脚本一直用 data=payload，SDK 内部同样如此。）
+        status, data = await self._send(
+            self._domain + REGISTRATION_PATH, payload, as_json=False
+        )
+        if status >= 400 and not data.get("error"):
+            raise RegistrationUnavailable(f"飞书注册接口返回 HTTP {status}")
+        return data
+
+    async def check_environment(self) -> None:
+        data = await self._post({"action": "init"})
+        error = data.get("error")
+        if error:
+            raise RegistrationUnavailable(f"注册环境自检失败：{error}")
+        methods = data.get("supported_auth_methods")
+        if isinstance(methods, list):
+            if "client_secret" not in methods:
+                raise RegistrationUnavailable("当前环境不支持 client_secret 接入方式")
+        else:
+            logger.warning("飞书注册 init 未返回 supported_auth_methods，跳过校验")
+
+    async def begin(self) -> RegistrationBegin:
+        data = await self._post(
+            {
+                "action": "begin",
+                "archetype": ARCHETYPE,
+                "auth_method": "client_secret",
+                "request_user_info": "open_id",
+            }
+        )
+        device_code = _text(data, "device_code")
+        qr_url = _text(data, "verification_uri_complete") or _text(data, "verification_uri")
+        if not device_code or not qr_url:
+            raise RegistrationUnavailable(
+                f"飞书未返回二维码信息：{data.get('error') or data.get('error_description') or '缺少 device_code'}"
+            )
+        return RegistrationBegin(
+            device_code=device_code,
+            qr_url=_decorate_qr_url(qr_url),
+            user_code=_text(data, "user_code"),
+            interval=_number(data, "interval", default=5.0),
+            expire_in=_number(data, "expires_in", "expire_in", default=600.0),
+        )
+
+    async def poll(self, device_code: str) -> PollOutcome:
+        while True:
+            data = await self._post(
+                {"action": "poll", "device_code": device_code, "tp": QR_TP}
+            )
+            user_info = data.get("user_info")
+            if not isinstance(user_info, dict):
+                user_info = {}
+
+            # 检测到 Lark 租户：切域名后立即重试一次。
+            if user_info.get("tenant_brand") == "lark" and not self._domain_switched:
+                self._domain = LARK_ACCOUNTS_URL
+                self._domain_switched = True
+                continue
+
+            client_id = _text(data, "client_id")
+            client_secret = _text(data, "client_secret")
+            if client_id and client_secret:
+                return PollOutcome(
+                    kind=POLL_SUCCESS,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    open_id=str(user_info.get("open_id") or "") or None,
+                )
+
+            error = str(data.get("error") or "")
+            if error == "slow_down":
+                return PollOutcome(
+                    kind=POLL_PENDING,
+                    interval=SLOW_DOWN_INCREMENT_SECONDS,
+                )
+            if error == "access_denied":
+                return PollOutcome(kind=POLL_DENIED)
+            if error == "expired_token":
+                return PollOutcome(kind=POLL_EXPIRED)
+            if error and error != "authorization_pending":
+                description = str(data.get("error_description") or "")
+                return PollOutcome(
+                    kind=POLL_ERROR, error=f"{error}: {description}".strip(": ")
+                )
+            return PollOutcome(kind=POLL_PENDING)
+
+
+class DingtalkRegistrationFlow(RegistrationFlow):
+    """钉钉：三个独立路径，非 RFC 8628 形态，`errcode` 信封。"""
+
+    provider = "dingtalk"
+    label = "钉钉"
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        super().__init__(http)
+        self._retry_start: float | None = None
+
+    async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        status, data = await self._send(
+            DINGTALK_BASE_URL + path, payload, as_json=True
+        )
+        errcode = data.get("errcode")
+        if errcode is not None and errcode != 0:
+            raise RegistrationUnavailable(
+                f"钉钉注册接口 [{path.rsplit('/', 1)[-1]}] 失败："
+                f"{data.get('errmsg') or '未知错误'}（errcode={errcode}）"
+            )
+        if status >= 400:
+            raise RegistrationUnavailable(f"钉钉注册接口返回 HTTP {status}")
+        return data
+
+    async def check_environment(self) -> None:
+        # 钉钉没有独立的"环境自检"：`init` 只是换 nonce，放在 `begin` 里一起做，
+        # 失败同样抛 `RegistrationUnavailable`，前端回退手工填写的效果一致。
+        return None
+
+    def _retry_or_fail(self, message: str) -> PollOutcome:
+        """瞬时错误先在窗口内续轮，超窗才判失败（官方与社区实现的共同做法）。"""
+        now = time.monotonic()
+        if self._retry_start is None:
+            self._retry_start = now
+        if now - self._retry_start < DINGTALK_RETRY_WINDOW_SECONDS:
+            return PollOutcome(kind=POLL_PENDING)
+        return PollOutcome(kind=POLL_ERROR, error=message)
+
+    async def begin(self) -> RegistrationBegin:
+        init_data = await self._post(DINGTALK_INIT_PATH, {"source": DINGTALK_SOURCE})
+        nonce = _text(init_data, "nonce")
+        if not nonce:
+            raise RegistrationUnavailable("钉钉注册 init 未返回 nonce")
+
+        data = await self._post(DINGTALK_BEGIN_PATH, {"nonce": nonce})
+        device_code = _text(data, "device_code")
+        qr_url = _text(data, "verification_uri_complete")
+        if not device_code or not qr_url:
+            raise RegistrationUnavailable(
+                f"钉钉未返回二维码信息："
+                f"{data.get('errmsg') or '缺少 device_code 或 verification_uri_complete'}"
+            )
+        return RegistrationBegin(
+            device_code=device_code,
+            # 钉钉的二维码 URL 不需要（也不该）追加来源参数。
+            qr_url=qr_url,
+            user_code=_text(data, "user_code"),
+            # 兜底 interval 3s，且服务端给的值小于 2s 时按 2s 处理（参考实现同此）。
+            interval=max(_number(data, "interval", default=3.0), MIN_POLL_INTERVAL_SECONDS),
+            expire_in=_number(data, "expires_in", "expire_in", default=7200.0),
+        )
+
+    async def poll(self, device_code: str) -> PollOutcome:
+        try:
+            data = await self._post(DINGTALK_POLL_PATH, {"device_code": device_code})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # 网络/服务端错误不立即判死，交给重试窗口。
+            return self._retry_or_fail(f"钉钉注册轮询失败：{_safe_error(exc)}")
+
+        status = _text(data, "status").upper()
+        if status == "SUCCESS":
+            client_id = _text(data, "client_id")
+            client_secret = _text(data, "client_secret")
+            if not client_id or not client_secret:
+                return PollOutcome(
+                    kind=POLL_ERROR, error="钉钉授权成功但未返回完整凭据"
+                )
+            return PollOutcome(
+                kind=POLL_SUCCESS, client_id=client_id, client_secret=client_secret
+            )
+        if status == "WAITING":
+            self._retry_start = None
+            return PollOutcome(kind=POLL_PENDING)
+        if status == "EXPIRED":
+            return PollOutcome(kind=POLL_EXPIRED)
+        # FAIL 与未知状态都按瞬时错误处理：窗口内续轮，超窗判失败。
+        reason = _text(data, "fail_reason") or status or "未知状态"
+        return self._retry_or_fail(f"钉钉授权失败：{reason}")
+
+
+FLOWS: dict[str, type[RegistrationFlow]] = {
+    FeishuRegistrationFlow.provider: FeishuRegistrationFlow,
+    DingtalkRegistrationFlow.provider: DingtalkRegistrationFlow,
+}
+
+
+def supported_scan_providers() -> frozenset[str]:
+    """支持「扫码一键创建应用」的 provider 集合。"""
+    return frozenset(FLOWS)
+
+
+def scan_provider_label(provider: str) -> str:
+    flow_cls = FLOWS.get(provider)
+    return flow_cls.label if flow_cls is not None else provider
+
+
+@dataclass(slots=True)
 class RegistrationSession:
     session_id: str
     channel_id: str
+    provider: str
     created_by: str
     status: str
     qr_url: str
@@ -123,6 +436,7 @@ class RegistrationSession:
     app_id: str | None = None
     open_id: str | None = None
     error: str | None = None
+    flow: RegistrationFlow | None = None
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
 
@@ -132,6 +446,7 @@ class RegistrationSession:
         return {
             "session_id": self.session_id,
             "channel_id": self.channel_id,
+            "provider": self.provider,
             "status": self.status,
             "qr_url": self.qr_url if pending else None,
             "user_code": self.user_code if pending else None,
@@ -147,7 +462,7 @@ class RegistrationSession:
 
 
 class AppRegistrationService:
-    """内存态的扫码会话管理：单进程部署够用，多 worker 不共享（同文档 §7.2 的限制）。"""
+    """内存态的扫码会话管理：单进程部署够用，多 worker 不共享（文档 §7.2 的限制）。"""
 
     def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._sessions: dict[str, RegistrationSession] = {}
@@ -161,6 +476,7 @@ class AppRegistrationService:
         if self._client is None or self._client.is_closed:
             # trust_env=False：本机环境注入了 HTTP(S)_PROXY，经代理请求飞书会命中
             # 弱证书并 TLS 失败（实测见文档附录 A）。这里显式忽略代理设置。
+            # 钉钉这条链路实测直连与走代理都可达，但保持同一策略以免环境差异复现。
             self._client = httpx.AsyncClient(
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 trust_env=False,
@@ -168,63 +484,13 @@ class AppRegistrationService:
             )
         return self._client
 
-    async def _post(self, base_url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        # 实测：该接口只接受 form-urlencoded，用 JSON body 会被判 invalid_request。
-        # （S0 脚本一直用 data=payload，SDK 内部同样如此。）
-        response = await self._http().post(
-            base_url + REGISTRATION_PATH,
-            data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        try:
-            data = response.json()
-        except ValueError:
-            data = {}
-        if not isinstance(data, dict):
-            data = {}
-        if response.status_code >= 400 and not data.get("error"):
-            raise RegistrationUnavailable(f"飞书注册接口返回 HTTP {response.status_code}")
-        return data
-
-    # ---------- 三个协议动作 ----------
-
-    async def _check_environment(self) -> None:
-        data = await self._post(FEISHU_ACCOUNTS_URL, {"action": "init"})
-        error = data.get("error")
-        if error:
-            raise RegistrationUnavailable(f"注册环境自检失败：{error}")
-        methods = data.get("supported_auth_methods")
-        if isinstance(methods, list):
-            if "client_secret" not in methods:
-                raise RegistrationUnavailable("当前环境不支持 client_secret 接入方式")
-        else:
-            logger.warning("飞书注册 init 未返回 supported_auth_methods，跳过校验")
-
-    async def _begin(self) -> dict[str, Any]:
-        data = await self._post(
-            FEISHU_ACCOUNTS_URL,
-            {
-                "action": "begin",
-                "archetype": ARCHETYPE,
-                "auth_method": "client_secret",
-                "request_user_info": "open_id",
-            },
-        )
-        device_code = str(data.get("device_code") or "")
-        qr_url = str(data.get("verification_uri_complete") or data.get("verification_uri") or "")
-        if not device_code or not qr_url:
+    def _make_flow(self, provider: str) -> RegistrationFlow:
+        flow_cls = FLOWS.get(provider)
+        if flow_cls is None:
             raise RegistrationUnavailable(
-                f"飞书未返回二维码信息：{data.get('error') or data.get('error_description') or '缺少 device_code'}"
+                f"{provider} 渠道不支持扫码创建应用，请手工填写凭证"
             )
-        return {
-            "device_code": device_code,
-            "qr_url": _decorate_qr_url(qr_url),
-            "user_code": str(data.get("user_code") or ""),
-            "interval": _number(data, "interval", default=DEFAULT_POLL_INTERVAL_SECONDS),
-            "expire_in": _number(
-                data, "expires_in", "expire_in", default=DEFAULT_EXPIRE_SECONDS
-            ),
-        }
+        return flow_cls(self._http())
 
     # ---------- 会话生命周期 ----------
 
@@ -234,24 +500,28 @@ class AppRegistrationService:
         channel_id: str,
         created_by: str,
         on_success: SuccessCallback,
+        provider: str = "feishu",
     ) -> dict[str, Any]:
         """发起一次扫码流程。同频道已在进行的会话会先被取消，避免重复创建应用。"""
-        await self._check_environment()
-        begin = await self._begin()
+        flow = self._make_flow(provider)
+        await flow.check_environment()
+        begin = await flow.begin()
         now = time.time()
         session = RegistrationSession(
             session_id="reg_" + uuid.uuid4().hex[:16],
             channel_id=channel_id,
+            provider=provider,
             created_by=created_by,
             status=STATUS_PENDING,
-            qr_url=begin["qr_url"],
-            user_code=begin["user_code"],
-            interval=begin["interval"],
-            expire_in=begin["expire_in"],
+            qr_url=begin.qr_url,
+            user_code=begin.user_code,
+            interval=begin.interval,
+            expire_in=begin.expire_in,
             created_at=now,
             updated_at=now,
-            expires_at=now + begin["expire_in"],
-            device_code=begin["device_code"],
+            expires_at=now + begin.expire_in,
+            device_code=begin.device_code,
+            flow=flow,
         )
         async with self._lock:
             await self._cancel_channel_sessions(channel_id)
@@ -331,8 +601,11 @@ class AppRegistrationService:
         session: RegistrationSession,
         on_success: SuccessCallback,
     ) -> None:
-        domain = FEISHU_ACCOUNTS_URL
-        domain_switched = False
+        flow = session.flow
+        if flow is None:  # pragma: no cover - start() 必然会带上 flow
+            self._finish(session, STATUS_ERROR, error="扫码会话缺少协议实现")
+            return
+
         interval = session.interval
 
         while True:
@@ -346,62 +619,53 @@ class AppRegistrationService:
                 return
 
             try:
-                data = await self._post(
-                    domain,
-                    {"action": "poll", "device_code": session.device_code, "tp": QR_TP},
-                )
+                outcome = await flow.poll(session.device_code)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 # 网络抖动不终止流程：继续轮询（与 OpenClaw 的容错策略一致）。
+                # 钉钉 Flow 内部已自行处理重试窗口，这里是兜底。
                 logger.warning(
-                    "飞书注册轮询请求失败 session=%s error=%s",
+                    "%s 注册轮询请求失败 session=%s error=%s",
+                    flow.label,
                     session.session_id,
                     _safe_error(exc),
                 )
                 await self._pause(session, min(interval, session.expires_at - time.time()))
                 continue
 
-            user_info = data.get("user_info")
-            if not isinstance(user_info, dict):
-                user_info = {}
+            if outcome.interval:
+                interval = min(interval + outcome.interval, MAX_POLL_INTERVAL_SECONDS)
 
-            # 检测到 Lark 租户：切域名后立即重试一次。
-            if user_info.get("tenant_brand") == "lark" and not domain_switched:
-                domain = LARK_ACCOUNTS_URL
-                domain_switched = True
-                continue
-
-            client_id = data.get("client_id")
-            client_secret = data.get("client_secret")
-            if client_id and client_secret:
-                session.app_id = str(client_id)
-                session.open_id = user_info.get("open_id") or None
+            if outcome.kind == POLL_SUCCESS:
+                session.app_id = outcome.client_id
+                session.open_id = outcome.open_id
                 session.updated_at = time.time()
                 session.status = STATUS_SUCCESS
                 try:
                     await on_success(
-                        session.channel_id, str(client_id), str(client_secret), session.open_id
+                        session.channel_id,
+                        outcome.client_id,
+                        outcome.client_secret,
+                        outcome.open_id,
                     )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.exception("飞书注册凭据落库失败 channel=%s", session.channel_id)
+                    logger.exception(
+                        "%s注册凭据落库失败 channel=%s", flow.label, session.channel_id
+                    )
                     self._finish(session, STATUS_ERROR, error=f"凭据写入失败：{_safe_error(exc)}")
                 return
 
-            error = str(data.get("error") or "")
-            if error == "slow_down":
-                interval = min(interval + SLOW_DOWN_INCREMENT_SECONDS, MAX_POLL_INTERVAL_SECONDS)
-            elif error == "access_denied":
+            if outcome.kind == POLL_DENIED:
                 self._finish(session, STATUS_DENIED)
                 return
-            elif error == "expired_token":
+            if outcome.kind == POLL_EXPIRED:
                 self._finish(session, STATUS_EXPIRED)
                 return
-            elif error and error != "authorization_pending":
-                description = str(data.get("error_description") or "")
-                self._finish(session, STATUS_ERROR, error=f"{error}: {description}".strip(": "))
+            if outcome.kind == POLL_ERROR:
+                self._finish(session, STATUS_ERROR, error=outcome.error)
                 return
 
             session.updated_at = time.time()
