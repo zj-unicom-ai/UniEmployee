@@ -11,6 +11,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app import conversations
+from app.im.cards import (
+    WORKING_TEXT,
+    card_available,
+    card_factory,
+    card_level,
+    card_template_id,
+    clamp_card_content,
+    policy_for,
+)
 from app.im.context import ActorContext
 from app.im.contracts import OutboundMessage
 from app.im import jobs
@@ -118,6 +127,49 @@ async def _send_progress_notice(
         )
 
 
+async def _open_card_session(provider: Any, *, row: dict[str, Any]) -> Any | None:
+    """尝试投放一张 AI 卡片；不可用或投放失败返回 ``None``。
+
+    返回 ``None`` 表示「这条消息走文本回复」，不是错误 —— 配置缺失、渠道不支持、
+    连接未就绪、模板无权限都会走到这里，全部退化成改动前的行为。
+    """
+    if not card_available():
+        return None
+    factory = card_factory(provider)
+    if factory is None:
+        return None
+    session = factory(
+        payload=row["payload"],
+        template_id=card_template_id(),
+        policy=policy_for(card_level()),
+    )
+    if session is None:
+        return None
+    try:
+        await session.open(WORKING_TEXT)
+    except Exception as exc:
+        logger.warning("IM card open failed inbox=%s error=%s", row["id"], exc)
+        return None
+    jobs.create_card_session(
+        inbox_id=row["id"],
+        channel_id=row["channel_id"],
+        out_track_id=session.out_track_id,
+        template_id=card_template_id(),
+        level=card_level(),
+    )
+    return session
+
+
+async def _abandon_card(session: Any | None, *, inbox_id: str, text: str) -> None:
+    """执行失败时把卡片标成失败态，避免它一直停在「输入中」。"""
+    if session is None:
+        return
+    await session.fail(text)
+    jobs.finish_card_session(
+        inbox_id, status="abandoned", update_count=session.update_count
+    )
+
+
 async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str,
                              worker_id: str = "im-worker", lease_seconds: int = 120) -> bool:
     """消费一条 Inbox；无任务返回 False，成功处理返回 True。"""
@@ -138,27 +190,72 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
                 conv_id, employee_id, user_id=context.subject_id,
                 channel_id=channel_id, title=row["payload"].get("text", "")[:40],
             )
-        if _progress_notice_enabled():
+        payload = row["payload"]
+        # 卡片优先：投放成功后，用户侧只会看到这一条消息在演进。
+        session = await _open_card_session(provider, row=row)
+        if session is None and _progress_notice_enabled():
+            # 没有卡片时才发独立提示：钉钉的 60 秒 ack 是连接层握手，用户看不见。
             await _send_progress_notice(provider, row=row, channel_id=channel_id)
-        text, terminal = await collect_text(run_agent_events(
-            conv_id, {"messages": [{"role": "user", "content": row["payload"].get("text", "")}]},
-            context=context,
-        ))
-        if terminal and terminal.get("type") == "error":
-            raise RuntimeError(terminal.get("message") or terminal.get("error_code") or "employee execution failed")
-        if terminal and terminal.get("type") == "approval_required":
+
+        async def on_delta(current: str) -> None:
+            # 每个 token 都会被调用；是否真的推送由卡片会话的节流策略决定。
+            if session is not None:
+                await session.push(current)
+
+        try:
+            text, terminal = await collect_text(
+                run_agent_events(
+                    conv_id,
+                    {"messages": [{"role": "user", "content": payload.get("text", "")}]},
+                    context=context,
+                ),
+                on_delta=on_delta,
+            )
+        except Exception:
+            await _abandon_card(session, inbox_id=inbox_id, text="处理失败，请稍后重试。")
+            raise
+
+        terminal_type = terminal.get("type") if terminal else None
+        if terminal_type == "error":
+            await _abandon_card(session, inbox_id=inbox_id, text="处理失败，请稍后重试。")
+            raise RuntimeError(
+                terminal.get("message") or terminal.get("error_code") or "employee execution failed"
+            )
+        if terminal_type == "approval_required":
             text = "该请求需要在 UniEmployee 平台完成审批。"
         if not text.strip():
             text = "员工未返回文本结果。"
-        payload = row["payload"]
-        jobs.create_outbox(inbox_id, OutboundMessage(
-            channel_id=channel_id,
-            # 回复目标由入站消息携带：飞书是 chat_id，钉钉是临时 sessionWebhook。
-            receive_id=payload.get("reply_target") or context.chat_id,
-            receive_id_type=payload.get("reply_target_type") or "chat_id",
-            reply_to_message_id=row["provider_message_id"],
-            text=text,
-        ))
+
+        # 收尾：结果优先由卡片承载。但卡片只是体验优化，不是结果的唯一通道 ——
+        # 收尾失败、内容超长时都要补一条文本消息，不能让用户什么都收不到。
+        card_status = ""
+        delivered_by_card = False
+        if session is not None:
+            display, truncated = clamp_card_content(text)
+            try:
+                await session.finalize(display)
+            except Exception as exc:
+                logger.warning("IM card finalize failed inbox=%s error=%s", inbox_id, exc)
+                card_status = "finalize_failed"
+            else:
+                delivered_by_card = not truncated
+                card_status = "truncated" if truncated else "completed"
+
+        if not delivered_by_card:
+            jobs.create_outbox(inbox_id, OutboundMessage(
+                channel_id=channel_id,
+                # 回复目标由入站消息携带：飞书是 chat_id，钉钉是临时 sessionWebhook。
+                receive_id=payload.get("reply_target") or context.chat_id,
+                receive_id_type=payload.get("reply_target_type") or "chat_id",
+                reply_to_message_id=row["provider_message_id"],
+                text=text,
+            ))
+        if session is not None:
+            jobs.finish_card_session(
+                inbox_id,
+                status=card_status or "fallback",
+                update_count=session.update_count,
+            )
         jobs.finish_inbox(inbox_id, worker_id)
         return True
     except Exception as exc:

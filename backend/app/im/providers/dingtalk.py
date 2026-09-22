@@ -29,6 +29,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from urllib.parse import quote_plus
 
+from app.im.cards import ThrottlePolicy
+from app.im.cards.dingtalk import SPACE_TYPE_GROUP, SPACE_TYPE_ROBOT, DingtalkCardSession
 from app.im.contracts import NormalizedInbound, OutboundMessage
 from app.im.credentials import ChannelCredential
 
@@ -525,6 +527,52 @@ class DingtalkProvider:
         return DeliveryReceipt(
             message_id=provider_message_id,
             raw=dict(payload),
+        )
+
+    # ---------------------------------------------------------------- 卡片
+
+    def card_space(self, payload: Mapping[str, Any]) -> tuple[str, str] | None:
+        """入站消息 -> 卡片投放场域 ``(space_type, space_id)``。
+
+        注意卡片场域与 Stream 出站的目标不是一回事：单聊场域的 SpaceId 是员工
+        userId（入站 senderStaffId），群聊是 openConversationId（入站
+        conversationId，已交叉核实为同一值）。
+        """
+        chat_type = _clean(payload.get("chat_type"))
+        if chat_type == "p2p":
+            space_id = _clean(payload.get("sender_open_id"))
+            return (SPACE_TYPE_ROBOT, space_id) if space_id else None
+        if chat_type == "group":
+            space_id = _clean(payload.get("chat_id"))
+            return (SPACE_TYPE_GROUP, space_id) if space_id else None
+        return None
+
+    def create_card_session(
+        self, *, payload: Mapping[str, Any], template_id: str, policy: ThrottlePolicy
+    ) -> DingtalkCardSession | None:
+        """构造卡片会话（尚未投放）；连接未就绪或场域不可用时返回 ``None``。
+
+        返回 ``None`` 表示「这条消息不走卡片」，由 Worker 退回文本回复 ——
+        这是能力协商，不是错误，所以只记 debug。
+        """
+        if self._http is None:
+            return None
+        space = self.card_space(payload)
+        if space is None:
+            logger.debug(
+                "DingTalk card session skipped channel=%s chat_type=%s",
+                self.credential.channel_id,
+                payload.get("chat_type"),
+            )
+            return None
+        space_type, space_id = space
+        return DingtalkCardSession(
+            http=self._http,
+            credential=self.credential,
+            template_id=template_id,
+            space_type=space_type,
+            space_id=space_id,
+            policy=policy,
         )
 
 

@@ -7,7 +7,7 @@ Transport/Provider 不应了解 LangGraph 或 SSE。该模块把现有 Web 执�
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from app.im.context import ActorContext
@@ -57,13 +57,24 @@ async def run_agent_events(
             yield event
 
 
-async def collect_text(events: AsyncIterator[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
-    """收集文本回复，同时返回最后一个终态事件（便于非流式 IM 回复）。"""
+async def collect_text(
+    events: AsyncIterator[dict[str, Any]],
+    *,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """收集文本回复，同时返回最后一个终态事件（便于非流式 IM 回复）。
+
+    ``on_delta`` 每次收到的都是**到此为止的全量文本**：卡片流式更新本身就要求
+    全量内容，所以这里不做增量拼接。是否真的发出去由调用方按节流策略决定，
+    因此这个回调可以每个 token 都被调用而不会放大接口调用量。
+    """
     chunks: list[str] = []
     terminal: dict[str, Any] | None = None
     async for event in events:
         if event.get("type") == "token":
             chunks.append(str(event.get("content") or ""))
+            if on_delta is not None:
+                await on_delta("".join(chunks))
         if event.get("type") in {"message_end", "error", "approval_required"}:
             terminal = event
     return "".join(chunks), terminal
