@@ -80,6 +80,44 @@ def _delivery_message_id(result: Any) -> str:
     return ""
 
 
+# 员工执行通常要数十秒，期间用户端没有任何动静。这里在执行前先回一条提示。
+# 注意：钉钉的 60 秒 ack 是连接层握手，用户看不见，替代不了这个反馈。
+PROGRESS_NOTICE_TEXT = "已收到，正在处理，请稍候…"
+
+
+def _progress_notice_enabled() -> bool:
+    """执行前提示默认开启；显式设为 0/false/no/off 可关闭。"""
+    raw = os.environ.get("IM_PROGRESS_NOTICE", "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+async def _send_progress_notice(
+    provider: Any, *, row: dict[str, Any], channel_id: str
+) -> None:
+    """尽力而为地告知用户"已收到"。
+
+    提示发不出去不能影响正式回复，因此这里不写 Outbox、不向上抛异常。
+    走 provider.send 而不是入队，是因为 Outbox 由投递协程异步消费，
+    无法保证它排在员工执行之前发出。
+    """
+    payload = row["payload"]
+    try:
+        await provider.send(
+            OutboundMessage(
+                channel_id=channel_id,
+                # 与正式回复同用入站携带的回复目标：飞书是 chat_id，钉钉是临时 sessionWebhook。
+                receive_id=payload.get("reply_target") or payload["chat_id"],
+                receive_id_type=payload.get("reply_target_type") or "chat_id",
+                reply_to_message_id=row["provider_message_id"],
+                text=PROGRESS_NOTICE_TEXT,
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "IM progress notice failed inbox=%s error=%s", row["id"], exc
+        )
+
+
 async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str,
                              worker_id: str = "im-worker", lease_seconds: int = 120) -> bool:
     """消费一条 Inbox；无任务返回 False，成功处理返回 True。"""
@@ -100,6 +138,8 @@ async def process_inbox_once(*, provider: Any, channel_id: str, employee_id: str
                 conv_id, employee_id, user_id=context.subject_id,
                 channel_id=channel_id, title=row["payload"].get("text", "")[:40],
             )
+        if _progress_notice_enabled():
+            await _send_progress_notice(provider, row=row, channel_id=channel_id)
         text, terminal = await collect_text(run_agent_events(
             conv_id, {"messages": [{"role": "user", "content": row["payload"].get("text", "")}]},
             context=context,
