@@ -94,6 +94,20 @@ CREATE TABLE IF NOT EXISTS channel_threads (
     updated_at TEXT NOT NULL,
     UNIQUE(channel_id, scope_key, employee_id)
 );
+CREATE TABLE IF NOT EXISTS channel_card_sessions (
+    id TEXT PRIMARY KEY,
+    inbox_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    out_track_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    level TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'opened',
+    update_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(inbox_id)
+);
 """
 
 
@@ -414,3 +428,40 @@ def get_or_create_thread(context: ActorContext, *, channel_id: str,
             (channel_id, context.subject_id, employee_id),
         ).fetchone()
     return dict(row), created
+
+
+def create_card_session(
+    *, inbox_id: str, channel_id: str, out_track_id: str, template_id: str, level: str
+) -> str:
+    """登记一次卡片投放。
+
+    这不是队列：卡片必须在员工执行期间同步推进，异步投递帮不上忙。落库只为
+    可观测与排障 —— 哪条消息开了卡片、用的是哪档节流、最后收在什么状态。
+    """
+    session_id = _new_id("card")
+    now = _now()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR IGNORE INTO channel_card_sessions"
+            "(id,inbox_id,channel_id,out_track_id,template_id,level,status,"
+            "update_count,created_at,updated_at) VALUES (?,?,?,?,?,?,'opened',0,?,?)",
+            (session_id, inbox_id, channel_id, out_track_id, template_id, level, now, now),
+        )
+    return session_id
+
+
+def finish_card_session(
+    inbox_id: str, *, status: str, update_count: int, error: str | None = None
+) -> bool:
+    """收尾卡片会话状态。
+
+    取值：``completed``（卡片承载了结果）、``truncated``（卡片被截断，已补文本）、
+    ``finalize_failed``（收尾失败，已补文本）、``abandoned``（执行失败）。
+    """
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE channel_card_sessions SET status=?,update_count=?,error=?,updated_at=? "
+            "WHERE inbox_id=?",
+            (status, max(int(update_count), 0), error, _now(), inbox_id),
+        )
+        return cur.rowcount == 1
