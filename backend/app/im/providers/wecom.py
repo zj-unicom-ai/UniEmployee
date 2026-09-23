@@ -24,6 +24,8 @@
   记住它属于哪个会话，见 ``send()``；
 - **5 秒首回复硬窗口**：收到回调后 5 秒内必须发出第一帧，且错过就**永远回不了**。
   所以占位流在 Provider 侧就推出去（``_prestart_stream``），不等 Worker 排程；
+  但**它必须在独立任务里等回执**：回执只能由读循环 ``recv`` 进来，在读循环的调用栈
+  里 await 发送就是「等自己」，必然超时（真机踩过：双气泡，见 ``_send_reply``）；
 - **单机器人单连接**：新订阅会踢掉旧连接，被踢时服务端推 ``disconnected_event``。
   收到它的连接**不重连**（官方 SDK 同样处理），否则多副本部署会互踢成死循环。
 """
@@ -108,10 +110,18 @@ class WecomError(RuntimeError):
         *,
         status_code: int | None = None,
         error_code: str | None = None,
+        frame_sent: bool = False,
     ):
         super().__init__(message)
         self.status_code = status_code
         self.error_code = error_code
+        # 帧是否已经写到长连接上（与「是否收到回执」是两件事）。
+        #
+        # 这个区分是必需的：企微的流式气泡由**首帧**隐式创建，所以「帧已发出、
+        # 回执没等到」意味着**用户侧多半已经多了一条气泡**。调用方据此决定要不要
+        # 继续复用这条流（避免留下永久停在「正在处理」的孤儿气泡），而不是当成
+        # 什么都没发生。503（连接不存在）时帧没出去，才是真的没有气泡。
+        self.frame_sent = frame_sent
 
 
 class WecomDeliveryError(WecomError):
@@ -588,12 +598,37 @@ class WecomProvider:
             return
 
         self._remember_reply_context(normalized)
-        # 抢 5 秒硬窗口：先把占位流推出去，再入队。
-        await self._prestart_stream(normalized)
-
-        task = asyncio.create_task(self.on_message(normalized))
+        # 抢 5 秒硬窗口：占位流要先于入队推出。
+        #
+        # 但**绝不能在这里 await 它**：本函数位于读循环的调用栈上，而占位流要等
+        # 服务端回执，回执又只能由读循环自己 ``recv`` 进来 —— 那就是在等自己。
+        # 实测 100% 复现：帧发了、用户看到了气泡、回执永远收不到（8 秒超时）、
+        # 会话登记失败，Worker 只好另开一条流 ⇒ 用户侧两条「正在处理，请稍候…」，
+        # 第一条永久残留。所以整段「预热 + 入队」交给独立任务，读循环立刻回 recv。
+        # 「预热先于入队」的顺序保证移到了 _accept_message 内部。
+        task = asyncio.create_task(self._accept_message(normalized))
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
+        # 返回任务只为测试与观测（真实调用方是读循环，不 await 它）。
+        return task
+
+    async def _accept_message(self, normalized: NormalizedInbound) -> None:
+        """独立任务里执行「预热占位流 → 入队」，顺序不可颠倒。
+
+        顺序是硬约束：Worker 的 ``create_card_session`` 靠 ``_take_session(req_id)``
+        复用预热出来的流，预热没登记就取不到 —— 那就是双气泡的另一半成因。
+        这里已经脱离读循环，所以 ``prestart`` 可以正常等回执。
+        """
+        await self._prestart_stream(normalized)
+        try:
+            await self.on_message(normalized)
+        except Exception:
+            # 独立任务的异常没人接，必须自己记，否则入队失败会完全静默。
+            logger.exception(
+                "WeCom inbound enqueue failed channel=%s message=%s",
+                self.credential.channel_id,
+                normalized.event_id,
+            )
 
     async def _handle_event(self, payload: Mapping[str, Any]) -> None:
         body = _as_mapping(payload.get("body"))
@@ -645,12 +680,17 @@ class WecomProvider:
         就**永远回不了这条消息**。所以窗口由 Provider 自己闭环，与 Worker 排程解耦。
 
         失败不阻断入队：Worker 会退回卡片开流或文本回复，只是失去这份确定性。
+
+        ⚠️ **调用方必须已经脱离读循环**（实际路径：``_handle_callback`` 把它丢进
+        ``_accept_message`` 独立任务）。本函数会等回执，而回执只能由读循环投递 ——
+        在读循环的调用栈里调用它就是等自己，必然超时（真机踩过，见 ``_send_reply``）。
         """
         if self.channel is None or not card_enabled():
             return
         req_id = _clean(message.reply_target)
         if not req_id:
             return
+        session: WecomCardSession | None = None
         try:
             session = WecomCardSession(
                 send_reply=self._send_reply,
@@ -660,6 +700,27 @@ class WecomProvider:
                 policy=policy_for(card_level(self.PROVIDER_ID)),
             )
             await session.prestart(WORKING_TEXT)
+        except WecomDeliveryError as exc:
+            if session is not None and exc.frame_sent:
+                # 帧发出去了、回执没等到 ⇒ 企微的流由首帧**隐式创建**，所以用户侧
+                # 那条气泡多半已经出现。必须把会话登记下来交给 Worker 复用，否则
+                # Worker 会另开一条流，而这条就永久停在「正在处理，请稍候…」。
+                # 代价：万一流其实没创建成功，Worker 收尾会拿到 errcode 并退回文本补发
+                # （finalize 失败 → delivered_by_card=False → Outbox 文本兜底）。
+                logger.warning(
+                    "WeCom placeholder stream ack missing (frame sent, will reuse stream)"
+                    " channel=%s error=%s",
+                    self.credential.channel_id,
+                    exc,
+                )
+                self._remember_session(session)
+                return
+            logger.warning(
+                "WeCom placeholder stream failed channel=%s error=%s",
+                self.credential.channel_id,
+                exc,
+            )
+            return
         except Exception as exc:
             logger.warning(
                 "WeCom placeholder stream failed channel=%s error=%s",
@@ -697,6 +758,13 @@ class WecomProvider:
         串行是必需的：同一 req_id 的回复回执里只有 req_id 与 errcode，**没有可区分
         的帧标识**，并发发送就无法把回执与帧配对。官方 SDK 用 per-req_id 发送队列
         实现同一语义（其 ``ws.ts`` 的 ``sendReply`` / ``processReplyQueue``）。
+
+        ⚠️ **调用方绝不能位于读循环的调用栈上。** 回执只能由读循环 ``recv`` 进来，
+        所以「在读循环里 await 本函数」是**等自己**——必然 8 秒超时。真实事故：
+        ``_prestart_stream`` 曾在 ``_handle_callback`` 里被直接 await，于是占位流
+        的帧发出去了（用户看到气泡）、回执永远收不到、会话登记失败，Worker 只好
+        另开一条流，用户侧表现为**两条「正在处理，请稍候…」，第一条永不消失**。
+        需要抢窗口的调用方请走 ``_handle_callback`` 的独立任务路径。
         """
         # 默认超时在函数体内解析：写成默认参数会在定义时绑定，改不了也测不了。
         if timeout is None:
@@ -705,20 +773,28 @@ class WecomProvider:
         async with lock:
             waiter: asyncio.Future = asyncio.get_running_loop().create_future()
             self._pending_replies[req_id] = waiter
+            frame_sent = False
             try:
                 await self._send_frame(
                     {"cmd": cmd, "headers": {"req_id": req_id}, "body": dict(body)}
                 )
+                frame_sent = True
                 payload = await asyncio.wait_for(waiter, timeout=timeout)
             except TimeoutError as exc:
                 # 回执超时多半是连接已坏，标成可重试（504）—— 代价是极端情况下可能
                 # 重复投递一条；若直接判死，网络抖动就会变成用户永久收不到结果。
-                raise WecomDeliveryError("企业微信回复未收到回执", status_code=504) from exc
+                # frame_sent 一并带出：流式首帧会**隐式创建**气泡，调用方要靠它
+                # 判断用户侧是否已经多了一条（见 WecomError.frame_sent 的注释）。
+                raise WecomDeliveryError(
+                    "企业微信回复未收到回执", status_code=504, frame_sent=frame_sent
+                ) from exc
             except WecomDeliveryError:
                 raise
             except Exception as exc:
                 raise WecomDeliveryError(
-                    f"企业微信回复发送失败：{type(exc).__name__}: {exc}", status_code=503
+                    f"企业微信回复发送失败：{type(exc).__name__}: {exc}",
+                    status_code=503,
+                    frame_sent=frame_sent,
                 ) from exc
             finally:
                 if self._pending_replies.get(req_id) is waiter:

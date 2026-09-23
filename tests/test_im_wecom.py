@@ -62,6 +62,19 @@ def _provider(**kwargs) -> WecomProvider:
     return WecomProvider(_credential(), on_message=noop, **kwargs)
 
 
+def _normalized(*, req_id: str = "req_1"):
+    """把一条标准回调体归一成入站消息（预热路径的单测直接用它）。"""
+    message = normalize_message(
+        _body(),
+        req_id=req_id,
+        channel_id="chan_wc",
+        app_id="bot_id_1",
+        tenant_key="corp_wc",
+    )
+    assert message is not None
+    return message
+
+
 class _FakeWebSocket:
     """只记录发出去的帧；``close`` 只置位（订阅/心跳测试不需要真网络）。"""
 
@@ -105,6 +118,53 @@ def _wire(provider: WecomProvider, socket=None) -> _AckingWebSocket:
     socket.provider = provider
     provider.channel = socket
     return socket
+
+
+class _ReadLoopWebSocket:
+    """模拟**真实**长连接的收发关系：回执不随 ``send()`` 同步返回，而是排进队列，
+    由「读循环」取出来投递。
+
+    这个区别是必需的 —— ``_AckingWebSocket`` 在 ``send()`` 里同步回执，于是
+    「在读循环的调用栈上等回执」这种自死锁在单测里**结构性隐身**：假 socket 让
+    ``await send()`` 一返回回执就已就绪。真机踩的坑正是它（见
+    ``test_read_loop_is_not_blocked_by_the_placeholder_stream``）。
+    """
+
+    def __init__(self, *, ack: bool = True):
+        self.sent: list[str] = []
+        self.closed = False
+        self.ack = ack
+        self._frames: asyncio.Queue[str] = asyncio.Queue()
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(payload)
+        if not self.ack:
+            return
+        frame = json.loads(payload)
+        req_id = frame["headers"]["req_id"]
+        # 只排进队列，不直接回调 —— 由读循环来取。
+        self._frames.put_nowait(
+            json.dumps({"headers": {"req_id": req_id}, "errcode": 0, "errmsg": "ok"})
+        )
+
+    async def __aiter__(self):
+        while True:
+            yield await self._frames.get()
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def _dispatch_callback(provider: WecomProvider, payload, *, req_id: str):
+    """投递一条回调并等它处理完（预热占位流 + 入队）。
+
+    ``_handle_callback`` 现在**不再 await 预热** —— 它位于读循环的调用栈上，而
+    预热要等回执，回执只能由读循环自己收（等自己 = 必超时）。所以处理器把
+    「预热 + 入队」丢进独立任务返回；测试必须显式等它，否则会读到中间态。
+    """
+    task = await provider._handle_callback(payload, req_id=req_id)
+    if task is not None:
+        await task
 
 
 # --------------------------------------------------------------- 入站标准化
@@ -220,8 +280,8 @@ def test_callback_is_deduplicated_by_msgid():
         provider = WecomProvider(_credential(), on_message=on_message)
         _wire(provider)
         payload = _callback_payload()
-        await provider._handle_callback(payload, req_id="req_1")
-        await provider._handle_callback(payload, req_id="req_1")
+        await _dispatch_callback(provider, payload, req_id="req_1")
+        await _dispatch_callback(provider, payload, req_id="req_1")
         await asyncio.sleep(0)
         return received
 
@@ -247,7 +307,7 @@ def test_placeholder_stream_is_sent_before_the_message_is_queued():
         socket.provider = provider
         provider.channel = socket
 
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         await asyncio.sleep(0)
         return socket.sent, frames_seen_at_queue_time
 
@@ -268,12 +328,96 @@ def test_placeholder_stream_is_skipped_when_cards_are_disabled(monkeypatch):
         provider = _provider()
         socket = _wire(provider)
         monkeypatch.setattr(wecom_module, "card_enabled", lambda: False)
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         await asyncio.sleep(0)
         return socket.sent
 
     # 卡片总开关关掉时不预热，否则用户会看到一个永远停在「正在处理」的气泡。
     assert asyncio.run(scenario()) == []
+
+
+def test_read_loop_is_not_blocked_by_the_placeholder_stream():
+    """回归：占位流曾在读循环的调用栈里等回执 ⇒ 自死锁 ⇒ 双气泡。
+
+    真机现象：两条「正在处理，请稍候…」，第二条变成答案，第一条永不消失。
+    机制：``_prestart_stream`` 被 ``_handle_callback`` 直接 await，而 ``_handle_callback``
+    位于读循环的调用栈上；回执只能由读循环自己 ``recv`` —— 等于等自己，必然 8 秒超时。
+    超时后会话没登记，Worker 的 ``create_card_session`` 取不到，只好另开一条流。
+
+    所以这里用「回执排进队列、由读循环投递」的假长连接（``_ReadLoopWebSocket``），
+    并断言两件事：``_dispatch_text`` 立刻返回；预热随后仍然成功。
+    """
+
+    async def scenario():
+        socket = _ReadLoopWebSocket()
+        provider = _provider()
+        provider.channel = socket
+        reader = asyncio.create_task(provider._read_until_closed())
+        await asyncio.sleep(0)  # 让读循环先挂到 recv 上
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await provider._dispatch_text(json.dumps(_callback_payload()))
+        elapsed = loop.time() - started
+
+        task = next(iter(provider._inflight), None)
+        assert task is not None
+        await task
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        return socket, provider, elapsed
+
+    socket, provider, elapsed = asyncio.run(scenario())
+    # 读循环必须立刻回到 recv：它被阻塞多久，回执就多久读不进来。
+    assert elapsed < 0.5, f"读循环被占位流阻塞了 {elapsed:.2f}s"
+    assert len(socket.sent) == 1
+    assert json.loads(socket.sent[0])["body"]["stream"]["content"] == WORKING_TEXT
+    # 预热登记的会话会被 Worker 取走复用 —— 这才是「用户只看到一条气泡」的保证。
+    session = provider._take_session("req_1")
+    assert session is not None
+    assert session.opened is True
+
+
+def test_placeholder_stream_is_kept_when_the_ack_is_lost(monkeypatch):
+    """帧已发出、回执丢失：会话仍要交给 Worker 复用，否则留下孤儿气泡。
+
+    企微的流由**首帧隐式创建**，所以帧发出去基本等价于用户侧已经多了一条气泡。
+    丢掉会话的后果不是「什么都没发生」，而是 Worker 另开一条流、第一条永远停在
+    「正在处理，请稍候…」—— 比多一条气泡更糟。
+    """
+    monkeypatch.setattr(wecom_module, "REPLY_ACK_TIMEOUT_SECONDS", 0.05)
+
+    async def scenario():
+        provider = _provider()
+        socket = _ReadLoopWebSocket(ack=False)  # 永不回执
+        provider.channel = socket
+        await provider._prestart_stream(_normalized())
+        return provider, socket
+
+    provider, socket = asyncio.run(scenario())
+    assert len(socket.sent) == 1  # 帧确实发出去了
+    assert provider._take_session("req_1") is not None
+
+
+def test_placeholder_stream_is_not_kept_when_the_frame_could_not_be_sent():
+    """帧没发出去（连接不可用）就没有气泡，此时绝不能登记会话。
+
+    否则 Worker 会拿一个不存在的流去 finalize，白丢一次卡片路径。
+    """
+
+    class _DeadSocket(_FakeWebSocket):
+        async def send(self, payload: str) -> None:
+            raise ConnectionError("连接已断开")
+
+    async def scenario():
+        provider = _provider()
+        provider.channel = _DeadSocket()
+        await provider._prestart_stream(_normalized())
+        return provider
+
+    provider = asyncio.run(scenario())
+    assert provider._take_session("req_1") is None
+    assert provider._pending_sessions == {}
 
 
 def test_disconnected_event_stops_reconnecting():
@@ -416,7 +560,7 @@ def test_send_replies_on_the_fresh_req_id():
     async def scenario():
         provider = _provider()
         socket = _wire(provider)
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         receipt = await _send(provider, text="这是结果")
         return socket.sent, receipt
 
@@ -439,7 +583,7 @@ def test_second_send_on_a_used_req_id_falls_back_to_active_push():
     async def scenario():
         provider = _provider()
         socket = _wire(provider)
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         await _send(provider, text="第一段")
         await _send(provider, text="补发的完整内容")
         return socket.sent
@@ -512,7 +656,7 @@ def test_card_session_hands_over_the_prestarted_stream():
     async def scenario():
         provider = _provider()
         socket = _wire(provider)
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         session = provider.create_card_session(
             payload={"reply_target": "req_1", "chat_id": "user_1", "chat_type": "p2p"},
             # 企微不需要模板；传空串也不该被拒（与钉钉相反）。
@@ -552,7 +696,7 @@ def test_finalized_session_is_not_handed_over_again():
     async def scenario():
         provider = _provider()
         _wire(provider)
-        await provider._handle_callback(_callback_payload(), req_id="req_1")
+        await _dispatch_callback(provider, _callback_payload(), req_id="req_1")
         first = provider.create_card_session(
             payload={"reply_target": "req_1", "chat_id": "user_1", "chat_type": "p2p"},
             template_id="",
@@ -609,7 +753,9 @@ def test_reply_contexts_and_sessions_are_bounded():
         provider = _provider()
         _wire(provider)
         for index in range(600):
-            await provider._handle_callback(_callback_payload(msgid=f"msg_{index}"), req_id=f"req_{index}")
+            await _dispatch_callback(
+                provider, _callback_payload(msgid=f"msg_{index}"), req_id=f"req_{index}"
+            )
         await asyncio.sleep(0)
         return provider
 
