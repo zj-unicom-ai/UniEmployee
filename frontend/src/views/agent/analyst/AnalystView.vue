@@ -176,7 +176,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../../../api.js'
 import * as analystApi from '../../../api/analyst.js'
@@ -187,6 +187,7 @@ import SqlViewer from '../../../components/agent/analyst/SqlViewer.vue'
 defineOptions({ name: 'AnalystView' })
 const message = useMessage()
 const route = useRoute()
+const router = useRouter()
 
 const datasourceId = ref(null)
 const datasources = ref([])
@@ -251,6 +252,8 @@ function usePrompt(ex) {
 }
 
 const convId = ref(null)
+const persistedConvId = ref(null)
+const routeReady = ref(false)
 const convList = ref([])
 const messages = ref([])
 const inputText = ref('')
@@ -288,6 +291,20 @@ function fmtSize(n) {
 
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
+async function setAnalystUrl(query, replace = false) {
+  const target = { name: 'analyst', query }
+  if (router.resolve(target).fullPath !== route.fullPath) {
+    await router[replace ? 'replace' : 'push'](target)
+  }
+}
+
+function markConversationPersisted(cid) {
+  if (convId.value !== cid || route.name !== 'analyst') return
+  persistedConvId.value = cid
+  // 首条消息被服务端接收后，会话才可从地址栏恢复。
+  void setAnalystUrl({ conv: cid }, true)
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (msgsRef.value) msgsRef.value.scrollTop = msgsRef.value.scrollHeight
@@ -317,24 +334,44 @@ async function loadConversations() {
   } catch {}
 }
 
-async function newConv() {
+async function newConv({ syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换会话')
+    return false
+  }
+  const requestedRoute = route.fullPath
   try {
     const data = await analystApi.createAnalystConversation()
+    if (!syncUrl && route.fullPath !== requestedRoute) return false
     convId.value = data.conversation_id
+    persistedConvId.value = null
     currentModel.value = defaultModelBase()
     messages.value = []
     stream.resetPipeline()
     await loadConversations()
+    if (syncUrl) await setAnalystUrl({}, replaceUrl)
+    return true
   } catch (e) {
     message.error('创建会话失败：' + (e.response?.data?.detail || e.message))
+    return false
   }
 }
 
-async function openConversation(cid) {
+async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换会话')
+    return false
+  }
   try {
     const data = await analystApi.getAnalystConversation(cid)
-    if (data.error) return
+    if (!syncUrl && route.query.conv !== cid) return false
+    if (data.error) { message.error(data.error); return false }
+    if (data.employee_id !== 'xiaoshu') {
+      await router.replace({ name: 'chat', query: { conv: cid } })
+      return true
+    }
     convId.value = cid
+    persistedConvId.value = cid
     currentModel.value = data.model || defaultModelBase()
     messages.value = []
     stream.resetPipeline()
@@ -360,7 +397,12 @@ async function openConversation(cid) {
       }
     }
     scrollToBottom()
-  } catch {}
+    if (syncUrl) await setAnalystUrl({ conv: cid }, replaceUrl)
+    return true
+  } catch (e) {
+    message.error('会话加载失败：' + (e.response?.data?.detail || e.message))
+    return false
+  }
 }
 
 async function onSend() {
@@ -375,6 +417,7 @@ async function onSend() {
     await newConv()
     if (!convId.value) return
   }
+  const targetConvId = convId.value
   // 先上传表格附件（.csv/.xlsx/.xls），后端发送消息时自动注册为 DuckDB 表
   let attachments = []
   if (pendingFiles.value.length) {
@@ -383,7 +426,7 @@ async function onSend() {
       for (const f of pendingFiles.value) {
         const form = new FormData()
         form.append('file', f)
-        const { data } = await api.post(`/conversations/${convId.value}/attachments`, form)
+        const { data } = await api.post(`/conversations/${targetConvId}/attachments`, form)
         if (data.error) {
           message.error('附件「' + f.name + '」上传失败：' + data.error)
         } else {
@@ -400,31 +443,56 @@ async function onSend() {
   // 把 data_source={kind,id} 作为 query param 传到后端，由 streaming.py
   // 按 kind 注入到对应工具的 contextvar（database→sql_db_* / knowledge_base→kb_search / connector→MCP）。
   await stream.sendTo(
-    `/api/conversations/${convId.value}/messages`,
+    `/api/conversations/${targetConvId}/messages`,
     text,
     attachments,
     currentDataSource.value,
     currentModel.value,
+    { onAccepted: () => markConversationPersisted(targetConvId) },
   )
   inputText.value = ''
   await loadConversations()
 }
 
 onMounted(async () => {
-  await loadAiModels()
-  await loadDatasources()
-  await loadConversations()
-  // 优先从 URL ?conv=xxx 恢复指定会话（从会话历史页跳转过来时）
-  const qconv = route.query.conv
-  if (qconv) {
-    await openConversation(qconv)
-  } else if (!convId.value && convList.value.length) {
-    await openConversation(convList.value[0].conv_id)
-  } else if (!convId.value) {
-    await newConv()
+  try {
+    await loadAiModels()
+    await loadDatasources()
+    await loadConversations()
+    // 优先从 URL ?conv=xxx 恢复指定会话（从会话历史页跳转过来时）
+    const qconv = route.query.conv
+    if (typeof qconv === 'string' && qconv) {
+      const opened = await openConversation(qconv, { syncUrl: false })
+      if (!opened && convList.value.length) await openConversation(convList.value[0].conv_id, { replaceUrl: true })
+      else if (!opened) await newConv({ replaceUrl: true })
+    } else if (convList.value.length) {
+      await openConversation(convList.value[0].conv_id, { replaceUrl: true })
+    } else {
+      await newConv({ replaceUrl: true })
+    }
+    // 进入页面或打开历史会话后，加载当前数据源的话术示例
+    await loadQuickPrompts()
+  } finally {
+    routeReady.value = true
   }
-  // 进入页面或打开历史会话后，加载当前数据源的话术示例
-  await loadQuickPrompts()
+})
+
+watch(() => route.query.conv, async (cid) => {
+  if (!routeReady.value) return
+  if (typeof cid === 'string' && cid) {
+    if (cid !== persistedConvId.value) {
+      const opened = await openConversation(cid, { syncUrl: false })
+      if (!opened && route.query.conv === cid) {
+        await setAnalystUrl(persistedConvId.value ? { conv: persistedConvId.value } : {}, true)
+      }
+    }
+  } else if (persistedConvId.value) {
+    const requestedRoute = route.fullPath
+    const created = await newConv({ syncUrl: false })
+    if (!created && route.fullPath === requestedRoute) {
+      await setAnalystUrl({ conv: persistedConvId.value }, true)
+    }
+  }
 })
 </script>
 

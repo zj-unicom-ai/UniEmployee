@@ -114,7 +114,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../api.js'
@@ -135,6 +135,8 @@ const employees = ref([])
 const empNames = reactive({})
 const currentEmp = ref(null)
 const convId = ref(null)
+const persistedConvId = ref(null)
+const routeReady = ref(false)
 const convList = ref([])
 const historyQuery = ref('')
 const historyArchived = ref(false)
@@ -207,11 +209,26 @@ function scrollToBottom() {
 /* ---------- SSE 流 ---------- */
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
+async function setChatUrl(query, replace = false) {
+  const target = { name: 'chat', query }
+  if (router.resolve(target).fullPath !== route.fullPath) {
+    await router[replace ? 'replace' : 'push'](target)
+  }
+}
+
+function markConversationPersisted(cid) {
+  if (convId.value !== cid || route.name !== 'chat') return
+  persistedConvId.value = cid
+  // 新会话在第一条消息被服务端接收后才落库，此时地址才可以用于刷新恢复。
+  void setChatUrl({ conv: cid }, true)
+}
+
 /* ---------- 发送 / 审批 ---------- */
 const uploading = ref(false)
 
 async function onSend(text, files = [], onAccepted = () => {}) {
   if (!convId.value) return
+  const targetConvId = convId.value
   let attachments = []
   if (files.length) {
     uploading.value = true
@@ -219,7 +236,7 @@ async function onSend(text, files = [], onAccepted = () => {}) {
       for (const f of files) {
         const form = new FormData()
         form.append('file', f)
-        const { data } = await api.post(`/conversations/${convId.value}/attachments`, form)
+        const { data } = await api.post(`/conversations/${targetConvId}/attachments`, form)
         if (data.error) {
           messages.value.push({ role: 'bot', content: '⚠ 附件「' + f.name + '」上传失败：' + data.error, html: '', time: fmtNow() })
         } else {
@@ -232,7 +249,12 @@ async function onSend(text, files = [], onAccepted = () => {}) {
     uploading.value = false
     if (!attachments.length) return
   }
-  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments, null, currentModel.value, { onAccepted })
+  await stream.sendTo(`/api/conversations/${targetConvId}/messages`, text, attachments, null, currentModel.value, {
+    onAccepted: () => {
+      onAccepted()
+      markConversationPersisted(targetConvId)
+    },
+  })
   await loadHistory(currentEmp.value)
 }
 
@@ -241,7 +263,11 @@ async function retryMessage(msg) {
   if (!request || stream.sending.value) return
   const failedIndex = messages.value.indexOf(msg)
   if (failedIndex >= 0) messages.value.splice(failedIndex, 1)
-  await stream.sendTo(request.endpoint, request.text, request.attachments, request.dataSource, request.model, { appendUser: false })
+  const targetConvId = convId.value
+  await stream.sendTo(request.endpoint, request.text, request.attachments, request.dataSource, request.model, {
+    appendUser: false,
+    onAccepted: () => markConversationPersisted(targetConvId),
+  })
   await loadHistory(currentEmp.value)
 }
 
@@ -335,17 +361,23 @@ async function updateConversationMeta(cid, changes) {
   }
 }
 
-async function openConversation(cid) {
+async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换会话')
+    return false
+  }
   try {
     const { data } = await api.get(`/conversations/${cid}`)
-    if (data.error) return
+    if (!syncUrl && route.query.conv !== cid) return false
+    if (data.error) { message.error(data.error); return false }
     // 会话属于定制型员工时，重定向到该员工的专属对话路由，避免丢失定制上下文
     const targetRoute = routeNameForEmployee(data.employee_id)
     if (targetRoute !== 'chat') {
-      router.replace({ name: targetRoute, query: { conv: cid } })
-      return
+      await router.replace({ name: targetRoute, query: { conv: cid } })
+      return true
     }
     convId.value = cid
+    persistedConvId.value = cid
     currentEmp.value = data.employee_id
     hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
@@ -398,26 +430,45 @@ async function openConversation(cid) {
     await loadHistory(data.employee_id)
     scrollToBottom()
     closeDrawers()
-  } catch {}
+    if (syncUrl) await setChatUrl({ conv: cid }, replaceUrl)
+    return true
+  } catch (e) {
+    message.error(e.response?.data?.detail || '会话加载失败')
+    return false
+  }
 }
 
 /* ---------- 员工切换 ---------- */
-async function selectEmployee(empId) {
+async function selectEmployee(empId, { syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换员工')
+    return false
+  }
   historyQuery.value = ''
   historyArchived.value = false
   clearTimeout(historySearchTimer)
+  const requestedRoute = route.fullPath
+  let newId
+  try {
+    const { data } = await api.post(`/employees/${empId}/conversations`)
+    newId = data.conversation_id
+  } catch (e) {
+    message.error(e.response?.data?.detail || '新建会话失败')
+    return false
+  }
+  if (!syncUrl && route.fullPath !== requestedRoute) return false
   currentEmp.value = empId
   hint.value = HINTS[empId] || '向数字员工提问吧。'
   // 切换员工时重置为默认模型
   currentModel.value = defaultModelBase()
-  try {
-    const { data } = await api.post(`/employees/${empId}/conversations`)
-    convId.value = data.conversation_id
-  } catch { return }
+  convId.value = newId
+  persistedConvId.value = null
   messages.value = []
   stream.resetPipeline()
   empMeta.value = '已切换到该员工（记忆跨会话保留）'
   await loadHistory(empId)
+  if (syncUrl) await setChatUrl({ emp: empId }, replaceUrl)
+  return true
 }
 
 function defaultModelBase() {
@@ -463,16 +514,40 @@ onMounted(async () => {
     const qconv = route.query.conv
     if (qconv) {
       // 先尝试打开指定会话；若该会话属于定制型员工，openConversation 会重定向到对应路由
-      await openConversation(qconv)
+      const opened = await openConversation(qconv, { syncUrl: false })
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
-      if (!convId.value && data.length) await selectEmployee(data[0].id)
+      if (!opened && empOptions.value.length) await selectEmployee(empOptions.value[0].value, { replaceUrl: true })
     } else if (data.length) {
       // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
       const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
-      await selectEmployee(target ? target.id : data[0].id)
+      await selectEmployee(target ? target.id : (empOptions.value[0]?.value || data[0].id), { replaceUrl: true })
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message
+  } finally {
+    routeReady.value = true
+  }
+})
+
+watch(() => [route.query.conv, route.query.emp], async ([cid, emp]) => {
+  if (!routeReady.value) return
+  if (typeof cid === 'string' && cid) {
+    if (cid !== persistedConvId.value) {
+      const opened = await openConversation(cid, { syncUrl: false })
+      if (!opened && route.query.conv === cid) {
+        await setChatUrl(persistedConvId.value ? { conv: persistedConvId.value } : { emp: currentEmp.value }, true)
+      }
+    }
+    return
+  }
+  const targetEmp = typeof emp === 'string' && empOptions.value.some(e => e.value === emp)
+    ? emp : (empOptions.value[0]?.value || null)
+  if (targetEmp && (persistedConvId.value || currentEmp.value !== targetEmp)) {
+    const requestedRoute = route.fullPath
+    const created = await selectEmployee(targetEmp, { syncUrl: false })
+    if (!created && route.fullPath === requestedRoute) {
+      await setChatUrl(persistedConvId.value ? { conv: persistedConvId.value } : { emp: currentEmp.value }, true)
+    }
   }
 })
 
