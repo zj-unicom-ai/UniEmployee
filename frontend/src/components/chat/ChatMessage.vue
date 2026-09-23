@@ -185,6 +185,7 @@ function subagentStatusText(status) {
    bot 回复（长文/表格/代码）放宽到接近全宽，避免右侧大片空白 */
 .user-wrapper { align-self: stretch; align-items: flex-end; }
 .bot-wrapper { width: 100%; max-width: 100%; align-self: stretch; align-items: flex-start; position: relative; }
+.file-list { width: 100%; max-width: 100%; align-self: stretch; min-width: 0; }
 .msg { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.7; word-break: break-word; animation: msg-in 0.25s ease-out; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }

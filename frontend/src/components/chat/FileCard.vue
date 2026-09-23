@@ -131,6 +131,10 @@ onMounted(() => {
 
 <style scoped>
 .file-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 8px 10px;
