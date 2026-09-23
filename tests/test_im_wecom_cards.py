@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from app.im.cards import TRUNCATED_SUFFIX, ThrottlePolicy
+from app.im.cards import TRUNCATED_SUFFIX, WORKING_TEXT, ThrottlePolicy
 from app.im.cards.wecom import (
     WECOM_MAX_STREAM_BYTES,
     WecomCardError,
@@ -199,10 +199,13 @@ def test_two_state_policy_skips_intermediate_updates():
         session = _session(recorder, policy=_policy(max_updates=0))
         await session.open("处理中")
         await session.push("中间内容")
+        await session.finalize("最终结果")
         return recorder.bodies(), session
 
     bodies, session = asyncio.run(scenario())
-    assert len(bodies) == 1  # 只有开流那一帧
+    # 只有开流与收尾两帧；占位文案要一直挂到收尾才被替换 —— 这是"总共两次调用"
+    # 这个档位的既定代价，不是缺陷（想要"开始回复就换掉占位"用 staged / stream）。
+    assert [body["stream"]["content"] for body in bodies] == ["处理中", "最终结果"]
     assert session.update_count == 0
 
 
@@ -216,8 +219,10 @@ def test_min_interval_throttles_pushes():
         return recorder.bodies(), session
 
     bodies, session = asyncio.run(scenario())
-    assert len(bodies) == 1
-    assert session.update_count == 0
+    # 两帧 = 开流 + 首帧正文。首帧是把占位文案换掉的状态切换，不受间隔约束
+    # （见 test_first_content_frame_ignores_the_throttle）；从第二帧起才被节流。
+    assert len(bodies) == 2
+    assert session.update_count == 1
 
 
 def test_max_updates_caps_the_push_count():
@@ -244,6 +249,67 @@ def test_intermediate_push_omits_the_truncation_notice():
 
     # 执行中还没有"补发"这回事，提前显示提示会让人以为已经被截断了。
     assert TRUNCATED_SUFFIX not in asyncio.run(scenario())
+
+
+# ------------------------------------------------------------ 占位文案
+
+# 真机反馈（2026-09-23）：气泡里的「正在处理，请稍候…」要等到回答写完才消失。
+# 根因是 `stream.content` 的全量替换语义撞上了写错的合并基线 —— 占位文案被当成
+# 正文的上一版，首帧于是推成「正在处理，请稍候…正文」，只有 `finalize` 的纯正文
+# 覆盖才能把它抹掉。下面两个用例把「占位文案不进基线」与「首帧不受节流」钉住。
+
+
+def test_placeholder_text_is_not_merged_into_the_reply():
+    """占位文案只落在气泡上，不能被拼进正文。
+
+    走的是真机的调用序列：Provider 抢窗口 ``prestart`` → Worker 拿到同一会话再
+    ``open``（幂等空操作）→ 逐段 ``push`` → ``finalize``。
+    """
+
+    async def scenario():
+        recorder = _Recorder()
+        session = _session(recorder)
+        await session.prestart(WORKING_TEXT)  # Provider 抢 5 秒窗口
+        await session.open(WORKING_TEXT)  # Worker 的统一流程，应为空操作
+        await session.push("你好")
+        await session.push("你好，有什么可以帮你？")
+        await session.finalize("你好，有什么可以帮你？")
+        return [body["stream"]["content"] for body in recorder.bodies()], session
+
+    contents, session = asyncio.run(scenario())
+    assert contents == [
+        WORKING_TEXT,
+        "你好",
+        "你好，有什么可以帮你？",
+        "你好，有什么可以帮你？",
+    ]
+    # 除开流那一帧，后面每一帧都不该再出现占位文案。
+    assert all(WORKING_TEXT not in text for text in contents[1:])
+    # 开流那次不算更新（update_count 只数中间推送）。
+    assert session.update_count == 2
+
+
+def test_first_content_frame_ignores_the_throttle():
+    """首帧真实内容是状态切换，间隔与最小增量都不该拦它。
+
+    旧逻辑把这一帧也按增量算：占位文案在基线里占掉 10 个字符，比
+    ``min_delta_chars`` 还短的回复就**永远**攒不出这一帧 —— 占位文案只能拖到收尾。
+    """
+
+    async def scenario():
+        recorder = _Recorder()
+        session = _session(
+            recorder,
+            policy=_policy(min_interval_seconds=60.0, min_delta_chars=32, max_updates=6),
+        )
+        await session.prestart(WORKING_TEXT)
+        await session.push("好的")  # 2 个字符，远小于 min_delta；间隔也还没到
+        await session.push("好的，已经帮你处理完了")  # 第二帧起才受节流约束
+        return [body["stream"]["content"] for body in recorder.bodies()], session
+
+    contents, session = asyncio.run(scenario())
+    assert contents == [WORKING_TEXT, "好的"]
+    assert session.update_count == 1
 
 
 # ------------------------------------------------------------ 收尾与失败
