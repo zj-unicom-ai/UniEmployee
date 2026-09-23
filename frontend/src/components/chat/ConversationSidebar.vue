@@ -3,10 +3,7 @@
   <aside class="conv-sidebar" :class="{ open }" :aria-hidden="!open" :inert="!open">
     <div class="conv-head">
       <span class="conv-title">历史对话</span>
-      <div class="conv-actions">
-        <n-button size="tiny" @click="$emit('new')">+ 新会话</n-button>
-        <n-button quaternary circle size="tiny" aria-label="关闭历史会话" @click="$emit('close')">×</n-button>
-      </div>
+      <n-button quaternary circle size="tiny" aria-label="关闭历史会话" @click="$emit('close')">×</n-button>
     </div>
     <div class="conv-filters">
       <n-input
@@ -72,7 +69,7 @@ defineProps({
   hasMore: { type: Boolean, default: false },
   error: { type: String, default: '' },
 })
-const emit = defineEmits(['select', 'new', 'close', 'search', 'archive-filter', 'load-more', 'retry-load', 'rename', 'pin', 'archive'])
+const emit = defineEmits(['select', 'close', 'search', 'archive-filter', 'load-more', 'retry-load', 'rename', 'pin', 'archive'])
 const renameOpen = ref(false)
 const renameValue = ref('')
 const renameTarget = ref(null)
@@ -122,7 +119,6 @@ function fmtTime(s) { return (s || '').replace('T', ' ').slice(5, 16) }
   transition: transform 180ms ease;
 }
 .conv-sidebar.open { transform: translateX(0); }
-.conv-actions { display: flex; align-items: center; gap: 4px; }
 .conv-head :deep(.n-button) { min-width: 28px; }
 .conv-filters { padding: 12px 12px 8px; border-bottom: 1px solid #f1f5f9; }
 .conv-tabs { display: flex; gap: 4px; margin-top: 9px; }

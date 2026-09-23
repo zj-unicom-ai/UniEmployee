@@ -21,7 +21,6 @@
       :has-more="historyHasMore"
       :error="historyError"
       @select="openConversation"
-      @new="newConv"
       @close="historyOpen = false"
       @search="onHistorySearch"
       @archive-filter="onArchiveFilter"
