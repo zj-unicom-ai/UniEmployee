@@ -152,6 +152,7 @@ async def download_workspace_file(
     user: dict = Depends(auth.get_current_user_or_fallback),
 ):
     rel = _normalize_rel(path)
+    target = _resolve_file(rel)
     registered = conversations.get_accessible_artifact_by_path(
         rel.as_posix(), user["id"], user.get("tenant_id", "default"),
         user.get("org_id"), user.get("role", "user"),
@@ -161,8 +162,8 @@ async def download_workspace_file(
         target = _resolve_file(_normalize_rel(registered["path"]))
     if registered is None:
         first = rel.parts[0] if rel.parts else ""
-        # 未登记文件只允许本人目录；包括管理员在内，根级文件必须登记后才可访问。
-        if len(rel.parts) < 2 or first != user.get("id"):
-            raise HTTPException(404, "产物不存在")
-        target = _resolve_file(rel)
+        # 兼容旧版单企业共享工作区：根级文件是共享文件，本人 UID 目录属于本人。
+        # 管理员保留 workspace 范围内的运维访问；普通用户不能访问他人 UID 目录。
+        if user.get("role") != "admin" and len(rel.parts) > 1 and first != user.get("id"):
+            raise HTTPException(403, "无权访问其他用户的产物目录")
     return FileResponse(target, filename=target.name)
