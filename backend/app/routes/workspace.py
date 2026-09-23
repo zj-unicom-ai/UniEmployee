@@ -1,4 +1,5 @@
 """数字员工产物工作区：个人归档、部门分享、受 ACL 控制的预览和下载。"""
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -6,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from app import audit, auth, conversations
 from app import paths as app_paths
-from app.artifact_storage import snapshot_root_artifact
+from app.artifact_storage import snapshot_artifact
 
 router = APIRouter(prefix="/api")
 
@@ -51,12 +52,12 @@ def _resolve_file(rel: Path) -> Path:
     return target
 
 
-def _ensure_private_snapshot(artifact: dict) -> dict:
-    """首次读写历史根目录产物时迁移为私有快照，保持同一产物 ID。"""
+async def _ensure_private_snapshot(artifact: dict) -> dict:
+    """首次读写旧版产物时迁移为会话私有快照，保持同一产物 ID。"""
     rel = _normalize_rel(artifact["path"])
-    if len(rel.parts) != 1:
+    if rel.parts and rel.parts[0] == ".artifact-store":
         return artifact
-    snapshot = snapshot_root_artifact(
+    snapshot = await asyncio.to_thread(snapshot_artifact,
         _workspace_root(), artifact["owner_id"], artifact["conv_id"], artifact.get("turn_no"),
         {"name": artifact["name"], "path": rel.as_posix(), "size": artifact.get("size", 0)},
     )
@@ -83,15 +84,6 @@ async def list_workspace_artifacts(
     # 删除或迁移文件后，索引仍可能存在；工作区仅显示当前可打开的产物。
     visible = []
     for item in result["items"]:
-        if item["is_owner"]:
-            try:
-                list_fields = {key: item[key] for key in
-                               ("is_owner", "shared_with_department", "can_share")
-                               if key in item}
-                item.update(_ensure_private_snapshot(item))
-                item.update(list_fields)
-            except HTTPException:
-                continue
         item["can_share"] = bool(item["is_owner"] and user.get("org_id"))
         if not item["is_owner"]:
             # 分享只暴露文件本身，不顺带泄露原会话标题、数字员工或会话 ID。
@@ -119,10 +111,12 @@ async def set_department_share(artifact_id: int, body: dict, request: Request,
     if not isinstance(body.get("shared"), bool):
         raise HTTPException(422, "shared 必须是布尔值")
     before = conversations.get_artifact(artifact_id)
-    if before:
-        before = _ensure_private_snapshot(before)
+    tenant_id = user.get("tenant_id", "default")
+    if (body["shared"] and user.get("org_id") and before and before["tenant_id"] == tenant_id
+            and before["owner_id"] == user["id"]):
+        before = await _ensure_private_snapshot(before)
     result = conversations.set_artifact_department_share(
-        artifact_id, user["id"], user.get("tenant_id", "default"),
+        artifact_id, user["id"], tenant_id,
         user.get("org_id"), body["shared"],
     )
     if result == "not_found":
@@ -147,7 +141,7 @@ async def download_artifact(artifact_id: int,
     )
     if not artifact:
         raise HTTPException(404, "产物不存在")
-    artifact = _ensure_private_snapshot(artifact)
+    artifact = await _ensure_private_snapshot(artifact)
     target = _resolve_file(_normalize_rel(artifact["path"]))
     return FileResponse(target, filename=artifact["name"])
 
@@ -158,17 +152,17 @@ async def download_workspace_file(
     user: dict = Depends(auth.get_current_user_or_fallback),
 ):
     rel = _normalize_rel(path)
-    target = _resolve_file(rel)
     registered = conversations.get_accessible_artifact_by_path(
         rel.as_posix(), user["id"], user.get("tenant_id", "default"),
         user.get("org_id"), user.get("role", "user"),
     )
     if registered:
-        registered = _ensure_private_snapshot(registered)
+        registered = await _ensure_private_snapshot(registered)
         target = _resolve_file(_normalize_rel(registered["path"]))
-    if registered is None and user.get("role") != "admin":
+    if registered is None:
         first = rel.parts[0] if rel.parts else ""
-        # 老版本的个人目录文件仍可由本人读取；根级文件必须登记到会话并显式共享。
+        # 未登记文件只允许本人目录；包括管理员在内，根级文件必须登记后才可访问。
         if len(rel.parts) < 2 or first != user.get("id"):
             raise HTTPException(404, "产物不存在")
+        target = _resolve_file(rel)
     return FileResponse(target, filename=target.name)

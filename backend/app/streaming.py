@@ -14,7 +14,7 @@ import time
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations, guard
-from app.artifact_storage import snapshot_root_artifact
+from app.artifact_storage import snapshot_artifact
 from app import db as dblayer
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
@@ -354,7 +354,7 @@ def first_message_text(input_) -> str:
 class _WorkspaceFileWatcher:
     """探测 workspace/data 下回合内新增/修改的产物文件，供 SSE 推 file 事件。
 
-    数字员工经 execute/write_file 生成的 Word/纪要/CSV 等产物，此前只以文本路径
+    数字员工经 execute/write_file/generate_solution_doc 生成的 Word/纪要/CSV 等产物，此前只以文本路径
     出现在回答里，前端无法下载或预览。快照-对比目录（排除 uploads/ 与隐藏文件、
     超大与超量截断），由 _stream_run 在文件型工具完成后推 {"type":"file", ...}，
     前端渲染为可下载/可预览的文件卡片。
@@ -591,16 +591,17 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name in ("sql_db_query", "file_table_query") and _ANALYST_HOOK:
                             for item in analyst_pop_query_results(conv_id):
                                 yield sse({"type": "sql", "sql": item.get("sql", "")})
-                        # 产物文件探测：write_file/execute/edit_file/run_python 之后
+                        # 产物文件探测：文件型工具完成后
                         # 对比 workspace/data 快照，把新增/修改的产物推 file 事件，
                         # 前端渲染成可下载卡片（此前只以文本路径出现在回答里，无法下载）。
                         # 同步落库 conversation_files：file 事件是即时推送，
                         # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python",
-                                    "publish_briefing"):
+                                    "publish_briefing", "generate_solution_doc"):
                             for f in file_watcher.diff():
-                                f = snapshot_root_artifact(WORKSPACE_DATA, user_id, conv_id,
-                                                           turn_no, f)
+                                f = await asyncio.to_thread(
+                                    snapshot_artifact, WORKSPACE_DATA, user_id,
+                                    conv_id, turn_no, f)
                                 if not f:
                                     continue
                                 artifact_id = conversations.add_file(

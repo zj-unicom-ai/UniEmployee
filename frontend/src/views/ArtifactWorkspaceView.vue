@@ -57,7 +57,7 @@
                 <n-tag v-if="item.shared_with_department" size="small" type="success" :bordered="false">
                   本部门共享
                 </n-tag>
-                <n-tag v-else size="small" :bordered="false">仅自己可见</n-tag>
+                <n-tag v-else size="small" :bordered="false">未共享</n-tag>
               </div>
               <div class="artifact-subline">
                 <template v-if="item.is_owner">

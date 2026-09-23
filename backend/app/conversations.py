@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS artifact_shares (
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS artifact_path_aliases (
+    artifact_id INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(artifact_id, path)
+);
 """
 
 
@@ -135,6 +142,8 @@ def _migrate(con):
                 "ON conversation_files(conv_id, created_at)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_artifact_shares_org "
                 "ON artifact_shares(tenant_id, org_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_artifact_path_aliases_path "
+                "ON artifact_path_aliases(tenant_id, path)")
     con.commit()
 
 
@@ -352,20 +361,25 @@ def list_files(conv_id: str) -> list[dict]:
         return []
 
 
+def _artifact_access_filter(user_id: str, tenant_id: str, org_id: str | None,
+                            role: str) -> tuple[str, list]:
+    """统一定义产物的租户、属主、部门共享和管理员可见范围。"""
+    clauses = ["c.tenant_id=?", "c.deleted_at IS NULL"]
+    params: list = [tenant_id]
+    if role != "admin":
+        clauses.append("(c.user_id=? OR (s.org_id IS NOT NULL AND s.org_id=?))")
+        params.extend([user_id, org_id or ""])
+    return " AND ".join(clauses), params
+
+
 def list_workspace_artifacts(user_id: str, tenant_id: str, org_id: str | None,
                              *, role: str = "user", scope: str = "all", query: str = "",
                              page: int = 1, page_size: int = 24) -> dict:
     """列出当前用户可见的产物；部门共享只授权文件，不授权源会话。"""
     page = max(1, int(page))
     page_size = min(100, max(1, int(page_size)))
-    clauses = ["c.tenant_id=?", "c.deleted_at IS NULL"]
-    params: list = [tenant_id]
-    if role == "admin":
-        accessible = "1=1"
-    else:
-        accessible = "(c.user_id=? OR (s.org_id IS NOT NULL AND s.org_id=?))"
-        params.extend([user_id, org_id or ""])
-    clauses.append(accessible)
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
+    clauses = [access_filter]
     if scope == "mine":
         clauses.append("c.user_id=?")
         params.append(user_id)
@@ -422,8 +436,21 @@ def get_artifact(artifact_id: int) -> dict | None:
 
 
 def update_artifact_path(artifact_id: int, path: str, size: int) -> bool:
-    """把遗留根目录产物迁到私有快照路径；ID 保持不变，已有共享 ACL 继续生效。"""
+    """迁移产物到私有快照路径；保留旧 path 别名，ID 和共享 ACL 不变。"""
     with _conn() as con:
+        row = con.execute(
+            "SELECT f.path,c.tenant_id FROM conversation_files f "
+            "JOIN conversations c ON c.conv_id=f.conv_id WHERE f.id=?",
+            (artifact_id,)).fetchone()
+        if not row:
+            return False
+        old_path = row["path"]
+        if old_path != path:
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            con.execute(
+                "INSERT INTO artifact_path_aliases(artifact_id,tenant_id,path,created_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(artifact_id,path) DO NOTHING",
+                (artifact_id, row["tenant_id"], old_path, now))
         cur = con.execute(
             "UPDATE conversation_files SET path=?,size=? WHERE id=?",
             (path, size, artifact_id))
@@ -434,30 +461,35 @@ def update_artifact_path(artifact_id: int, path: str, size: int) -> bool:
 def get_accessible_artifact(artifact_id: int, user_id: str, tenant_id: str,
                             org_id: str | None, role: str = "user") -> dict | None:
     """Resolve an artifact only when the caller owns it, is its department recipient, or is admin."""
-    artifact = get_artifact(artifact_id)
-    if not artifact or artifact["tenant_id"] != tenant_id:
-        return None
-    if role == "admin" or artifact["owner_id"] == user_id:
-        return artifact
-    if org_id and artifact.get("shared_org_id") == org_id:
-        return artifact
-    return None
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
+            "s.org_id AS shared_org_id "
+            "FROM conversation_files f JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE f.id=? AND {access_filter}", [artifact_id, *params]).fetchone()
+    return dict(row) if row else None
 
 
 def get_accessible_artifact_by_path(path: str, user_id: str, tenant_id: str,
                                     org_id: str | None, role: str = "user") -> dict | None:
     """旧版 path 下载入口只允许解析到当前用户有权访问的已登记产物。"""
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
     with _conn() as con:
-        rows = con.execute(
-            "SELECT f.id FROM conversation_files f "
+        row = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
+            "s.org_id AS shared_org_id "
+            "FROM conversation_files f "
             "JOIN conversations c ON c.conv_id=f.conv_id "
-            "WHERE f.path=? AND c.deleted_at IS NULL AND c.tenant_id=? ORDER BY f.id DESC",
-            (path, tenant_id)).fetchall()
-    for row in rows:
-        artifact = get_accessible_artifact(int(row["id"]), user_id, tenant_id, org_id, role)
-        if artifact:
-            return artifact
-    return None
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE (f.path=? OR EXISTS (SELECT 1 FROM artifact_path_aliases a "
+            "WHERE a.artifact_id=f.id AND a.tenant_id=c.tenant_id AND a.path=?)) "
+            f"AND {access_filter} ORDER BY f.id DESC LIMIT 1",
+            [path, path, *params]).fetchone()
+    return dict(row) if row else None
 
 
 def set_artifact_department_share(artifact_id: int, user_id: str, tenant_id: str,

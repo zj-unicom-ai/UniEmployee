@@ -10,21 +10,23 @@ from pathlib import Path
 logger = logging.getLogger("app.artifact_storage")
 
 
-def snapshot_root_artifact(workspace_root: Path, user_id: str, conv_id: str,
-                           turn_no: int | None, info: dict) -> dict | None:
-    """把 workspace 根目录文件复制到隐藏的用户/会话私有目录，返回新的相对路径。
+def snapshot_artifact(workspace_root: Path, user_id: str, conv_id: str,
+                      turn_no: int | None, info: dict) -> dict | None:
+    """把产物复制到隐藏的用户/会话私有目录，返回新的相对路径。
 
-    用户目录内的文件已经按用户隔离，直接保留原路径。根目录文件则必须快照，
-    因为 local-shell 员工会在共享工作目录生成同名文件。
+    根目录文件和用户目录文件都做快照：前者可能被其他用户会话覆盖，后者
+    可能被同一用户的另一个会话覆盖。已归档路径直接返回，避免重复复制。
     """
     root = Path(workspace_root).resolve()
     rel = Path(str(info.get("path") or ""))
-    if not rel.parts or (len(rel.parts) > 1 and rel.parts[0] == user_id):
+    if not rel.parts or rel.parts[0] == ".artifact-store":
         return info
-    candidate = root / rel
-    if candidate.is_symlink():
-        logger.warning("产物快照拒绝符号链接: %s", info.get("path"))
-        return None
+    candidate = root
+    for part in rel.parts:
+        candidate = candidate / part
+        if candidate.is_symlink():
+            logger.warning("产物快照拒绝符号链接: %s", info.get("path"))
+            return None
     source = candidate.resolve()
     try:
         source.relative_to(root)
