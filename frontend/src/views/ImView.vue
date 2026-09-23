@@ -267,8 +267,8 @@ const SCAN_POLL_MIN_MS = 2000
 const SCAN_POLL_FALLBACK_SECONDS = 5
 
 // 长连接渠道：由后端 Provider 建立 WebSocket 收发消息，因此有运行状态、重连与失败投递。
-// 其余渠道（web / wecom）走 Webhook 或平台内置聊天，没有常驻连接。
-const LONG_CONNECTION_PROVIDERS = ['feishu', 'dingtalk']
+// 其余渠道（web）走 Webhook 或平台内置聊天，没有常驻连接。
+const LONG_CONNECTION_PROVIDERS = ['feishu', 'dingtalk', 'wecom']
 // 扫码一键创建应用：由后端 im/registration.py 的 RegistrationFlow 实现 Device Flow。
 // 飞书走单端点 + action，钉钉走三个独立路径，两者共用同一套会话与接口。
 const SCAN_PROVIDERS = ['feishu', 'dingtalk']
@@ -322,7 +322,7 @@ const providerOptions = [
   { label: 'Web', value: 'web' },
   { label: '飞书', value: 'feishu' },
   { label: '钉钉', value: 'dingtalk' },
-  { label: '企业微信（后续开发）', value: 'wecom', disabled: true },
+  { label: '企业微信', value: 'wecom' },
 ]
 
 const isAdmin = computed(() => {
@@ -426,24 +426,34 @@ function providerLabel(provider) {
   return { web: 'Web', feishu: '飞书', dingtalk: '钉钉', wecom: '企业微信' }[provider] || provider
 }
 
-// 两边凭证字段语义相同（应用标识 + 密钥），只是平台叫法不同：飞书是 App ID/Secret，
-// 钉钉是 Client ID/Secret。表单直接复用 form.app_id / form.app_secret 两个字段。
+// 各渠道凭证字段语义相同（应用标识 + 密钥），只是平台叫法不同：飞书是 App ID/Secret，
+// 钉钉是 Client ID/Secret，企微是 Bot ID/Secret。表单直接复用 form.app_id /
+// form.app_secret 两个字段。
+const CREDENTIAL_FIELD_LABELS = {
+  dingtalk: { id: 'Client ID', secret: 'Client Secret' },
+  wecom: { id: 'Bot ID', secret: 'Secret' },
+}
+
 function credentialFieldLabelsFor(provider) {
-  return provider === 'dingtalk'
-    ? { id: 'Client ID', secret: 'Client Secret' }
-    : { id: 'App ID', secret: 'App Secret' }
+  return CREDENTIAL_FIELD_LABELS[provider] || { id: 'App ID', secret: 'App Secret' }
 }
 
 const credentialFieldLabels = computed(() => credentialFieldLabelsFor(form.provider))
 
-const manualCredentialHint = computed(() => (
-  form.provider === 'dingtalk'
-    ? '钉钉自建应用：在钉钉开放平台创建「企业内部应用」后，把应用信息里的 Client ID / Client Secret 填到这里。'
+const manualCredentialHint = computed(() => {
+  if (form.provider === 'dingtalk') {
+    return '钉钉自建应用：在钉钉开放平台创建「企业内部应用」后，把应用信息里的 Client ID / Client Secret 填到这里。'
       + '机器人收发消息走 Stream 模式长连接，无需公网回调地址，也不用填写加签或 Token；'
       + '企业标识会从消息中自动识别，不会映射为平台租户或继承平台权限。'
-    : '企业自建应用：形态、权限、可见范围都能在飞书开发者后台自由配置，生产与群聊机器人推荐这种方式。'
-      + '飞书外部租户标识会从事件中自动识别；不会映射为平台租户或继承平台权限。'
-))
+  }
+  if (form.provider === 'wecom') {
+    return '企业微信智能机器人：在工作台「智能机器人 → 手工创建 → API 模式 → 使用长连接」拿到 Bot ID 与 Secret 后填到这里。'
+      + '消息收发走长连接，无需公网 IP 或回调地址，也不用填 Token / EncodingAESKey；'
+      + '注意「长连接」与「设置接收消息回调地址」是互斥的两种 API 模式，切换会让现有长连接失效。'
+  }
+  return '企业自建应用：形态、权限、可见范围都能在飞书开发者后台自由配置，生产与群聊机器人推荐这种方式。'
+    + '飞书外部租户标识会从事件中自动识别；不会映射为平台租户或继承平台权限。'
+})
 
 function formatTime(value) {
   if (!value) return '—'

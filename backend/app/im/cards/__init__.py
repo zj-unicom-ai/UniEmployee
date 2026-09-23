@@ -64,8 +64,13 @@ POLICIES: dict[str, ThrottlePolicy] = {
 #   后半段变成**长时间不更新**，收尾那次 PUT 再一口气把攒下的内容甩上屏 ——
 #   用户看到的就是「打几个字 → 卡住 → 一大段突然蹦出来」。
 # - 钉钉：入站额度是真的要省，所以仍用 `staged`。
+# - 企业微信：流式刷新同样是「同 id 全量替换」，官方只在**会话级**限流
+#   （30 条/分钟、1000 条/小时），不按帧计费。也就是说"省调用次数"在这里没有收益，
+#   而 `staged` 的 `max_updates=6` 会重演飞书那个「打几个字 → 卡住 → 一大段突然
+#   蹦出来」的观感问题，所以也用 `stream`。
 CHANNEL_DEFAULT_LEVELS: dict[str, str] = {
     "feishu": LEVEL_STREAM,
+    "wecom": LEVEL_STREAM,
 }
 
 
@@ -255,6 +260,7 @@ __all__ = [
     "MAX_CARD_CONTENT_CHARS",
     "POLICIES",
     "ThrottlePolicy",
+    "TRUNCATED_SUFFIX",
     "WORKING_TEXT",
     "card_channel",
     "card_enabled",

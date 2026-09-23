@@ -1,8 +1,9 @@
 """IM 频道路由：配置不同 IM 频道、平台内 Web 聊天、外部 Webhook 接入。
 
-每个频道可以配置 provider（web / wecom / feishu / dingtalk / generic），
-provider 不是 web 时可通过 /channels/{id}/incoming 接收外部 IM 消息，
-配置里的 outbound_webhook 可把数字员工回复推回对应 IM。
+每个频道可以配置 provider（web / feishu / dingtalk / wecom / generic）。
+feishu / dingtalk / wecom 由后端建立长连接自己收发消息（见 app/im/providers/）；
+generic 这类没有长连接实现的渠道仍可通过 /channels/{id}/incoming 接收外部 IM
+消息，配置里的 outbound_webhook 可把数字员工回复推回对应 IM。
 """
 
 import json

@@ -10,23 +10,30 @@ from typing import Any
 from app.im.credentials import ChannelCredential
 from .dingtalk import DingtalkProvider
 from .feishu import FeishuProvider
+from .wecom import WecomProvider
 
 # provider 标识 -> 实现类。三个方法（connect / disconnect / send）语义统一。
 PROVIDERS: dict[str, type] = {
     "feishu": FeishuProvider,
     "dingtalk": DingtalkProvider,
+    "wecom": WecomProvider,
 }
 
 # 展示名，仅用于面向管理员的状态与错误文案。
 PROVIDER_LABELS: dict[str, str] = {
     "feishu": "飞书",
     "dingtalk": "钉钉",
+    "wecom": "企业微信",
 }
 
-# 页面与错误文案里展示的凭证字段名；两边字段语义相同，只是平台叫法不同。
+# 页面与错误文案里展示的凭证字段名；三者字段语义相同（应用标识 + 密钥），
+# 只是平台叫法不同。
 CREDENTIAL_LABELS: dict[str, str] = {
     "feishu": "App ID/App Secret",
     "dingtalk": "Client ID/Client Secret",
+    # 企微的「Bot ID / Secret」来自工作台「智能机器人 → 手工创建 → API 模式 → 长连接」，
+    # 与「设置接收消息回调地址」模式下的 Token/EncodingAESKey 不是一回事。
+    "wecom": "Bot ID/Secret",
 }
 
 
