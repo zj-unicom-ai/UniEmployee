@@ -150,7 +150,8 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       // 数字员工产物文件（Word 方案/纪要/CSV 等）：渲染成可下载/可预览的文件卡片
       if (!msg.files) msg.files = []
       if (!msg.files.some(f => f.path === ev.path)) {
-        msg.files.push({ name: ev.name, path: ev.path, size: ev.size })
+        msg.files.push({ artifact_id: ev.artifact_id, conv_id: ev.conv_id,
+          name: ev.name, path: ev.path, size: ev.size })
       }
       touch()
     } else if (ev.type === 'subagent') {

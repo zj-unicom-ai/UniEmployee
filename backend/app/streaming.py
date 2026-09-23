@@ -14,6 +14,7 @@ import time
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations, guard
+from app.artifact_storage import snapshot_root_artifact
 from app import db as dblayer
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
@@ -371,8 +372,8 @@ class _WorkspaceFileWatcher:
     def _scan(self) -> dict[str, float]:
         out: dict[str, float] = {}
         root = WORKSPACE_DATA
-        # 本地 shell 员工可能把共享产物直接写到 workspace/data 根目录；
-        # 扫描根级共享文件，同时只递归当前用户目录，避免触碰其他用户私有文件。
+        # 本地 shell 员工可能把产物直接写到 workspace/data 根目录；
+        # 扫描根级文件，后续登记时会复制到创建者私有快照，并只递归当前用户目录。
         scan_roots = [root / self.user_id] if self.user_id else [root]
         if self.user_id:
             try:
@@ -598,9 +599,14 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name in ("write_file", "execute", "edit_file", "run_python",
                                     "publish_briefing"):
                             for f in file_watcher.diff():
-                                conversations.add_file(conv_id, f["name"], f["path"],
-                                                       f.get("size", 0), turn_no)
-                                yield sse({"type": "file", **f, "turn_no": turn_no})
+                                f = snapshot_root_artifact(WORKSPACE_DATA, user_id, conv_id,
+                                                           turn_no, f)
+                                if not f:
+                                    continue
+                                artifact_id = conversations.add_file(
+                                    conv_id, f["name"], f["path"], f.get("size", 0), turn_no)
+                                yield sse({"type": "file", **f, "artifact_id": artifact_id,
+                                           "conv_id": conv_id, "turn_no": turn_no})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,

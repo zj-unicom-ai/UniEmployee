@@ -30,6 +30,7 @@ const routes = [
     children: [
       { path: 'home', name: 'home', component: () => import('../views/HomeView.vue') },
       { path: 'chat', name: 'chat', component: () => import('../views/ChatView.vue') },
+      { path: 'artifacts', name: 'artifacts', component: () => import('../views/ArtifactWorkspaceView.vue') },
       { path: 'history', name: 'history', component: () => import('../views/HistoryView.vue') },
       { path: 'trace', name: 'trace', component: () => import('../views/TraceView.vue') },
       { path: 'admin', name: 'admin', component: () => import('../views/AdminView.vue') },

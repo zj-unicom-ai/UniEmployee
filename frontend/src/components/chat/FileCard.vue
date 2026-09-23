@@ -28,7 +28,7 @@
 </template>
 
 <script setup>
-// 产物文件下载走 /api/workspace/file（Bearer 鉴权，blob 落地为浏览器下载）；
+// 产物文件优先按 artifact_id 访问受 ACL 控制的文件端点；旧消息仍走 path 兼容入口。
 // HTML 看板自动以内嵌沙箱预览；文本类文件可展开预览，其他文件可下载。
 import { computed, onMounted, ref } from 'vue'
 import api from '../../api.js'
@@ -63,11 +63,19 @@ const sizeText = computed(() => {
   return s + ' B'
 })
 
+function fileEndpoint() {
+  if (props.file.artifact_id) {
+    return { url: `/workspace/artifacts/${encodeURIComponent(props.file.artifact_id)}/file`, params: {} }
+  }
+  return { url: '/workspace/file', params: { path: props.file.path } }
+}
+
 async function download() {
   downloading.value = true
   try {
-    const res = await api.get('/workspace/file', {
-      params: { path: props.file.path },
+    const endpoint = fileEndpoint()
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
       responseType: 'blob',
     })
     const url = URL.createObjectURL(res.data)
@@ -87,8 +95,9 @@ async function togglePreview() {
   showPreview.value = !showPreview.value
   if (showPreview.value && !previewText.value) {
     try {
-      const res = await api.get('/workspace/file', {
-        params: { path: props.file.path },
+      const endpoint = fileEndpoint()
+      const res = await api.get(endpoint.url, {
+        params: endpoint.params,
         responseType: 'text',
       })
       previewText.value = res.data
@@ -103,8 +112,9 @@ async function loadHtmlPreview() {
   loadingHtml.value = true
   htmlError.value = ''
   try {
-    const res = await api.get('/workspace/file', {
-      params: { path: props.file.path },
+    const endpoint = fileEndpoint()
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
       responseType: 'text',
     })
     reportHtml.value = typeof res.data === 'string' ? res.data : ''
