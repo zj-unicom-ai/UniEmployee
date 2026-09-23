@@ -43,6 +43,7 @@ const routes = [
           { path: 'knowledge-bases', name: 'employee-kbs', component: () => import('../views/employee/KnowledgeBasesPage.vue') },
           { path: 'sops', name: 'employee-sops', component: () => import('../views/employee/SopsPage.vue') },
           { path: 'connectors', name: 'employee-connectors', component: () => import('../views/employee/ConnectorsPage.vue') },
+          { path: 'quick-prompts', name: 'employee-quick-prompts', component: () => import('../views/employee/QuickPromptsPage.vue') },
         ],
       },
       { path: 'users', name: 'users', component: () => import('../views/UsersView.vue') },

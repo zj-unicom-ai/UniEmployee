@@ -36,7 +36,10 @@
               <span class="kind-tag custom-tag">定制</span>
             </div>
             <div class="model">{{ e.model || '未设置模型' }}</div>
-            <div class="card-enter">进入工作台 →</div>
+            <div class="custom-card-actions">
+              <div class="card-enter">进入工作台 →</div>
+              <n-button size="tiny" quaternary type="primary" @click.stop="goQuickPrompts(e.id)">管理快捷问法</n-button>
+            </div>
           </div>
         </div>
       </section>
@@ -69,7 +72,10 @@
               <span>SOP {{ (e.sops || []).length }}</span>
               <span>连接器 {{ (e.connectors || []).length }}</span>
             </div>
-            <div class="card-enter">配置详情 →</div>
+            <div class="custom-card-actions">
+              <div class="card-enter">配置详情 →</div>
+              <n-button size="tiny" quaternary type="primary" @click.stop="goQuickPrompts(e.id)">管理快捷问法</n-button>
+            </div>
           </div>
         </div>
       </section>
@@ -164,6 +170,10 @@ function goDetail(id) {
   router.push(`/app/admin/employee/${id}`)
 }
 
+function goQuickPrompts(id) {
+  router.push(`/app/admin/employee/${id}/quick-prompts`)
+}
+
 function goCustomWorkspace(e) {
   const ws = CUSTOM_WORKSPACE[e.id]
   if (ws) {
@@ -232,6 +242,8 @@ onMounted(reload)
 .stats { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; font-size: 12px; color: #94a3b8; }
 .card-enter { font-size: 12px; color: #3b82f6; margin-top: 12px; opacity: 0; transition: opacity 0.15s; }
 .custom-card .card-enter { color: #7c3aed; }
+.custom-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.custom-card-actions :deep(.n-button) { margin-top: 7px; }
 .emp-card:hover .card-enter { opacity: 1; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; }
 </style>

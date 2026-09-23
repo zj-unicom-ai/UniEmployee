@@ -64,7 +64,8 @@ def init():
       id TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT, model TEXT,
       persona TEXT, backend TEXT DEFAULT 'state', mcp_servers TEXT, interrupt_on TEXT,
       subagents TEXT, subagent_policy TEXT, created_at TEXT, updated_at TEXT,
-      kind TEXT DEFAULT 'composed');  -- 员工类型：composed=编排型（资源编排配置）；custom=定制型（独立模块化开发）
+      kind TEXT DEFAULT 'composed', quick_prompts TEXT DEFAULT '[]');
+      -- quick_prompts 为员工欢迎页快捷问题 JSON 数组，最多 3 条
     CREATE TABLE IF NOT EXISTS employee_skills(employee_id TEXT, skill_id TEXT, PRIMARY KEY(employee_id, skill_id));
     CREATE TABLE IF NOT EXISTS employee_tools(employee_id TEXT, tool_id TEXT, PRIMARY KEY(employee_id, tool_id));
     CREATE TABLE IF NOT EXISTS employee_kbs(employee_id TEXT, kb_id TEXT, PRIMARY KEY(employee_id, kb_id));
@@ -129,6 +130,7 @@ def init():
     _migrate_user_org(con)
     _migrate_user_identities(con)
     _migrate_employee_kind(con)
+    _migrate_employee_quick_prompts(con)
     _migrate_datasource_public(con)
     # 安全护栏表（guard 包）幂等建表，复用同一连接
     from ..guard.db import init_tables as _guard_init
@@ -185,6 +187,14 @@ def _migrate_employee_kind(con):
     con.execute(
         "UPDATE employees SET kind='custom' WHERE id IN ('xiaoshu') "
         "AND deleted_at IS NULL")
+    con.commit()
+
+
+def _migrate_employee_quick_prompts(con):
+    """给已有员工表增加快捷问题配置，存量员工保持空列表。"""
+    if "quick_prompts" not in dblayer.table_columns(con, "employees"):
+        con.execute("ALTER TABLE employees ADD COLUMN quick_prompts TEXT DEFAULT '[]'")
+    con.execute("UPDATE employees SET quick_prompts='[]' WHERE quick_prompts IS NULL")
     con.commit()
 
 

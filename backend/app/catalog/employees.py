@@ -24,6 +24,11 @@ def _build_interrupt_on(tool_ids: list[str]) -> dict:
 def _config_from_ids(emp_row: dict, skills: list, tools: list, kbs: list,
                      sops: list, cons: list) -> dict:
     """按一组已选定的资源 id 拼出完整编译配置。"""
+    try:
+        raw_prompts = emp_row["quick_prompts"]
+        quick_prompts = json.loads(raw_prompts or "[]") if isinstance(raw_prompts, str) else raw_prompts
+    except (KeyError, TypeError, json.JSONDecodeError):
+        quick_prompts = []
     con = _conn()
     cur = con.cursor()
     skill_dirs = {}
@@ -60,6 +65,7 @@ def _config_from_ids(emp_row: dict, skills: list, tools: list, kbs: list,
         "interrupt_on": _build_interrupt_on(tools),
         "subagents": json.loads(emp_row["subagents"]) if isinstance(emp_row["subagents"], str) else (emp_row["subagents"] or []),
         "subagent_policy": emp_row["subagent_policy"] or "",
+        "quick_prompts": quick_prompts if isinstance(quick_prompts, list) else [],
         "skills": skills, "tools": tools, "kbs": kbs, "sops": sops, "connectors": cons,
         "sop_text": sop_text, "mcp_servers": mcp_servers,
         "skill_dirs": skill_dirs, "kb_ragflow_datasets": kb_ragflow_datasets,
@@ -292,6 +298,20 @@ def update_employee(emp_id: str, data: dict) -> bool:
     con.commit()
     con.close()
     return True
+
+
+def update_employee_quick_prompts(emp_id: str, prompts: list[str]) -> bool:
+    """原子替换员工的快捷问题（接口层负责校验条数和长度）。"""
+    con = _conn()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE employees SET quick_prompts=?,updated_at=? "
+        "WHERE id=? AND deleted_at IS NULL",
+        (json.dumps(prompts, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M:%S"), emp_id))
+    ok = cur.rowcount > 0
+    con.commit()
+    con.close()
+    return ok
 
 
 def delete_employee(emp_id: str):

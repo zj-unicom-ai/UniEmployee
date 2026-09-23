@@ -121,6 +121,13 @@ function onSend() {
     pendingFiles.value = []
   })
 }
+
+function sendText(value) {
+  text.value = String(value || '')
+  onSend()
+}
+
+defineExpose({ sendText })
 </script>
 
 <style scoped>

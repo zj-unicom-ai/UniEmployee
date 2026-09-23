@@ -98,6 +98,28 @@
 
       <div class="msgs" ref="msgsRef">
         <div class="message-lane">
+        <section v-if="!messages.length" class="chat-welcome" aria-label="新对话快捷问题">
+          <div class="welcome-avatar">{{ (currentEmployee?.name || 'AI').slice(0, 1) }}</div>
+          <h1>你好，我是{{ currentEmployee?.name || '数字员工' }}</h1>
+          <p class="welcome-role">{{ currentEmployee?.role || '你的数字员工助手' }}</p>
+          <p class="welcome-instruction">
+            {{ quickPrompts.length ? '选择一个问题开始对话' : '还没有配置快捷问题，直接在下方输入你的需求即可。' }}
+          </p>
+          <div v-if="quickPrompts.length" class="quick-prompt-list">
+            <button
+              v-for="(prompt, index) in quickPrompts"
+              :key="`${index}-${prompt}`"
+              type="button"
+              class="quick-prompt"
+              :disabled="stream.sending.value || uploading"
+              @click="askQuickPrompt(prompt)"
+            >
+              <span class="prompt-mark" aria-hidden="true">✦</span>
+              <span class="prompt-text">{{ prompt }}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+            </button>
+          </div>
+        </section>
         <ChatMessage
           v-for="(msg, idx) in messages" :key="idx"
           :msg="msg"
@@ -111,11 +133,11 @@
       </div>
 
       <InputBar
+        ref="inputBarRef"
         :disabled="stream.sending.value"
         :sending="stream.sending.value"
         :uploading="uploading"
         :full-width="fullWidthMode"
-        :hint="hint"
         @send="onSend"
         @stop="stream.stopActiveStream"
       />
@@ -144,6 +166,7 @@ const message = useMessage()
 const employees = ref([])
 const empNames = reactive({})
 const currentEmp = ref(null)
+const inputBarRef = ref(null)
 const convId = ref(null)
 const persistedConvId = ref(null)
 const routeReady = ref(false)
@@ -160,7 +183,6 @@ let historyRequestSeq = 0
 let historySearchTimer = null
 const messages = ref([])
 const empMeta = ref('')
-const hint = ref('向数字员工提问吧。')
 const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
@@ -197,11 +219,6 @@ const modelOptions = computed(() =>
   aiModels.value.map(m => ({ label: m.name, value: m.base_model }))
 )
 
-const HINTS = {
-  xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
-  'market-intel': '试试：\n① 最近有什么值得关注的行业动态？出一份今日简报\n② 声湃科技把 Mini3 降到 299 了，出个对标分析\n③ 刷到消息说光屿智能融资了 3 个亿，要不要紧？\n④ 简报好了，归档发布（走人工审批）',
-}
-
 // 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
 // 不应在本页可被选择（否则会丢失定制上下文如数据源/SQL 工具注入）。
 const empOptions = computed(() =>
@@ -209,6 +226,14 @@ const empOptions = computed(() =>
     .filter(e => !isCustomEmployee(e))
     .map(e => ({ label: e.role || e.name, value: e.id }))
 )
+const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
+const quickPrompts = computed(() => Array.isArray(currentEmployee.value?.quick_prompts)
+  ? currentEmployee.value.quick_prompts.filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
+  : [])
+
+function askQuickPrompt(prompt) {
+  inputBarRef.value?.sendText(prompt)
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -389,7 +414,6 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
     convId.value = cid
     persistedConvId.value = cid
     currentEmp.value = data.employee_id
-    hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
     // 产物文件按归属轮次（turn_no）挂到生成它的那条回答消息上；
@@ -468,7 +492,6 @@ async function selectEmployee(empId, { syncUrl = true, replaceUrl = false } = {}
   }
   if (!syncUrl && route.fullPath !== requestedRoute) return false
   currentEmp.value = empId
-  hint.value = HINTS[empId] || '向数字员工提问吧。'
   // 切换员工时重置为默认模型
   currentModel.value = defaultModelBase()
   convId.value = newId
@@ -592,8 +615,21 @@ onBeforeUnmount(() => {
 .model-select { width: 170px; flex: 0 0 auto; }
 .emp-meta { font-size: 12px; color: #64748b; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msgs { flex: 1; overflow-y: auto; padding: 28px clamp(24px, 4vw, 72px) 18px; min-height: 0; }
-.message-lane { width: min(100%, 1080px); margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.message-lane { width: min(100%, 1080px); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
 .chat-layout.full-width-mode .message-lane { width: 100%; max-width: none; }
+.chat-welcome { width: min(100%, 540px); margin: auto; padding: 18px 0 10vh; text-align: center; transform: translateY(-3vh); }
+.welcome-avatar { display: grid; width: 58px; height: 58px; margin: 0 auto 16px; place-items: center; border-radius: 19px 19px 19px 6px; background: linear-gradient(145deg, #eef2ff, #dbeafe); color: #3157c8; font-size: 24px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(49, 87, 200, .08); }
+.chat-welcome h1 { margin: 0; color: #172033; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+.welcome-role { margin: 7px 0 0; color: #64748b; font-size: 13px; }
+.welcome-instruction { margin: 20px 0 12px; color: #94a3b8; font-size: 12px; }
+.quick-prompt-list { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.quick-prompt { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid #edf0f5; border-radius: 11px; background: #fafbfc; color: #334155; cursor: pointer; text-align: left; transition: border-color .15s, background .15s, transform .15s; }
+.quick-prompt:hover:not(:disabled) { border-color: #c7d2fe; background: #f6f8ff; transform: translateY(-1px); }
+.quick-prompt:focus-visible { outline: 2px solid #3157c8; outline-offset: 2px; }
+.quick-prompt:disabled { cursor: wait; opacity: .55; }
+.prompt-mark { color: #635bdb; font-size: 17px; line-height: 1; }
+.prompt-text { min-width: 0; flex: 1; font-size: 13px; line-height: 1.5; }
+.quick-prompt svg { width: 16px; height: 16px; fill: none; stroke: #64748b; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .drawer-backdrop { position: absolute; inset: 0; z-index: 30; border: 0; background: rgba(15, 23, 42, 0.2); cursor: default; }
 
 @media (max-width: 900px) {
@@ -613,5 +649,7 @@ onBeforeUnmount(() => {
   .chat-header > :deep(.n-button) { flex-shrink: 0; }
   .msgs { padding: 16px 12px 10px; }
   .message-lane { gap: 8px; }
+  .chat-welcome { width: min(100%, 480px); padding: 12px 4px 8vh; }
+  .chat-welcome h1 { font-size: 19px; }
 }
 </style>

@@ -50,6 +50,7 @@ const tabs = [
   { key: 'knowledge-bases', label: '知识库', countKey: 'kbs' },
   { key: 'sops', label: 'SOP', countKey: 'sops' },
   { key: 'connectors', label: '连接器', countKey: 'connectors' },
+  { key: 'quick-prompts', label: '快捷问法', countKey: 'quick_prompts' },
 ]
 
 const activeTab = computed(() => {

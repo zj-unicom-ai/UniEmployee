@@ -225,8 +225,28 @@ const currentDataSource = computed(() => {
 
 // 当前数据源的前 3 个启用 SQL 示例（作为空态快捷话术）
 const quickPrompts = ref([])
+const employeeQuickPrompts = ref([])
+let employeePromptsLoaded = false
+
+async function loadEmployeeQuickPrompts() {
+  if (employeePromptsLoaded) return
+  employeePromptsLoaded = true
+  try {
+    const { data } = await api.get('/employees')
+    const employee = (Array.isArray(data) ? data : []).find(e => e.id === 'xiaoshu')
+    employeeQuickPrompts.value = (employee?.quick_prompts || [])
+      .filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
+  } catch {
+    employeeQuickPrompts.value = []
+  }
+}
 
 async function loadQuickPrompts() {
+  await loadEmployeeQuickPrompts()
+  if (employeeQuickPrompts.value.length) {
+    quickPrompts.value = employeeQuickPrompts.value.map((question, id) => ({ id: `employee-${id}`, question }))
+    return
+  }
   if (!datasourceId.value) { quickPrompts.value = []; return }
   // SQL 示例只对数据库类型数据源有意义
   const ds = datasources.value.find(d => d.id === datasourceId.value)

@@ -36,6 +36,15 @@ async def list_employees(context=Depends(auth.get_auth_context)):
     return runtime.discover_assigned_employees(context.user_id)
 
 
+@router.get("/employees/{emp_id}/quick-prompts")
+async def list_employee_quick_prompts(emp_id: str, context=Depends(auth.get_auth_context)):
+    _ensure_employee_access(context, emp_id)
+    cfg = catalog.get_employee_config(emp_id)
+    if not cfg:
+        raise HTTPException(404, "数字员工不存在")
+    return {"employee_id": emp_id, "prompts": cfg.get("quick_prompts", [])[:3]}
+
+
 @router.get("/catalog")
 async def public_catalog(context=Depends(auth.get_auth_context)):
     c = catalog.catalog()
