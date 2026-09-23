@@ -184,7 +184,7 @@ function subagentStatusText(status) {
 /* 用户消息：wrapper 撑满整行（时间/按钮贴真正的右边缘），宽度限制放在气泡上保持聊天气泡感；
    bot 回复（长文/表格/代码）放宽到接近全宽，避免右侧大片空白 */
 .user-wrapper { align-self: stretch; align-items: flex-end; }
-.bot-wrapper { max-width: 100%; align-self: flex-start; align-items: flex-start; position: relative; }
+.bot-wrapper { width: 100%; max-width: 100%; align-self: stretch; align-items: flex-start; position: relative; }
 .msg { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.7; word-break: break-word; animation: msg-in 0.25s ease-out; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -198,7 +198,7 @@ function subagentStatusText(status) {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .user-att-size { opacity: 0.75; }
-.msg.bot { align-self: flex-start; background: #ffffff; border: 1px solid #e2e8f0; border-bottom-left-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.02); }
+.msg.bot { width: 100%; align-self: flex-start; background: #ffffff; border: 1px solid #e2e8f0; border-bottom-left-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.02); }
 .msg-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
 .msg-copy { cursor: pointer; opacity: 0.5; transition: opacity 0.15s; font-size: 12px; line-height: 1; position: relative; border: 0; padding: 4px; background: transparent; color: inherit; display: inline-flex; }
 .msg-copy:hover { opacity: 1; }
