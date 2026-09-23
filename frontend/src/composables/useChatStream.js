@@ -88,8 +88,6 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
   function resetPipeline() {
     Object.keys(stageStates).forEach(k => delete stageStates[k])
     Object.keys(stageDetail).forEach(k => delete stageDetail[k])
-    stageStates.input = 'done'
-    stageDetail.input = new Date().toLocaleTimeString()
   }
 
   function setStage(id, status, detail) {
@@ -106,11 +104,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const msg = messages.value[msgIdx]
     if (!msg) return
     if (ev.type === 'stage') {
-      if (ev.stage === 'report' && ev.status === 'done') {
-        setStage('planning', 'done'); setStage('skill', 'done'); setStage('report', 'done', '')
-      } else {
-        setStage(ev.stage, ev.status, ev.detail_text)
-      }
+      setStage(ev.stage, ev.status, ev.detail_text)
     } else if (ev.type === 'thinking') {
       if (!msg.trace) msg.trace = []
       let box = msg.trace.find(t => t.type === 'think' && !t._closed)
@@ -118,6 +112,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       box.content += ev.content
       touch()
     } else if (ev.type === 'token') {
+      setStage('report', 'active', '正在生成回复')
       if (!msg._md) msg._md = ''
       msg._md += ev.content
       // 报告生成技能输出 HTML 时，抽出整段 HTML 走 iframe srcdoc 渲染，
@@ -131,13 +126,19 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.trace) msg.trace = []
       const args = ev.args && Object.keys(ev.args).length ? JSON.stringify(ev.args) : ''
       if (ev.status === 'start') {
-        msg.trace.push({ type: 'tool', name: ev.name, args, status: 'start' })
+        msg.trace.push({ type: 'tool', id: ev.id || '', name: ev.name, args, status: 'start' })
       } else {
         const st = ev.status === 'error' ? 'error' : 'done'
-        const pending = msg.trace.find(t => t.type === 'tool' && t.status === 'start' && t.name === ev.name)
+        const pending = msg.trace.find(t => t.type === 'tool' && t.status === 'start' &&
+          (ev.id ? t.id === ev.id : t.name === ev.name))
         if (pending) { pending.status = st; pending.preview = ev.preview || '' }
-        else msg.trace.push({ type: 'tool', name: ev.name, args, status: st, preview: ev.preview || '' })
+        else msg.trace.push({ type: 'tool', id: ev.id || '', name: ev.name, args, status: st, preview: ev.preview || '' })
       }
+      const tools = msg.trace.filter(t => t.type === 'tool')
+      const hasError = tools.some(t => t.status === 'error')
+      const hasPending = tools.some(t => t.status === 'start')
+      setStage('skill', hasPending ? 'active' : hasError ? 'error' : 'done',
+        `${ev.name || '工具'}：${ev.status === 'start' ? '调用中' : ev.status === 'error' ? '调用失败' : '调用完成'}`)
       touch()
     } else if (ev.type === 'sql') {
       // 数据分析专家：sql_db_query 工具执行后回传 SQL 语句，由 SqlViewer 渲染
@@ -163,7 +164,11 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (ev.output) sa.output = ev.output
       touch()
     } else if (ev.type === 'todos') {
-      setStage('planning', 'active', ev.items.map(t => `${t.status === 'completed' ? '☑' : '☐'} ${t.content}`).join('\n'))
+      if (ev.items?.length) {
+        const allDone = ev.items.every(t => t.status === 'completed')
+        setStage('planning', allDone ? 'done' : 'active',
+          ev.items.map(t => `${t.status === 'completed' ? '☑' : '☐'} ${t.content}`).join('\n'))
+      }
     } else if (ev.type === 'approval_required') {
       msg.approval = {
         id: ev.approval_id,
@@ -238,6 +243,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     sending.value = true
     activeMessageIdx = botIdx
     resetPipeline()
+    setStage('input', 'done', new Date().toLocaleTimeString())
     const controller = new AbortController()
     abortActiveStream()
     activeController = controller

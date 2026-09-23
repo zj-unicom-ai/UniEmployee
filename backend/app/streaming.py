@@ -484,7 +484,6 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)) + 1
     except Exception:
         turn_no = None
-    skill_stage_on = False
     bot_text = ""
 
     # 数据分析专家桥接：把 conv_id 注入工具执行上下文，
@@ -569,7 +568,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 透传工具真实执行状态：LangGraph 会把工具异常包装为
                         # status='error' 的 ToolMessage，前端据此显示失败标记。
                         tool_status = "error" if getattr(m, "status", None) == "error" else "end"
-                        yield sse({"type": "tool", "name": name, "args": {}, "status": tool_status,
+                        yield sse({"type": "tool", "id": getattr(m, "tool_call_id", "") or "",
+                                   "name": name, "args": {}, "status": tool_status,
                                    "preview": preview})
                         # 数据分析专家：sql_db_query / file_table_query 工具执行后，
                         # 从会话缓冲取出 SQL 文本发 sql SSE 事件，让前端 SqlViewer 渲染。
@@ -596,20 +596,12 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                     elif getattr(m, "tool_calls", None):
                         for tc in m.tool_calls:
                             name, args = tc.get("name", ""), tc.get("args", {})
-                            yield sse({"type": "tool", "name": name, "args": args, "status": "start"})
+                            yield sse({"type": "tool", "id": tc.get("id", ""),
+                                       "name": name, "args": args, "status": "start"})
                             if name == "task" and isinstance(args, dict) and args.get("subagent_type"):
                                 sub_name = args["subagent_type"]
                                 pending_subagents[tc.get("id", "")] = sub_name
                                 yield sse({"type": "subagent", "name": sub_name, "status": "started"})
-                            if not skill_stage_on:
-                                skill_stage_on = True
-                                yield sse({"type": "stage", "stage": "skill", "status": "active",
-                                           "detail_text": f"调用 {name}"})
-                            if "SKILL.md" in json.dumps(args, ensure_ascii=False):
-                                skill_name = re.search(r"skills/([^/]+)/SKILL\.md", json.dumps(args))
-                                yield sse({"type": "stage", "stage": "skill", "status": "active",
-                                           "detail_text": f"激活技能：{skill_name.group(1) if skill_name else ''}"})
-
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
         # 输出敏感词检测：记录日志供审计（不打断已完成回复）
@@ -621,7 +613,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                           user_id=user_id, employee_id=emp_id, conversation_id=conv_id,
                           extra={"word": hit["word"], "category": hit["category"],
                                  "preview": bot_text[:300]})
-        yield sse({"type": "stage", "stage": "report", "status": "done"})
+        yield sse({"type": "stage", "stage": "report", "status": "done",
+                   "detail_text": "运行已结束"})
         yield sse({"type": "message_end", "message_id": trace_run_id,
                     "run_id": trace_run_id, "employee_id": emp_id,
                     "conversation_id": conv_id})

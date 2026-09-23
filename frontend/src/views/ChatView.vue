@@ -51,6 +51,17 @@
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
         </n-button>
+        <n-button
+          size="small"
+          class="new-conversation-button"
+          :disabled="stream.sending.value || uploading"
+          aria-label="新对话"
+          title="新对话"
+          @click="newConv"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          <span>新对话</span>
+        </n-button>
         <n-select
           :value="currentEmp"
           :options="empOptions"
@@ -578,6 +589,7 @@ onBeforeUnmount(() => {
 }
 .chat-header :deep(svg) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .employee-select { width: 220px; flex: 0 0 auto; }
+.new-conversation-button { flex: 0 0 auto; }
 .model-select { width: 170px; flex: 0 0 auto; }
 .emp-meta { font-size: 12px; color: #64748b; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msgs { flex: 1; overflow-y: auto; padding: 28px clamp(24px, 4vw, 72px) 18px; min-height: 0; }
@@ -595,6 +607,8 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .chat-header { min-height: 54px; }
+  .new-conversation-button { width: 34px; padding: 0; }
+  .new-conversation-button span { display: none; }
   .employee-select { flex: 1 1 auto; width: auto; min-width: 0; }
   .model-select, .execution-button, .trace-button, .layout-mode-button { display: none; }
   .chat-header > :deep(.n-button) { flex-shrink: 0; }

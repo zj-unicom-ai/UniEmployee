@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from app import runtime, traces
 from app.streaming import _stream_run, conv_emp_map, employee_of
@@ -130,6 +130,56 @@ def test_tool_error_status_passed_through():
     tool_events = [e for e in events if e["type"] == "tool"]
     assert tool_events and tool_events[0]["status"] == "error"
     assert "URLError" in tool_events[0]["preview"]
+
+
+def test_execution_events_follow_actual_agent_updates():
+    """配置快照、规划清单、工具和结束状态应对应真实 SSE 来源。"""
+
+    class EventAgent:
+        async def astream(self, *args, **kwargs):
+            yield {"type": "updates", "data": {"agent": {
+                "todos": [{"content": "检索资料", "status": "in_progress"}],
+                "messages": [AIMessage(content="", tool_calls=[{
+                    "name": "kb_search", "args": {"query": "资料"}, "id": "call-1",
+                }])],
+            }}}
+            yield {"type": "updates", "data": {"tools": {
+                "messages": [ToolMessage(name="kb_search", content="找到资料",
+                                         tool_call_id="call-1")],
+            }}}
+            yield {"type": "messages", "data": (AIMessageChunk(content="回答"), None)}
+
+    async def run():
+        return [json.loads(line[6:].strip())
+                async for line in _stream_run("c_events", {"messages": [
+                    {"role": "user", "content": "查资料"}]})]
+
+    conv_emp_map["c_events"] = "xiaosu"
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime, "get_agent", lambda *a, **k: _async_return((EventAgent(), [
+        {"stage": "employee", "status": "configured", "detail_text": "小苏"},
+    ])))
+    monkeypatch.setattr(runtime, "ensure_user_memory", _noop_async)
+    monkeypatch.setattr(traces, "start_run", lambda *a, **k: "r_events")
+    monkeypatch.setattr(traces, "TraceHandler",
+                        lambda run_id: SimpleNamespace(flush_pending=lambda: None))
+    monkeypatch.setattr(traces, "finish_run", lambda *a, **k: None)
+    try:
+        events = asyncio.run(run())
+    finally:
+        monkeypatch.undo()
+        conv_emp_map.pop("c_events", None)
+
+    assert any(e.get("stage") == "employee" and e.get("status") == "configured"
+               for e in events)
+    assert any(e["type"] == "todos" and e["items"][0]["content"] == "检索资料"
+               for e in events)
+    tool_events = [e for e in events if e["type"] == "tool"]
+    assert [(e["id"], e["status"]) for e in tool_events] == [
+        ("call-1", "start"), ("call-1", "end")]
+    assert not any(e.get("stage") in ("planning", "skill") for e in events)
+    assert any(e.get("stage") == "report" and e.get("status") == "done"
+               for e in events)
 
 
 def test_cancelled_stream_marks_trace_and_persists_partial_answer():
