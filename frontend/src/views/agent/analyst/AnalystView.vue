@@ -59,7 +59,7 @@
 
       <!-- 消息列表 -->
       <div class="msgs" ref="msgsRef">
-        <!-- 空态：未提问时展示当前数据源的前 3 个 SQL 示例作为快捷话术 -->
+        <!-- 空态：未提问时展示小数的专属快捷问法，未配置时使用平台默认话术 -->
         <div v-if="!messages.length" class="welcome-box">
           <div class="welcome-hero">
             <div class="hero-avatar">小数</div>
@@ -93,17 +93,6 @@
             </div>
           </div>
 
-          <div v-else class="welcome-empty">
-            <div class="empty-icon">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M9 19V6m6 13V8M4 2v20h16M4 2h16M4 22h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </div>
-            <div class="empty-title">当前数据源暂无快捷话术</div>
-            <div class="empty-desc">
-              可前往
-              <n-button size="tiny" text type="primary" @click="$router.push({ name: 'analyst-sql-examples' })">SQL 示例</n-button>
-              为该数据源配置常见问法
-            </div>
-          </div>
         </div>
         <template v-for="(msg, idx) in messages" :key="idx">
           <ChatMessage
@@ -179,6 +168,7 @@ import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../../../api.js'
+import { DEFAULT_QUICK_PROMPTS } from '../../../utils/quickPrompts.js'
 import * as analystApi from '../../../api/analyst.js'
 import { useChatStream, renderMd, extractReport } from '../../../composables/useChatStream.js'
 import ChatMessage from '../../../components/chat/ChatMessage.vue'
@@ -223,8 +213,8 @@ const currentDataSource = computed(() => {
   return { kind: ds.kind, id: ds.id }
 })
 
-// 当前数据源的前 3 个启用 SQL 示例（作为空态快捷话术）
-const quickPrompts = ref([])
+// 优先展示员工专属配置；未配置时显示平台默认的两条欢迎话术。
+const quickPrompts = ref(DEFAULT_QUICK_PROMPTS.map((question, id) => ({ id: `default-${id}`, question })))
 const employeeQuickPrompts = ref([])
 let employeePromptsLoaded = false
 
@@ -245,24 +235,10 @@ async function loadQuickPrompts() {
   await loadEmployeeQuickPrompts()
   if (employeeQuickPrompts.value.length) {
     quickPrompts.value = employeeQuickPrompts.value.map((question, id) => ({ id: `employee-${id}`, question }))
-    return
-  }
-  if (!datasourceId.value) { quickPrompts.value = []; return }
-  // SQL 示例只对数据库类型数据源有意义
-  const ds = datasources.value.find(d => d.id === datasourceId.value)
-  if (!ds || ds.kind !== 'database') { quickPrompts.value = []; return }
-  try {
-    // 数据库数据源 id 形如 "ds:xxx"，SQL 示例查询需要去掉前缀
-    const rawId = datasourceId.value.startsWith('ds:') ? datasourceId.value.slice(3) : datasourceId.value
-    const all = await analystApi.listSqlExamples({ datasource_id: rawId })
-    quickPrompts.value = (all || []).filter(x => x.enabled).slice(0, 3)
-  } catch {
-    quickPrompts.value = []
+  } else {
+    quickPrompts.value = DEFAULT_QUICK_PROMPTS.map((question, id) => ({ id: `default-${id}`, question }))
   }
 }
-
-// 切换数据源时重新加载示例
-watch(datasourceId, () => loadQuickPrompts())
 
 // 点击快捷话术：填入输入框并聚焦（不自动发送，让用户可再编辑）
 function usePrompt(ex) {
@@ -490,7 +466,7 @@ onMounted(async () => {
     } else {
       await newConv({ replaceUrl: true })
     }
-    // 进入页面或打开历史会话后，加载当前数据源的话术示例
+    // 进入页面后加载员工专属快捷问法，未配置时保留默认欢迎话术
     await loadQuickPrompts()
   } finally {
     routeReady.value = true
@@ -687,29 +663,6 @@ watch(() => route.query.conv, async (cid) => {
 }
 .prompt-card:hover .prompt-cta { opacity: 1; }
 
-.welcome-empty {
-  text-align: center;
-  padding: 48px 24px;
-  background: #fff;
-  border: 1px dashed #e5e7eb;
-  border-radius: 12px;
-}
-.empty-icon {
-  display: inline-flex;
-  width: 56px; height: 56px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #94a3b8;
-  align-items: center; justify-content: center;
-  margin-bottom: 12px;
-}
-.empty-title {
-  font-size: 14px; font-weight: 500; color: #475569;
-}
-.empty-desc {
-  font-size: 12.5px; color: #94a3b8;
-  margin-top: 6px;
-}
 .input-bar {
   padding: 10px 16px 14px;
   border-top: 1px solid #e5e7eb;

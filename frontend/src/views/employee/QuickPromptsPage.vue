@@ -4,7 +4,7 @@
     <div class="page-intro">
       <div>
         <h2>新对话快捷问法</h2>
-        <p>这些问题会显示在 {{ employee?.name || '该员工' }} 的新对话欢迎区。留空时不显示通用问题。</p>
+        <p>这些问题会显示在 {{ employee?.name || '该员工' }} 的新对话欢迎区。留空时展示平台默认话术：让我们开启一段新的旅程吧！、能告诉我你有那些技能吗？</p>
       </div>
       <span class="count-pill">{{ filledCount }} / 3 条</span>
     </div>
@@ -20,7 +20,7 @@
             :autosize="{ minRows: 2, maxRows: 4 }"
             maxlength="160"
             show-count
-            :placeholder="`输入适合 ${employee?.name || '该员工'} 的常见问题；留空则不显示`"
+            :placeholder="`输入适合 ${employee?.name || '该员工'} 的常见问题；留空使用平台默认话术`"
           />
         </div>
       </section>

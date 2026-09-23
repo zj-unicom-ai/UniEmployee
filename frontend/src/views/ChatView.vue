@@ -102,10 +102,8 @@
           <div class="welcome-avatar">{{ (currentEmployee?.name || 'AI').slice(0, 1) }}</div>
           <h1>你好，我是{{ currentEmployee?.name || '数字员工' }}</h1>
           <p class="welcome-role">{{ currentEmployee?.role || '你的数字员工助手' }}</p>
-          <p class="welcome-instruction">
-            {{ quickPrompts.length ? '选择一个问题开始对话' : '还没有配置快捷问题，直接在下方输入你的需求即可。' }}
-          </p>
-          <div v-if="quickPrompts.length" class="quick-prompt-list">
+          <p class="welcome-instruction">选择一个问题开始对话</p>
+          <div class="quick-prompt-list">
             <button
               v-for="(prompt, index) in quickPrompts"
               :key="`${index}-${prompt}`"
@@ -150,6 +148,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../api.js'
+import { DEFAULT_QUICK_PROMPTS } from '../utils/quickPrompts.js'
 import { useChatStream } from '../composables/useChatStream.js'
 import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
 import PipelineSidebar from '../components/chat/PipelineSidebar.vue'
@@ -227,9 +226,12 @@ const empOptions = computed(() =>
     .map(e => ({ label: e.role || e.name, value: e.id }))
 )
 const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
-const quickPrompts = computed(() => Array.isArray(currentEmployee.value?.quick_prompts)
-  ? currentEmployee.value.quick_prompts.filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
-  : [])
+const quickPrompts = computed(() => {
+  const configured = Array.isArray(currentEmployee.value?.quick_prompts)
+    ? currentEmployee.value.quick_prompts.filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
+    : []
+  return configured.length ? configured : DEFAULT_QUICK_PROMPTS
+})
 
 function askQuickPrompt(prompt) {
   inputBarRef.value?.sendText(prompt)
