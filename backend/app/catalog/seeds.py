@@ -40,11 +40,15 @@ CONNECTOR_SEEDS = [
      {"transport": "stdio", "command": "npx",
       "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
       "cwd": "/tmp"}),
+    # 远程新闻 API 连接器（标准 MCP）：172.23.0.122 新闻聚合服务
+    ("news_remote", "远程新闻服务", "172.23.0.122 新闻聚合（MCP）",
+     {"url": "http://172.23.0.122:8000/mcp/",
+      "transport": "streamable_http"}),
 ]
 
 # 内置连接器指派给员工（与 seeds dict 的 cons 保持一致，用于独立回填）
 CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-intel"],
-                    "playwright": ["net-ops", "market-intel"]}
+                    "playwright": ["net-ops", "market-intel"], "news_remote": ["market-intel"]}
 
 # 内置员工默认启用的本体查询工具（业务事实问答依赖，资源中心可见可开关）
 ONTOLOGY_TOOLS = (

@@ -54,7 +54,12 @@ tools:
   - kb_search
   - bocha_search
   - get_current_time
-mcp_servers: {}
+mcp_servers:
+  news_remote:
+    url: "http://172.23.0.122:8000/mcp/"
+    transport: streamable_http
+    headers:
+      X-API-Key: "sk_admin_ed54944a6649fd0288318bcb7a89c528"
 interrupt_on: {}
 
 subagents:
