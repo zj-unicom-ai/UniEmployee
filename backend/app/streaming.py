@@ -371,20 +371,32 @@ class _WorkspaceFileWatcher:
     def _scan(self) -> dict[str, float]:
         out: dict[str, float] = {}
         root = WORKSPACE_DATA
-        scan_root = root / self.user_id if self.user_id else root
-        try:
-            for p in scan_root.rglob("*"):
-                if not p.is_file():
-                    continue
-                rel = p.relative_to(root)
-                if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
-                    continue
-                try:
-                    out[rel.as_posix()] = p.stat().st_mtime
-                except OSError:
-                    continue
-        except OSError:
-            pass
+        # 本地 shell 员工可能把共享产物直接写到 workspace/data 根目录；
+        # 扫描根级共享文件，同时只递归当前用户目录，避免触碰其他用户私有文件。
+        scan_roots = [root / self.user_id] if self.user_id else [root]
+        if self.user_id:
+            try:
+                for p in root.iterdir():
+                    if p.is_file() and not p.is_symlink() and not p.name.startswith("."):
+                        out[p.relative_to(root).as_posix()] = p.stat().st_mtime
+            except OSError:
+                pass
+        for scan_root in scan_roots:
+            try:
+                for p in scan_root.rglob("*"):
+                    if not p.is_file():
+                        continue
+                    if p.is_symlink():
+                        continue
+                    rel = p.relative_to(root)
+                    if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
+                        continue
+                    try:
+                        out[rel.as_posix()] = p.stat().st_mtime
+                    except OSError:
+                        continue
+            except OSError:
+                pass
         return out
 
     def snapshot(self) -> None:

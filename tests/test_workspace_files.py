@@ -127,15 +127,18 @@ def test_workspace_file_watcher_diff(monkeypatch, tmp_path):
 
 def test_workspace_file_watcher_scopes_to_current_user(monkeypatch, tmp_path):
     monkeypatch.setattr(streaming, "WORKSPACE_DATA", tmp_path)
+    _make_file(tmp_path, "共享旧看板.html", "old")
     _make_file(tmp_path, "u_me/old.md", "old")
     _make_file(tmp_path, "u_other/old.md", "old")
     w = streaming._WorkspaceFileWatcher(user_id="u_me")
 
+    _make_file(tmp_path, "新共享看板.html", "shared dashboard")
     _make_file(tmp_path, "u_other/new.md", "other")
     _make_file(tmp_path, "u_me/new.md", "mine")
 
     got = w.diff()
-    assert got == [{"name": "new.md", "path": "u_me/new.md", "size": len("mine")}]
+    assert {f["path"] for f in got} == {"新共享看板.html", "u_me/new.md"}
+    assert {f["name"] for f in got} == {"新共享看板.html", "new.md"}
 
 
 # ---------- 会话产物落库与历史恢复 ----------

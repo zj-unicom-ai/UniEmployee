@@ -5,22 +5,34 @@
       <span class="file-icon">{{ icon }}</span>
       <div class="file-info">
         <div class="file-name" :title="file.path">{{ file.name }}</div>
-        <div class="file-meta">{{ sizeText }}</div>
+        <div class="file-meta">{{ isHtml ? '网页看板 · ' : '' }}{{ sizeText }}</div>
       </div>
       <n-button v-if="previewable" size="tiny" @click="togglePreview">
         {{ showPreview ? '收起预览' : '预览' }}
       </n-button>
+      <n-button v-if="isHtml" size="tiny" type="primary" @click="toggleHtmlPreview">
+        {{ showHtmlPreview ? '收起看板' : '打开看板' }}
+      </n-button>
       <n-button size="tiny" type="primary" :loading="downloading" @click="download">下载</n-button>
     </div>
     <pre v-if="showPreview" class="file-preview">{{ previewText }}</pre>
+    <div v-if="isHtml && showHtmlPreview" class="html-preview">
+      <div v-if="loadingHtml" class="html-preview-state">正在加载看板…</div>
+      <div v-else-if="htmlError" class="html-preview-state html-preview-error">
+        {{ htmlError }}
+        <n-button size="tiny" @click="loadHtmlPreview">重试</n-button>
+      </div>
+      <ReportViewer v-else-if="reportHtml" :html="reportHtml" />
+    </div>
   </div>
 </template>
 
 <script setup>
 // 产物文件下载走 /api/workspace/file（Bearer 鉴权，blob 落地为浏览器下载）；
-// 文本类文件（md/txt/csv/log/json）可展开预览，二进制（docx 等）仅下载。
-import { computed, ref } from 'vue'
+// HTML 看板自动以内嵌沙箱预览；文本类文件可展开预览，其他文件可下载。
+import { computed, onMounted, ref } from 'vue'
 import api from '../../api.js'
+import ReportViewer from '../agent/analyst/ReportViewer.vue'
 
 const props = defineProps({ file: { type: Object, required: true } })
 
@@ -28,9 +40,15 @@ const PREVIEW_EXTS = ['md', 'txt', 'csv', 'log', 'json']
 const downloading = ref(false)
 const showPreview = ref(false)
 const previewText = ref('')
+const showHtmlPreview = ref(false)
+const loadingHtml = ref(false)
+const htmlError = ref('')
+const reportHtml = ref('')
 
 const ext = computed(() => (props.file.name || '').split('.').pop().toLowerCase())
+const isHtml = computed(() => ext.value === 'html' || ext.value === 'htm')
 const icon = computed(() => {
+  if (isHtml.value) return '📊'
   if (ext.value === 'docx' || ext.value === 'doc') return '📄'
   if (ext.value === 'csv' || ext.value === 'xlsx') return '📊'
   if (['md', 'txt', 'log'].includes(ext.value)) return '📝'
@@ -79,6 +97,36 @@ async function togglePreview() {
     }
   }
 }
+
+async function loadHtmlPreview() {
+  if (loadingHtml.value) return
+  loadingHtml.value = true
+  htmlError.value = ''
+  try {
+    const res = await api.get('/workspace/file', {
+      params: { path: props.file.path },
+      responseType: 'text',
+    })
+    reportHtml.value = typeof res.data === 'string' ? res.data : ''
+    if (!reportHtml.value.trim()) htmlError.value = '看板内容为空'
+  } catch (e) {
+    htmlError.value = '看板加载失败：' + (e.response?.data?.detail || e.message)
+  } finally {
+    loadingHtml.value = false
+  }
+}
+
+function toggleHtmlPreview() {
+  showHtmlPreview.value = !showHtmlPreview.value
+  if (showHtmlPreview.value && !reportHtml.value) loadHtmlPreview()
+}
+
+onMounted(() => {
+  if (isHtml.value) {
+    showHtmlPreview.value = true
+    loadHtmlPreview()
+  }
+})
 </script>
 
 <style scoped>
@@ -118,4 +166,7 @@ async function togglePreview() {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.html-preview { margin-top: 8px; }
+.html-preview-state { display: flex; align-items: center; gap: 8px; min-height: 48px; color: #64748b; font-size: 12px; }
+.html-preview-error { color: #b91c1c; }
 </style>

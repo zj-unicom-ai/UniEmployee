@@ -181,8 +181,9 @@ function openInNew() {
 .rv-iframe {
   display: block;
   width: 100%;
+  height: min(72vh, 900px);
   border: none;
-  min-height: 320px;
+  min-height: 520px;
   background: #fff;
 }
 </style>
