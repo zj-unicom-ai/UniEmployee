@@ -16,9 +16,9 @@ emit: rated(msg, rating, reason)
       </div>
       <div class="msg-meta">
         <span class="msg-time">{{ msg.time }}</span>
-        <span class="msg-copy" @click="copyText(msg.content)" title="复制">
+        <button type="button" class="msg-copy" aria-label="复制问题" title="复制问题" @click="copyText(msg.content)">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-        </span>
+        </button>
       </div>
     </div>
 
@@ -29,8 +29,15 @@ emit: rated(msg, rating, reason)
         <div v-else-if="msg.content" class="md">{{ msg.content }}</div>
         <!-- 报告/看板 HTML（REPORT_HTML_START/END 抽取通道），iframe 沙箱渲染 + 下载/新窗口 -->
         <ReportViewer v-if="msg.reportHtml" :html="msg.reportHtml" style="margin: 8px 0 4px" />
-        <div v-if="msg.error" class="msg-error">⚠ {{ msg.error }}</div>
-        <div v-if="!msg.html && !msg.content && !msg.error" class="msg-loading">
+        <div v-if="msg.error" class="msg-error">
+          <span>⚠ {{ msg.error }}</span>
+          <n-button v-if="msg._retryPayload" size="tiny" @click="$emit('retry', msg)">重试</n-button>
+        </div>
+        <div v-else-if="msg.status === 'stopped'" class="msg-status stopped-status">
+          已停止生成。{{ msg.content || msg.html ? '以上为当前已收到的部分内容。' : '' }}
+          <n-button v-if="msg._retryPayload" text size="tiny" @click="$emit('retry', msg)">重新发送</n-button>
+        </div>
+        <div v-if="!msg.html && !msg.content && !msg.error && msg.status !== 'stopped' && msg.status !== 'retried'" class="msg-loading">
           <span class="loading-dot">.</span>
           <span class="loading-dot">.</span>
           <span class="loading-dot">.</span>
@@ -38,18 +45,18 @@ emit: rated(msg, rating, reason)
       </div>
       <div class="msg-meta">
         <span class="msg-time">{{ msg.time }}</span>
-        <span class="msg-copy" @click="copyText(msg.html || msg.content)" title="复制">
+        <button type="button" class="msg-copy" aria-label="复制回答" title="复制回答" @click="copyText(msg._md || msg.content)">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-        </span>
+        </button>
 
         <!-- 评价按钮 -->
         <template v-if="msg.run_id && !msg._evaluated">
-          <span class="eval-btn" @click="$emit('rate', msg, 1, idx)" title="有用">
+          <button type="button" class="eval-btn" aria-label="评价回答有用" @click="$emit('rate', msg, 1, idx)" title="有用">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg>
-          </span>
-          <span class="eval-btn" @click="showReason = !showReason" title="没用">
+          </button>
+          <button type="button" class="eval-btn" aria-label="评价回答没用" @click="showReason = !showReason" title="没用">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10zM17 2h3a2 2 0 012 2v7a2 2 0 01-2 2h-3"/></svg>
-          </span>
+          </button>
         </template>
         <span v-else-if="msg._evaluated === 1" class="eval-btn evaluated-up" title="已评价有用">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/></svg>
@@ -129,6 +136,7 @@ emit: rated(msg, rating, reason)
 
 <script setup>
 import { ref } from 'vue'
+import { useMessage } from 'naive-ui'
 import ReasonPopover from './ReasonPopover.vue'
 import FileCard from './FileCard.vue'
 import ReportViewer from '../agent/analyst/ReportViewer.vue'
@@ -137,19 +145,25 @@ const props = defineProps({
   msg: { type: Object, required: true },
   idx: { type: Number, required: true },
 })
-defineEmits(['rate', 'approve', 'reject'])
+defineEmits(['rate', 'approve', 'reject', 'retry'])
 
 const showReason = ref(false)
 const reasonSelected = ref(null)
+const feedback = useMessage()
 
 function closeReason() {
   showReason.value = false
   reasonSelected.value = null
 }
 
-function copyText(text) {
+async function copyText(text) {
   if (!text) return
-  navigator.clipboard.writeText(typeof text === 'string' ? text.replace(/<[^>]+>/g, '') : '').catch(() => {})
+  try {
+    await navigator.clipboard.writeText(text)
+    feedback.success('已复制')
+  } catch {
+    feedback.error('复制失败，请检查浏览器剪贴板权限')
+  }
 }
 
 function fmtSize(n) {
@@ -170,7 +184,7 @@ function subagentStatusText(status) {
 /* 用户消息：wrapper 撑满整行（时间/按钮贴真正的右边缘），宽度限制放在气泡上保持聊天气泡感；
    bot 回复（长文/表格/代码）放宽到接近全宽，避免右侧大片空白 */
 .user-wrapper { align-self: stretch; align-items: flex-end; }
-.bot-wrapper { max-width: 92%; align-self: flex-start; align-items: flex-start; position: relative; }
+.bot-wrapper { max-width: 100%; align-self: flex-start; align-items: flex-start; position: relative; }
 .msg { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.7; word-break: break-word; animation: msg-in 0.25s ease-out; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }
@@ -186,9 +200,9 @@ function subagentStatusText(status) {
 .user-att-size { opacity: 0.75; }
 .msg.bot { align-self: flex-start; background: #ffffff; border: 1px solid #e2e8f0; border-bottom-left-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.02); }
 .msg-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
-.msg-copy { cursor: pointer; opacity: 0.4; transition: opacity 0.15s; font-size: 12px; line-height: 1; position: relative; }
+.msg-copy { cursor: pointer; opacity: 0.5; transition: opacity 0.15s; font-size: 12px; line-height: 1; position: relative; border: 0; padding: 4px; background: transparent; color: inherit; display: inline-flex; }
 .msg-copy:hover { opacity: 1; }
-.msg-copy:hover::after { content: '复制'; position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 4px); background: #334155; color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.msg-copy:focus-visible, .eval-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
 .msg-loading { font-size: 24px; line-height: 1; letter-spacing: 2px; color: #3b82f6; }
 .loading-dot { animation: loading-pulse 1.4s infinite; opacity: 0; }
 .loading-dot:nth-child(1) { animation-delay: 0s; }
@@ -237,7 +251,10 @@ function subagentStatusText(status) {
 .msg-error {
   background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
   border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.6;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
+.msg-status { margin-top: 8px; font-size: 12px; color: #64748b; }
+.stopped-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 子代理面板 */
 .subagent-panel {
@@ -267,7 +284,7 @@ function subagentStatusText(status) {
 .eval-btn {
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 8px;
-  color: #94a3b8; transition: all 0.2s ease;
+  color: #94a3b8; background: transparent; border: 0; padding: 0; transition: all 0.2s ease;
 }
 .eval-btn:hover { background: #f1f5f9; color: #475569; transform: scale(1.1); }
 .eval-btn.evaluated-up { color: #10b981; background: #ecfdf5; }

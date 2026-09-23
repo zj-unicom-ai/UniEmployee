@@ -78,7 +78,7 @@
 </template>
 
 <script setup>
-import { ref, computed, h } from 'vue'
+import { ref, computed, h, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import { useAuthStore } from '../stores/auth.js'
@@ -87,6 +87,16 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const collapsed = ref(false)
+
+function collapseNavOnNarrowScreen() {
+  if (window.innerWidth <= 768) collapsed.value = true
+}
+
+onMounted(() => {
+  collapseNavOnNarrowScreen()
+  window.addEventListener('resize', collapseNavOnNarrowScreen)
+})
+onBeforeUnmount(() => window.removeEventListener('resize', collapseNavOnNarrowScreen))
 
 // 系统设置受控展开：切到非系统设置栏目时自动收起父项，
 // 避免父项一直占空间。包含父项 key 和所有子项 key。
@@ -335,6 +345,12 @@ function onUserMenuSelect(key) {
   color: #334155;
 }
 .role-tag { font-weight: 500; }
+
+@media (max-width: 640px) {
+  .app-header { padding: 0 12px; }
+  .header-left { gap: 8px; }
+  .user-name { display: none; }
+}
 
 /* 内容区 */
 .app-content {

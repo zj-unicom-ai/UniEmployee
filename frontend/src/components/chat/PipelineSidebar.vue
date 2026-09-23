@@ -1,7 +1,13 @@
 <!-- 中栏：执行流水线状态 -->
 <template>
-  <div class="pipeline-sidebar">
-    <div class="pipeline-title">执行流水线</div>
+  <aside class="pipeline-sidebar" :class="{ open }" :aria-hidden="!open" :inert="!open">
+    <div class="pipeline-head">
+      <div>
+        <div class="pipeline-title">执行详情</div>
+        <div class="pipeline-subtitle">查看本轮运行状态与工具调用</div>
+      </div>
+      <n-button quaternary circle size="small" aria-label="关闭执行详情" @click="$emit('close')">×</n-button>
+    </div>
     <div class="pipeline-body">
       <template v-for="(s, i) in STAGES" :key="s[0]">
         <div v-if="i" class="connector" :class="{ done: states[s[0]] === 'done' }"></div>
@@ -14,14 +20,16 @@
         </div>
       </template>
     </div>
-  </div>
+  </aside>
 </template>
 
 <script setup>
 defineProps({
   states: { type: Object, default: () => ({}) },
   detail: { type: Object, default: () => ({}) },
+  open: { type: Boolean, default: false },
 })
+defineEmits(['close'])
 
 const STAGES = [
   ['input', '用户输入'], ['employee', 'Employee 加载'], ['sop', '加载 SOP'],
@@ -32,13 +40,22 @@ const STAGES = [
 
 <style scoped>
 .pipeline-sidebar {
-  width: 240px;
-  border-right: 1px solid #e2e8f0;
-  padding: 16px;
+  position: absolute;
+  z-index: 40;
+  inset: 0 0 0 auto;
+  width: min(360px, 92vw);
+  padding: 18px;
   overflow-y: auto;
   background: #ffffff;
+  border-left: 1px solid #e2e8f0;
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.12);
+  transform: translateX(105%);
+  transition: transform 180ms ease;
 }
-.pipeline-title { font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 12px; }
+.pipeline-sidebar.open { transform: translateX(0); }
+.pipeline-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.pipeline-title { font-size: 15px; font-weight: 650; color: #0f172a; }
+.pipeline-subtitle { font-size: 12px; color: #64748b; margin-top: 3px; }
 .pipeline-body { display: flex; flex-direction: column; }
 .stage { display: flex; gap: 10px; padding: 6px 0; opacity: 0.4; }
 .stage.active, .stage.done, .stage.error { opacity: 1; }
@@ -63,4 +80,7 @@ const STAGES = [
 .stage-detail { font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.5; white-space: pre-wrap; }
 .connector { width: 2px; height: 14px; background: #e2e8f0; margin-left: 8px; }
 .connector.done { background: #10b981; }
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-sidebar { transition: none; }
+}
 </style>

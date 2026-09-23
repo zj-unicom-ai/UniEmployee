@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
 from app import attachments, auth, runtime, approvals, conversations, catalog, traces
-from app.models import MessageIn, DecisionIn
+from app.models import MessageIn, DecisionIn, ConversationUpdateIn
 from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
 from app.streaming import conv_tenant_map
 
@@ -65,13 +65,37 @@ async def list_conv(
     context=Depends(auth.get_auth_context),
     page: int | None = None, page_size: int = 10, limit: int | None = None,
     exclude_auto: bool = False,
+    q: str = "", archived: bool = False,
 ):
     uid = context.user_id
-    if page:
+    if page is not None:
         return conversations.list_paged(employee_id, user_id=uid, page=page, page_size=page_size,
-                                        tenant_id=context.tenant_id)
+                                        tenant_id=context.tenant_id, query=q, archived=archived,
+                                        exclude_auto=exclude_auto)
+    if q or archived:
+        return conversations.list_paged(employee_id, user_id=uid, page=1,
+                                        page_size=limit or 20, tenant_id=context.tenant_id,
+                                        query=q, archived=archived, exclude_auto=exclude_auto)["items"]
     return conversations.list_for(employee_id, user_id=uid, limit=limit,
                                   exclude_auto=exclude_auto, tenant_id=context.tenant_id)
+
+
+@router.patch("/conversations/{conv_id}")
+async def update_conv(conv_id: str, body: ConversationUpdateIn,
+                      context=Depends(auth.get_auth_context)):
+    meta = conversations.get(conv_id)
+    if not meta:
+        raise HTTPException(404, "会话不存在")
+    _ensure_conversation_access(context, meta)
+    _ensure_employee_access(context, meta["employee_id"])
+    try:
+        updated = conversations.update_metadata(conv_id, title=body.title,
+                                                 pinned=body.pinned, archived=body.archived)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if updated is None:
+        raise HTTPException(404, "会话不存在")
+    return updated
 
 
 @router.delete("/conversations/{conv_id}")

@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     preview      TEXT DEFAULT '',
     message_count INTEGER DEFAULT 0,
     model        TEXT,
+    pinned       INTEGER DEFAULT 0,
+    archived_at  TEXT,
+    title_locked INTEGER DEFAULT 0,
     created_at   TEXT,
     updated_at   TEXT
 );
@@ -109,6 +112,14 @@ def _migrate(con):
     # 会话级模型绑定：补 model 列
     if "model" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
+    if "pinned" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN pinned INTEGER DEFAULT 0")
+    if "archived_at" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
+    if "title_locked" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN title_locked INTEGER DEFAULT 0")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_conv_owner_archive "
+                "ON conversations(tenant_id, user_id, archived_at, pinned, updated_at)")
     # 会话产物文件：turn_no 归属轮次（老表补列）
     fcols = dblayer.table_columns(con, "conversation_files")
     if fcols and "turn_no" not in fcols:
@@ -176,7 +187,7 @@ def touch(conv_id: str, *, title: str | None = None, preview: str | None = None,
 
 
 def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, exclude_channel=False,
-           exclude_auto=False):
+           exclude_auto=False, archived: bool | None = None, query: str = ""):
     sql = "WHERE deleted_at IS NULL"; params = []
     if employee_id: sql += " AND employee_id=?"; params.append(employee_id)
     if user_id: sql += " AND user_id=?"; params.append(user_id)
@@ -186,6 +197,15 @@ def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, excl
     # exclude_auto：过滤自动任务会话（c_auto_ 前缀），用于员工专属会话页（如数据问数）
     # 避免把"定时获取资讯/退款事件处理"等自动任务会话混入员工历史列表。
     if exclude_auto: sql += " AND conv_id NOT LIKE 'c_auto_%'"
+    if archived is True: sql += " AND archived_at IS NOT NULL"
+    if archived is False: sql += " AND archived_at IS NULL"
+    term = query.strip().lower()[:100]
+    if term:
+        # LIKE 中的用户输入按字面匹配；! 用作 SQLite/PostgreSQL 通用的转义字符。
+        pattern = "%" + term.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        sql += " AND (LOWER(COALESCE(title,'')) LIKE ? ESCAPE '!' "
+        sql += "OR LOWER(COALESCE(preview,'')) LIKE ? ESCAPE '!')"
+        params.extend((pattern, pattern))
     return sql, params
 
 
@@ -198,8 +218,8 @@ def list_for(employee_id: str | None = None, user_id: str | None = None,
     """
     with _conn() as con:
         wh, params = _where(employee_id, user_id, tenant_id, exclude_channel=True,
-                            exclude_auto=exclude_auto)
-        sql = f"SELECT * FROM conversations {wh} ORDER BY updated_at DESC, created_at DESC, conv_id DESC"
+                            exclude_auto=exclude_auto, archived=False)
+        sql = f"SELECT * FROM conversations {wh} ORDER BY pinned DESC, updated_at DESC, created_at DESC, conv_id DESC"
         if limit:
             sql += " LIMIT ?"; params.append(limit)
         rows = con.execute(sql, params).fetchall()
@@ -219,13 +239,16 @@ def list_for_channel(channel_id: str, user_id: str | None = None,
 
 
 def list_paged(employee_id: str | None = None, user_id: str | None = None,
-               page: int = 1, page_size: int = 10, tenant_id: str | None = None) -> dict:
+               page: int = 1, page_size: int = 10, tenant_id: str | None = None,
+               query: str = "", archived: bool = False, exclude_auto: bool = False) -> dict:
     """分页会话清单，返回 {items, total, page, page_size}。"""
     page = max(1, page)
+    page_size = min(max(1, page_size), 100)
     with _conn() as con:
-        sql, params = _where(employee_id, user_id, tenant_id, exclude_channel=True)
+        sql, params = _where(employee_id, user_id, tenant_id, exclude_channel=True,
+                             exclude_auto=exclude_auto, archived=archived, query=query)
         total = con.execute(f"SELECT COUNT(*) FROM conversations {sql}", params).fetchone()[0]
-        full = f"SELECT * FROM conversations {sql} ORDER BY updated_at DESC, created_at DESC, conv_id DESC LIMIT ? OFFSET ?"
+        full = f"SELECT * FROM conversations {sql} ORDER BY pinned DESC, updated_at DESC, created_at DESC, conv_id DESC LIMIT ? OFFSET ?"
         rows = con.execute(full, params + [page_size, (page - 1) * page_size]).fetchall()
     return {"items": [dict(r) for r in rows], "total": total,
             "page": page, "page_size": page_size, "pages": (total + page_size - 1) // page_size}
@@ -235,8 +258,37 @@ def set_title(conv_id: str, title: str):
     """强制更新会话标题（用于 AI 提炼标题覆盖首句截断）。"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with _conn() as con:
-        con.execute("UPDATE conversations SET title=?, updated_at=? WHERE conv_id=?",
+        con.execute("UPDATE conversations SET title=?, updated_at=? "
+                    "WHERE conv_id=? AND COALESCE(title_locked,0)=0",
                     (title[:40], now, conv_id))
+
+
+def update_metadata(conv_id: str, *, title: str | None = None,
+                    pinned: bool | None = None, archived: bool | None = None) -> dict | None:
+    """更新用户可管理的会话属性；手动标题不再被异步 AI 标题覆盖。"""
+    values = []
+    params = []
+    if title is not None:
+        clean_title = title.strip()
+        if not clean_title or len(clean_title) > 60:
+            raise ValueError("会话标题须为 1–60 个字符")
+        values.extend(("title=?", "title_locked=1"))
+        params.append(clean_title)
+    if pinned is not None:
+        values.append("pinned=?")
+        params.append(int(pinned))
+    if archived is not None:
+        values.append("archived_at=?")
+        params.append(time.strftime("%Y-%m-%dT%H:%M:%S") if archived else None)
+    if not values:
+        raise ValueError("没有可更新的会话属性")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    values.append("updated_at=?")
+    params.extend((now, conv_id))
+    with _conn() as con:
+        con.execute(f"UPDATE conversations SET {', '.join(values)} "
+                    "WHERE conv_id=? AND deleted_at IS NULL", params)
+    return get(conv_id)
 
 
 def claim(conv_id: str, user_id: str):

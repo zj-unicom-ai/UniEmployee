@@ -66,12 +66,23 @@ export function extractReport(md) {
 export function useChatStream({ stageStates, stageDetail, messages, scrollToBottom }) {
   const sending = ref(false)
   let activeController = null
+  let activeMessageIdx = null
 
   function abortActiveStream() {
     if (activeController) {
       activeController.abort()
       activeController = null
     }
+  }
+
+  function stopActiveStream() {
+    const msg = activeMessageIdx == null ? null : messages.value[activeMessageIdx]
+    if (!activeController || !msg) return
+    msg.status = 'stopped'
+    msg._streamTerminal = true
+    setStage('report', 'stopped', '已由用户停止')
+    touch()
+    abortActiveStream()
   }
 
   function resetPipeline() {
@@ -166,6 +177,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     } else if (ev.type === 'error') {
       // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
       msg.error = ev.message || '任务执行出错，请稍后重试'
+      msg.status = 'error'
       msg._streamTerminal = true
       setStage('report', 'error', msg.error)
       touch()
@@ -200,6 +212,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       msg.error = msg._md || msg.html || msg.content
         ? '连接已中断，当前结果可能不完整，请刷新历史或继续追问。'
         : '连接已中断，未收到最终结果，请重试。'
+      msg.status = 'interrupted'
       setStage('report', 'error', msg.error)
       touch()
     }
@@ -207,7 +220,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '') {
+  async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '', options = {}) {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachments.length) return
@@ -215,10 +228,15 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
     const userMsg = { role: 'user', content: trimmed, time }
     if (attachments.length) userMsg.attachments = attachments
-    messages.value.push(userMsg)
+    if (options.appendUser !== false) messages.value.push(userMsg)
     const botIdx = messages.value.length
-    messages.value.push({ role: 'bot', content: '', html: '', _md: '', trace: [], time })
+    const botMsg = {
+      role: 'bot', content: '', html: '', _md: '', trace: [], time,
+      _retryPayload: { endpoint, text: trimmed, attachments, dataSource, model },
+    }
+    messages.value.push(botMsg)
     sending.value = true
+    activeMessageIdx = botIdx
     resetPipeline()
     const controller = new AbortController()
     abortActiveStream()
@@ -241,12 +259,26 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         body: JSON.stringify({ message: trimmed, attachments, model: model || '' }),
         signal: controller.signal,
       })
+      if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
+      options.onAccepted?.()
       await readStream(resp, botIdx)
       if (activeController === controller) activeController = null
     } catch (e) {
-      if (e.name !== 'AbortError') messages.value[botIdx].content = '⚠ 连接失败：' + e.message
+      const msg = messages.value[botIdx]
+      if (e.name !== 'AbortError' && msg) {
+        msg.error = `请求失败：${e.message || '网络连接不可用'}`
+        msg.status = 'error'
+        setStage('report', 'error', msg.error)
+        touch()
+      } else if (e.name === 'AbortError' && msg && !msg._streamTerminal) {
+        msg.status = 'interrupted'
+        msg.error = '连接已中断，当前结果可能不完整。'
+        setStage('report', 'error', msg.error)
+        touch()
+      }
       if (activeController === controller) activeController = null
     }
+    if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
     scrollToBottom?.()
   }
@@ -263,6 +295,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const controller = new AbortController()
     abortActiveStream()
     activeController = controller
+    activeMessageIdx = botIdx
     try {
       const resp = await fetch(`/api/approvals/${approvalId}/decision`, {
         method: 'POST',
@@ -270,12 +303,23 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         body: JSON.stringify({ decision }),
         signal: controller.signal,
       })
+      if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
       await readStream(resp, botIdx)
       if (activeController === controller) activeController = null
     } catch (e) {
-      if (e.name !== 'AbortError') messages.value[botIdx].content = '⚠ ' + e.message
+      const reply = messages.value[botIdx]
+      if (e.name !== 'AbortError' && reply) {
+        reply.error = `审批恢复失败：${e.message || '网络连接不可用'}`
+        reply.status = 'error'
+        touch()
+      } else if (e.name === 'AbortError' && reply && !reply._streamTerminal) {
+        reply.status = 'interrupted'
+        reply.error = '审批恢复连接已中断，请刷新会话确认审批状态。'
+        touch()
+      }
       if (activeController === controller) activeController = null
     }
+    if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
   }
 
@@ -286,5 +330,6 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     setStage,
     resetPipeline,
     abortActiveStream,
+    stopActiveStream,
   }
 }

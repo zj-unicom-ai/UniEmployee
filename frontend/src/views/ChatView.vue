@@ -3,27 +3,59 @@
 重构后：布局编排 + 员工/会话管理，渲染委托给子组件
 -->
 <template>
-  <div class="chat-layout">
+  <div class="chat-layout" :class="{ 'full-width-mode': fullWidthMode }">
+    <button
+      v-if="historyOpen || executionOpen"
+      class="drawer-backdrop"
+      aria-label="关闭侧栏"
+      @click="closeDrawers"
+    ></button>
     <ConversationSidebar
       :list="convList"
       :active-id="convId"
       :emp-names="empNames"
+      :open="historyOpen"
+      :query="historyQuery"
+      :archived-only="historyArchived"
+      :loading="historyLoading"
+      :has-more="historyHasMore"
+      :error="historyError"
       @select="openConversation"
       @new="newConv"
+      @close="historyOpen = false"
+      @search="onHistorySearch"
+      @archive-filter="onArchiveFilter"
+      @load-more="loadMoreHistory"
+      @retry-load="() => loadHistory(currentEmp)"
+      @rename="(id, title) => updateConversationMeta(id, { title })"
+      @pin="(id, pinned) => updateConversationMeta(id, { pinned })"
+      @archive="(id, archived) => updateConversationMeta(id, { archived })"
     />
 
     <PipelineSidebar
       :states="stageStates"
       :detail="stageDetail"
+      :open="executionOpen"
+      @close="executionOpen = false"
     />
 
     <div class="chat-main">
       <div class="chat-header">
+        <n-button
+          quaternary
+          circle
+          aria-label="打开历史会话"
+          title="历史会话"
+          :aria-expanded="historyOpen"
+          @click="toggleDrawer('history')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
+        </n-button>
         <n-select
           :value="currentEmp"
           :options="empOptions"
           size="small"
-          style="width:200px"
+          class="employee-select"
           @update:value="selectEmployee"
         />
         <n-select
@@ -32,14 +64,30 @@
           :options="modelOptions"
           size="small"
           placeholder="选择模型"
-          style="width:160px"
+          class="model-select"
           @update:value="(v) => currentModel = v"
         />
         <span class="emp-meta">{{ empMeta }}</span>
-        <n-button size="small" @click="openTrace">🔎 执行过程</n-button>
+        <n-button quaternary class="execution-button" :aria-expanded="executionOpen" @click="toggleDrawer('execution')">执行详情</n-button>
+        <n-button size="small" class="trace-button" @click="openTrace">完整 Trace</n-button>
+        <n-button
+          quaternary
+          circle
+          class="layout-mode-button"
+          :aria-pressed="fullWidthMode"
+          :aria-label="fullWidthMode ? '切换到标准宽度模式' : '切换到全屏宽度模式'"
+          :title="fullWidthMode ? '切换到标准宽度' : '切换到全屏宽度'"
+          @click="toggleWidthMode"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path v-if="!fullWidthMode" d="M4 9V4h5M4 4l6 6M20 15v5h-5M20 20l-6-6M15 4h5v5M20 4l-6 6M9 20H4v-5M4 20l6-6" />
+            <path v-else d="M9 3v6H3M3 9l7-7M15 21v-6h6M21 15l-7 7M21 9h-6V3M15 3l7 7M3 15h6v6M9 21l-7-7" />
+          </svg>
+        </n-button>
       </div>
 
       <div class="msgs" ref="msgsRef">
+        <div class="message-lane">
         <ChatMessage
           v-for="(msg, idx) in messages" :key="idx"
           :msg="msg"
@@ -47,14 +95,19 @@
           @rate="submitRating"
           @approve="(id, midx) => decide(id, 'approve', midx)"
           @reject="(id, midx) => decide(id, 'reject', midx)"
+          @retry="retryMessage"
         />
+        </div>
       </div>
 
       <InputBar
         :disabled="stream.sending.value"
+        :sending="stream.sending.value"
         :uploading="uploading"
+        :full-width="fullWidthMode"
         :hint="hint"
         @send="onSend"
+        @stop="stream.stopActiveStream"
       />
     </div>
   </div>
@@ -63,6 +116,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useMessage } from 'naive-ui'
 import api from '../api.js'
 import { useChatStream } from '../composables/useChatStream.js'
 import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
@@ -74,6 +128,7 @@ import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.
 defineOptions({ name: 'ChatView' })
 const router = useRouter()
 const route = useRoute()
+const message = useMessage()
 
 /* ---------- 基础状态 ---------- */
 const employees = ref([])
@@ -81,12 +136,47 @@ const empNames = reactive({})
 const currentEmp = ref(null)
 const convId = ref(null)
 const convList = ref([])
+const historyQuery = ref('')
+const historyArchived = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyPage = ref(0)
+const historyTotal = ref(0)
+const HISTORY_PAGE_SIZE = 20
+const historyHasMore = computed(() => historyPage.value * HISTORY_PAGE_SIZE < historyTotal.value)
+let historyRequestSeq = 0
+let historySearchTimer = null
 const messages = ref([])
 const empMeta = ref('')
 const hint = ref('向数字员工提问吧。')
 const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
+const historyOpen = ref(false)
+const executionOpen = ref(false)
+const fullWidthMode = ref(false)
+try {
+  fullWidthMode.value = localStorage.getItem('uniemployee-chat-width-mode') === 'full'
+} catch {}
+
+function toggleWidthMode() {
+  fullWidthMode.value = !fullWidthMode.value
+  try {
+    localStorage.setItem('uniemployee-chat-width-mode', fullWidthMode.value ? 'full' : 'standard')
+  } catch {}
+}
+
+function closeDrawers() {
+  historyOpen.value = false
+  executionOpen.value = false
+}
+
+function toggleDrawer(which) {
+  const isOpen = which === 'history' ? historyOpen.value : executionOpen.value
+  closeDrawers()
+  if (!isOpen && which === 'history') historyOpen.value = true
+  if (!isOpen && which === 'execution') executionOpen.value = true
+}
 
 /* ---------- 模型选择 ---------- */
 const aiModels = ref([])
@@ -120,7 +210,7 @@ const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBotto
 /* ---------- 发送 / 审批 ---------- */
 const uploading = ref(false)
 
-async function onSend(text, files = []) {
+async function onSend(text, files = [], onAccepted = () => {}) {
   if (!convId.value) return
   let attachments = []
   if (files.length) {
@@ -142,7 +232,16 @@ async function onSend(text, files = []) {
     uploading.value = false
     if (!attachments.length) return
   }
-  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments, null, currentModel.value)
+  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments, null, currentModel.value, { onAccepted })
+  await loadHistory(currentEmp.value)
+}
+
+async function retryMessage(msg) {
+  const request = msg?._retryPayload
+  if (!request || stream.sending.value) return
+  const failedIndex = messages.value.indexOf(msg)
+  if (failedIndex >= 0) messages.value.splice(failedIndex, 1)
+  await stream.sendTo(request.endpoint, request.text, request.attachments, request.dataSource, request.model, { appendUser: false })
   await loadHistory(currentEmp.value)
 }
 
@@ -169,11 +268,71 @@ async function submitRating(msg, rating, idx, reason = '') {
 }
 
 /* ---------- 历史会话 ---------- */
-async function loadHistory(empId) {
+async function loadHistory(empId = currentEmp.value, append = false) {
+  if (!empId || (append && historyLoading.value)) return
+  const requestSeq = ++historyRequestSeq
+  const page = append ? historyPage.value + 1 : 1
+  if (!append) {
+    convList.value = []
+    historyTotal.value = 0
+  }
+  historyLoading.value = true
+  historyError.value = ''
   try {
-    const { data } = await api.get('/conversations', { params: { employee_id: empId, limit: 15 } })
-    convList.value = data || []
-  } catch {}
+    const { data } = await api.get('/conversations', {
+      params: {
+        employee_id: empId, page, page_size: HISTORY_PAGE_SIZE,
+        q: historyQuery.value.trim(), archived: historyArchived.value,
+      },
+    })
+    if (requestSeq !== historyRequestSeq) return
+    const items = data.items || []
+    if (append) {
+      const knownIds = new Set(convList.value.map(item => item.conv_id))
+      convList.value = [...convList.value, ...items.filter(item => !knownIds.has(item.conv_id))]
+    } else {
+      convList.value = items
+    }
+    historyPage.value = page
+    historyTotal.value = data.total || 0
+  } catch (e) {
+    if (requestSeq === historyRequestSeq) historyError.value = e.response?.data?.detail || '会话加载失败'
+  } finally {
+    if (requestSeq === historyRequestSeq) historyLoading.value = false
+  }
+}
+
+function onHistorySearch(value) {
+  historyQuery.value = value || ''
+  historyRequestSeq++
+  clearTimeout(historySearchTimer)
+  historyLoading.value = true
+  historySearchTimer = setTimeout(() => loadHistory(currentEmp.value), 300)
+}
+
+function onArchiveFilter(value) {
+  if (historyArchived.value === value) return
+  historyArchived.value = value
+  clearTimeout(historySearchTimer)
+  loadHistory(currentEmp.value)
+}
+
+function loadMoreHistory() {
+  if (historyHasMore.value) loadHistory(currentEmp.value, true)
+}
+
+async function updateConversationMeta(cid, changes) {
+  try {
+    await api.patch(`/conversations/${cid}`, changes)
+    if (changes.archived === true && cid === convId.value) {
+      await selectEmployee(currentEmp.value)
+    } else {
+      await loadHistory(currentEmp.value)
+    }
+    message.success(changes.title ? '会话已重命名' : changes.archived === true ? '会话已归档' : changes.archived === false ? '会话已移出归档' : changes.pinned ? '会话已置顶' : '已取消置顶')
+  } catch (e) {
+    message.error(e.response?.data?.detail || '会话操作失败，请稍后重试')
+  }
 }
 
 async function openConversation(cid) {
@@ -238,11 +397,15 @@ async function openConversation(cid) {
     }
     await loadHistory(data.employee_id)
     scrollToBottom()
+    closeDrawers()
   } catch {}
 }
 
 /* ---------- 员工切换 ---------- */
 async function selectEmployee(empId) {
+  historyQuery.value = ''
+  historyArchived.value = false
+  clearTimeout(historySearchTimer)
   currentEmp.value = empId
   hint.value = HINTS[empId] || '向数字员工提问吧。'
   // 切换员工时重置为默认模型
@@ -269,8 +432,11 @@ async function loadAiModels() {
   } catch {}
 }
 
-function newConv() {
-  if (currentEmp.value) selectEmployee(currentEmp.value)
+async function newConv() {
+  if (currentEmp.value) {
+    await selectEmployee(currentEmp.value)
+    closeDrawers()
+  }
 }
 
 function openTrace() {
@@ -311,24 +477,53 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(historySearchTimer)
+  historyRequestSeq++
   stream.abortActiveStream()
 })
 </script>
 
 <style scoped>
 .chat-layout {
+  position: relative;
   display: flex;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-header {
-  padding: 10px 16px;
+  min-height: 58px;
+  padding: 8px 20px;
   border-bottom: 1px solid #e2e8f0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   background: #ffffff;
 }
-.emp-meta { font-size: 12px; color: #64748b; flex: 1; }
-.msgs { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.chat-header :deep(svg) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.employee-select { width: 220px; flex: 0 0 auto; }
+.model-select { width: 170px; flex: 0 0 auto; }
+.emp-meta { font-size: 12px; color: #64748b; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgs { flex: 1; overflow-y: auto; padding: 28px clamp(24px, 4vw, 72px) 18px; min-height: 0; }
+.message-lane { width: min(100%, 1080px); margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.chat-layout.full-width-mode .message-lane { width: 100%; max-width: none; }
+.drawer-backdrop { position: absolute; inset: 0; z-index: 30; border: 0; background: rgba(15, 23, 42, 0.2); cursor: default; }
+
+@media (max-width: 900px) {
+  .chat-header { padding: 8px 12px; gap: 8px; }
+  .employee-select { width: 190px; }
+  .model-select { width: 140px; }
+  .msgs { padding: 20px 18px 14px; }
+  .emp-meta { display: none; }
+}
+
+@media (max-width: 640px) {
+  .chat-header { min-height: 54px; }
+  .employee-select { flex: 1 1 auto; width: auto; min-width: 0; }
+  .model-select, .execution-button, .trace-button, .layout-mode-button { display: none; }
+  .chat-header > :deep(.n-button) { flex-shrink: 0; }
+  .msgs { padding: 16px 12px 10px; }
+  .message-lane { gap: 8px; }
+}
 </style>
