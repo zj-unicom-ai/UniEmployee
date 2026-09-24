@@ -318,8 +318,8 @@ onBeforeUnmount(() => clearTimeout(searchTimer))
 }
 .heading-copy h1 { margin: 0; color: #15213a; font-size: 27px; font-weight: 650; letter-spacing: -.035em; }
 .heading-copy p { margin: 9px 0 0; color: #64748b; font-size: 13px; line-height: 1.6; }
-.heading-index { display: grid; grid-template-columns: auto auto; align-items: baseline; column-gap: 8px; color: #77839a; font-size: 11px; }
-.heading-index strong { grid-row: span 2; color: #384fbb; font: 600 30px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.06em; }
+.heading-index { display: flex; flex: 0 0 auto; align-items: baseline; gap: 8px; white-space: nowrap; color: #77839a; font-size: 11px; }
+.heading-index strong { color: #384fbb; font: 600 30px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.06em; }
 .heading-index small { font-size: 10px; }
 .artifact-controls { display: flex; align-items: center; gap: 10px; padding: 20px 0 16px; }
 .artifact-search { flex: 1; max-width: 560px; }
