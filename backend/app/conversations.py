@@ -374,12 +374,15 @@ def _artifact_access_filter(user_id: str, tenant_id: str, org_id: str | None,
 
 def list_workspace_artifacts(user_id: str, tenant_id: str, org_id: str | None,
                              *, role: str = "user", scope: str = "all", query: str = "",
-                             page: int = 1, page_size: int = 24) -> dict:
+                             page: int = 1, page_size: int = 24,
+                             show_scripts: bool = False) -> dict:
     """列出当前用户可见的产物；部门共享只授权文件，不授权源会话。"""
     page = max(1, int(page))
     page_size = min(100, max(1, int(page_size)))
     access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
     clauses = [access_filter]
+    if not show_scripts:
+        clauses.append("LOWER(f.name) NOT LIKE '%.py'")
     if scope == "mine":
         clauses.append("c.user_id=?")
         params.append(user_id)

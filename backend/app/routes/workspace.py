@@ -72,6 +72,7 @@ async def _ensure_private_snapshot(artifact: dict) -> dict:
 @router.get("/workspace/artifacts")
 async def list_workspace_artifacts(
     q: str = "", scope: str = "all", page: int = 1, page_size: int = 24,
+    show_scripts: bool = False,
     user: dict = Depends(auth.get_current_user),
 ):
     """列出我创建的产物和共享到我所在部门的产物。"""
@@ -80,7 +81,7 @@ async def list_workspace_artifacts(
     result = conversations.list_workspace_artifacts(
         user["id"], user.get("tenant_id", "default"), user.get("org_id"),
         role=user.get("role", "user"), scope=scope, query=q,
-        page=page, page_size=page_size,
+        page=page, page_size=page_size, show_scripts=show_scripts,
     )
     # 删除或迁移文件后，索引仍可能存在；工作区仅显示当前可打开的产物。
     visible = []

@@ -32,6 +32,14 @@
         aria-label="产物范围"
         @update:value="onScopeChange"
       />
+      <n-button
+        quaternary
+        aria-label="显示或隐藏 Python 执行脚本"
+        :aria-pressed="showScripts"
+        @click="toggleScriptsVisibility"
+      >
+        {{ showScripts ? '隐藏执行脚本' : '显示执行脚本' }}
+      </n-button>
       <n-button quaternary :loading="loading" aria-label="刷新产物" @click="loadArtifacts">
         <template #icon><span aria-hidden="true">↻</span></template>
         刷新
@@ -90,6 +98,7 @@
                 v-if="item.is_owner && item.conv_id"
                 size="small"
                 quaternary
+                :loading="openingConvId === item.artifact_id"
                 @click="openConversation(item)"
               >
                 打开对话
@@ -151,8 +160,10 @@ const page = ref(1)
 const pageSize = 24
 const scope = ref('all')
 const query = ref('')
+const showScripts = ref(false)
 const loading = ref(false)
 const sharingId = ref(null)
+const openingConvId = ref(null)
 const previewOpen = ref(false)
 const previewFile = ref(null)
 const scopeOptions = [
@@ -174,7 +185,13 @@ async function loadArtifacts() {
   loading.value = true
   try {
     const { data } = await api.get('/workspace/artifacts', {
-      params: { q: query.value, scope: scope.value, page: page.value, page_size: pageSize },
+      params: {
+        q: query.value,
+        scope: scope.value,
+        page: page.value,
+        page_size: pageSize,
+        show_scripts: showScripts.value,
+      },
     })
     if (seq !== requestSeq) return
     items.value = data.items || []
@@ -196,6 +213,12 @@ function onSearchChange() {
 
 function onScopeChange(value) {
   scope.value = value
+  page.value = 1
+  loadArtifacts()
+}
+
+function toggleScriptsVisibility() {
+  showScripts.value = !showScripts.value
   page.value = 1
   loadArtifacts()
 }
@@ -224,9 +247,24 @@ async function toggleDepartmentShare(item) {
   }
 }
 
-function openConversation(item) {
-  if (!item.conv_id || !item.employee_id) return
-  router.push({ name: routeNameForEmployee(item.employee_id), query: { conv: item.conv_id } })
+async function openConversation(item) {
+  if (!item.conv_id || !item.employee_id) {
+    message.warning('该产物没有可打开的关联对话')
+    return
+  }
+  openingConvId.value = item.artifact_id
+  const target = { name: routeNameForEmployee(item.employee_id), query: { conv: item.conv_id } }
+  try {
+    const targetPath = router.resolve(target).fullPath
+    await router.push(target)
+    if (router.currentRoute.value.fullPath !== targetPath) {
+      message.error('对话页面未成功打开，请刷新后重试')
+    }
+  } catch (error) {
+    message.error(error?.message || '打开对话失败，请稍后重试')
+  } finally {
+    openingConvId.value = null
+  }
 }
 
 function extension(name) { return (name || '').split('.').pop().toLowerCase() }
