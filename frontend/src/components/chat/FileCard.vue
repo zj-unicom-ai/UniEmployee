@@ -1,4 +1,4 @@
-<!-- 会话产物文件卡片：数字员工生成的 Word 方案/纪要/CSV 等文件，支持下载与文本类预览 -->
+<!-- 会话产物文件卡片：支持 HTML 看板、DOCX 和文本类文件预览及下载 -->
 <template>
   <div class="file-card">
     <div class="file-row">
@@ -9,6 +9,9 @@
       </div>
       <n-button v-if="previewable" size="tiny" @click="togglePreview">
         {{ showPreview ? '收起预览' : '预览' }}
+      </n-button>
+      <n-button v-if="isDocx" size="tiny" @click="toggleDocxPreview">
+        {{ showDocxPreview ? '收起文档' : '预览文档' }}
       </n-button>
       <n-button v-if="isHtml" size="tiny" type="primary" @click="toggleHtmlPreview">
         {{ showHtmlPreview ? '收起看板' : '打开看板' }}
@@ -24,15 +27,24 @@
       </div>
       <ReportViewer v-else-if="reportHtml" :html="reportHtml" />
     </div>
+    <div v-if="isDocx && showDocxPreview" class="docx-preview">
+      <div v-if="loadingDocx" class="html-preview-state">正在加载文档…</div>
+      <div v-else-if="docxError" class="html-preview-state html-preview-error">
+        {{ docxError }}
+        <n-button size="tiny" @click="loadDocxPreview">重试</n-button>
+      </div>
+      <DocumentPreview v-else-if="docxHtml" :html="docxHtml" :title="file.name" />
+    </div>
   </div>
 </template>
 
 <script setup>
 // 产物文件优先按 artifact_id 访问受 ACL 控制的文件端点；旧消息仍走 path 兼容入口。
-// HTML 看板自动以内嵌沙箱预览；文本类文件可展开预览，其他文件可下载。
-import { computed, onMounted, ref } from 'vue'
+// HTML 看板和 DOCX 可在线预览，文本类文件可展开预览，其他文件可下载。
+import { computed, ref, watch } from 'vue'
 import api from '../../api.js'
 import ReportViewer from '../agent/analyst/ReportViewer.vue'
+import DocumentPreview from './DocumentPreview.vue'
 
 const props = defineProps({ file: { type: Object, required: true } })
 
@@ -44,9 +56,16 @@ const showHtmlPreview = ref(false)
 const loadingHtml = ref(false)
 const htmlError = ref('')
 const reportHtml = ref('')
+const showDocxPreview = ref(false)
+const loadingDocx = ref(false)
+const docxError = ref('')
+const docxHtml = ref('')
+const requestSeq = ref(0)
+let previewController = null
 
 const ext = computed(() => (props.file.name || '').split('.').pop().toLowerCase())
 const isHtml = computed(() => ext.value === 'html' || ext.value === 'htm')
+const isDocx = computed(() => ext.value === 'docx')
 const icon = computed(() => {
   if (isHtml.value) return '📊'
   if (ext.value === 'docx' || ext.value === 'doc') return '📄'
@@ -63,11 +82,12 @@ const sizeText = computed(() => {
   return s + ' B'
 })
 
-function fileEndpoint() {
+function fileEndpoint(preview = false) {
   if (props.file.artifact_id) {
-    return { url: `/workspace/artifacts/${encodeURIComponent(props.file.artifact_id)}/file`, params: {} }
+    const suffix = preview ? '/preview' : '/file'
+    return { url: `/workspace/artifacts/${encodeURIComponent(props.file.artifact_id)}${suffix}`, params: {} }
   }
-  return { url: '/workspace/file', params: { path: props.file.path } }
+  return { url: preview ? '/workspace/preview' : '/workspace/file', params: { path: props.file.path } }
 }
 
 async function download() {
@@ -107,8 +127,23 @@ async function togglePreview() {
   }
 }
 
+function errorMessage(error, fallback) {
+  const data = error?.response?.data
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data)
+      if (parsed.detail) return parsed.detail
+    } catch {}
+    if (data.trim()) return data.slice(0, 160)
+  }
+  return data?.detail || error?.message || fallback
+}
+
 async function loadHtmlPreview() {
-  if (loadingHtml.value) return
+  previewController?.abort()
+  const controller = new AbortController()
+  previewController = controller
+  const seq = ++requestSeq.value
   loadingHtml.value = true
   htmlError.value = ''
   try {
@@ -116,13 +151,45 @@ async function loadHtmlPreview() {
     const res = await api.get(endpoint.url, {
       params: endpoint.params,
       responseType: 'text',
+      timeout: 30000,
+      signal: controller.signal,
     })
+    if (seq !== requestSeq.value) return
     reportHtml.value = typeof res.data === 'string' ? res.data : ''
     if (!reportHtml.value.trim()) htmlError.value = '看板内容为空'
   } catch (e) {
-    htmlError.value = '看板加载失败：' + (e.response?.data?.detail || e.message)
+    if (seq === requestSeq.value && e.code !== 'ERR_CANCELED') {
+      htmlError.value = '看板加载失败：' + errorMessage(e, '请稍后重试')
+    }
   } finally {
-    loadingHtml.value = false
+    if (seq === requestSeq.value) loadingHtml.value = false
+  }
+}
+
+async function loadDocxPreview() {
+  previewController?.abort()
+  const controller = new AbortController()
+  previewController = controller
+  const seq = ++requestSeq.value
+  loadingDocx.value = true
+  docxError.value = ''
+  try {
+    const endpoint = fileEndpoint(true)
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
+      responseType: 'text',
+      timeout: 30000,
+      signal: controller.signal,
+    })
+    if (seq !== requestSeq.value) return
+    docxHtml.value = typeof res.data === 'string' ? res.data : ''
+    if (!docxHtml.value.trim()) docxError.value = '文档内容为空'
+  } catch (e) {
+    if (seq === requestSeq.value && e.code !== 'ERR_CANCELED') {
+      docxError.value = '文档加载失败：' + errorMessage(e, '请稍后重试')
+    }
+  } finally {
+    if (seq === requestSeq.value) loadingDocx.value = false
   }
 }
 
@@ -131,12 +198,26 @@ function toggleHtmlPreview() {
   if (showHtmlPreview.value && !reportHtml.value) loadHtmlPreview()
 }
 
-onMounted(() => {
-  if (isHtml.value) {
-    showHtmlPreview.value = true
-    loadHtmlPreview()
-  }
-})
+function toggleDocxPreview() {
+  showDocxPreview.value = !showDocxPreview.value
+  if (showDocxPreview.value && !docxHtml.value) loadDocxPreview()
+}
+
+watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|'), () => {
+  previewController?.abort()
+  requestSeq.value += 1
+  showPreview.value = false
+  previewText.value = ''
+  reportHtml.value = ''
+  htmlError.value = ''
+  loadingHtml.value = false
+  docxHtml.value = ''
+  docxError.value = ''
+  loadingDocx.value = false
+  showDocxPreview.value = false
+  showHtmlPreview.value = isHtml.value
+  if (isHtml.value) loadHtmlPreview()
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -181,6 +262,7 @@ onMounted(() => {
   word-break: break-all;
 }
 .html-preview { margin-top: 8px; }
+.docx-preview { margin-top: 8px; }
 .html-preview-state { display: flex; align-items: center; gap: 8px; min-height: 48px; color: #64748b; font-size: 12px; }
 .html-preview-error { color: #b91c1c; }
 </style>
