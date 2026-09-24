@@ -1,4 +1,4 @@
-<!-- 会话产物文件卡片：支持 HTML 看板、DOCX 和文本类文件预览及下载 -->
+<!-- 会话产物文件卡片：HTML、DOCX 与 Markdown 默认展开预览，其他文本按需预览 -->
 <template>
   <div class="file-card">
     <div class="file-row">
@@ -18,7 +18,14 @@
       </n-button>
       <n-button size="tiny" type="primary" :loading="downloading" @click="download">下载</n-button>
     </div>
-    <pre v-if="showPreview" class="file-preview">{{ previewText }}</pre>
+    <div v-if="showPreview" class="text-preview">
+      <div v-if="loadingText" class="html-preview-state">正在加载文件…</div>
+      <div v-else-if="textError" class="html-preview-state html-preview-error">
+        {{ textError }}
+        <n-button size="tiny" @click="loadTextPreview">重试</n-button>
+      </div>
+      <pre v-else class="file-preview">{{ previewText }}</pre>
+    </div>
     <div v-if="isHtml && showHtmlPreview" class="html-preview">
       <div v-if="loadingHtml" class="html-preview-state">正在加载看板…</div>
       <div v-else-if="htmlError" class="html-preview-state html-preview-error">
@@ -40,7 +47,7 @@
 
 <script setup>
 // 产物文件优先按 artifact_id 访问受 ACL 控制的文件端点；旧消息仍走 path 兼容入口。
-// HTML 看板和 DOCX 可在线预览，文本类文件可展开预览，其他文件可下载。
+// HTML 看板、DOCX 和 Markdown 默认展开预览；其他文本类文件可按需展开。
 import { computed, ref, watch } from 'vue'
 import api from '../../api.js'
 import ReportViewer from '../agent/analyst/ReportViewer.vue'
@@ -52,6 +59,9 @@ const PREVIEW_EXTS = ['md', 'txt', 'csv', 'log', 'json']
 const downloading = ref(false)
 const showPreview = ref(false)
 const previewText = ref('')
+const textLoaded = ref(false)
+const loadingText = ref(false)
+const textError = ref('')
 const showHtmlPreview = ref(false)
 const loadingHtml = ref(false)
 const htmlError = ref('')
@@ -113,17 +123,33 @@ async function download() {
 
 async function togglePreview() {
   showPreview.value = !showPreview.value
-  if (showPreview.value && !previewText.value) {
-    try {
-      const endpoint = fileEndpoint()
-      const res = await api.get(endpoint.url, {
-        params: endpoint.params,
-        responseType: 'text',
-      })
-      previewText.value = res.data
-    } catch (e) {
-      previewText.value = '（预览加载失败）'
+  if (showPreview.value && !textLoaded.value) loadTextPreview()
+}
+
+async function loadTextPreview() {
+  previewController?.abort()
+  const controller = new AbortController()
+  previewController = controller
+  const seq = ++requestSeq.value
+  loadingText.value = true
+  textError.value = ''
+  try {
+    const endpoint = fileEndpoint()
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
+      responseType: 'text',
+      timeout: 30000,
+      signal: controller.signal,
+    })
+    if (seq !== requestSeq.value) return
+    previewText.value = typeof res.data === 'string' ? res.data : ''
+    textLoaded.value = true
+  } catch (e) {
+    if (seq === requestSeq.value && e.code !== 'ERR_CANCELED') {
+      textError.value = '文件预览失败：' + errorMessage(e, '请稍后重试')
     }
+  } finally {
+    if (seq === requestSeq.value) loadingText.value = false
   }
 }
 
@@ -206,8 +232,11 @@ function toggleDocxPreview() {
 watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|'), () => {
   previewController?.abort()
   requestSeq.value += 1
-  showPreview.value = false
+  showPreview.value = ext.value === 'md'
   previewText.value = ''
+  textLoaded.value = false
+  loadingText.value = false
+  textError.value = ''
   reportHtml.value = ''
   htmlError.value = ''
   loadingHtml.value = false
@@ -216,7 +245,8 @@ watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|')
   loadingDocx.value = false
   showHtmlPreview.value = isHtml.value
   showDocxPreview.value = isDocx.value
-  if (isHtml.value) loadHtmlPreview()
+  if (ext.value === 'md') loadTextPreview()
+  else if (isHtml.value) loadHtmlPreview()
   else if (isDocx.value) loadDocxPreview()
 }, { immediate: true })
 </script>
