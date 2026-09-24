@@ -214,9 +214,10 @@ watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|')
   docxHtml.value = ''
   docxError.value = ''
   loadingDocx.value = false
-  showDocxPreview.value = false
   showHtmlPreview.value = isHtml.value
+  showDocxPreview.value = isDocx.value
   if (isHtml.value) loadHtmlPreview()
+  else if (isDocx.value) loadDocxPreview()
 }, { immediate: true })
 </script>
 
