@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS conversation_files (
     path TEXT NOT NULL,
     size INTEGER DEFAULT 0,
     turn_no INTEGER,
+    artifact_type TEXT DEFAULT 'file',
     created_at TEXT,
     UNIQUE(conv_id, path)
 );
@@ -138,6 +139,8 @@ def _migrate(con):
     fcols = dblayer.table_columns(con, "conversation_files")
     if fcols and "turn_no" not in fcols:
         con.execute("ALTER TABLE conversation_files ADD COLUMN turn_no INTEGER")
+    if fcols and "artifact_type" not in fcols:
+        con.execute("ALTER TABLE conversation_files ADD COLUMN artifact_type TEXT DEFAULT 'file'")
     con.execute("CREATE INDEX IF NOT EXISTS idx_files_conv_created "
                 "ON conversation_files(conv_id, created_at)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_artifact_shares_org "
@@ -327,7 +330,7 @@ def get(conv_id: str) -> dict | None:
 
 
 def add_file(conv_id: str, name: str, path: str, size: int = 0,
-             turn_no: int | None = None) -> int | None:
+             turn_no: int | None = None, artifact_type: str = "file") -> int | None:
     """登记回合产物文件（SSE file 事件同步落库，历史会话恢复时可见）。
 
     turn_no 为归属的用户轮次（1-based），历史恢复时把文件挂回生成它的那条回答。
@@ -338,8 +341,9 @@ def add_file(conv_id: str, name: str, path: str, size: int = 0,
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with _conn() as con:
             con.execute(
-                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,turn_no,created_at) "
-                "VALUES(?,?,?,?,?,?)", (conv_id, name, path, size, turn_no, now))
+                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,turn_no,artifact_type,created_at) "
+                "VALUES(?,?,?,?,?,?,?)", (conv_id, name, path, size, turn_no,
+                                           artifact_type or "file", now))
             row = con.execute(
                 "SELECT id FROM conversation_files WHERE conv_id=? AND path=?",
                 (conv_id, path)).fetchone()
@@ -354,7 +358,7 @@ def list_files(conv_id: str) -> list[dict]:
     try:
         with _conn() as con:
             rows = con.execute(
-                "SELECT id AS artifact_id,conv_id,name,path,size,turn_no,created_at FROM conversation_files "
+                "SELECT id AS artifact_id,conv_id,name,path,size,turn_no,artifact_type,created_at FROM conversation_files "
                 "WHERE conv_id=? ORDER BY id DESC", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
@@ -409,7 +413,7 @@ def list_workspace_artifacts(user_id: str, tenant_id: str, org_id: str | None,
             f"WHERE {where}", params).fetchone()[0]
         offset = (page - 1) * page_size
         rows = con.execute(
-            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.artifact_type,f.created_at, "
             "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id, "
             "CASE WHEN s.org_id IS NOT NULL THEN 1 ELSE 0 END AS shared_with_department, "
             "CASE WHEN c.user_id=? THEN 1 ELSE 0 END AS is_owner "
@@ -429,7 +433,7 @@ def list_workspace_artifacts(user_id: str, tenant_id: str, org_id: str | None,
 def get_artifact(artifact_id: int) -> dict | None:
     with _conn() as con:
         row = con.execute(
-            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.artifact_type,f.created_at, "
             "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
             "s.org_id AS shared_org_id "
             "FROM conversation_files f JOIN conversations c ON c.conv_id=f.conv_id "

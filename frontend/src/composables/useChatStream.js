@@ -151,7 +151,8 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.files) msg.files = []
       if (!msg.files.some(f => f.path === ev.path)) {
         msg.files.push({ artifact_id: ev.artifact_id, conv_id: ev.conv_id,
-          name: ev.name, path: ev.path, size: ev.size })
+          name: ev.name, path: ev.path, size: ev.size,
+          artifact_type: ev.artifact_type || 'file' })
       }
       touch()
     } else if (ev.type === 'subagent') {

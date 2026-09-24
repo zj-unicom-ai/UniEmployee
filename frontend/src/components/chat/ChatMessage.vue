@@ -113,9 +113,15 @@ emit: rated(msg, rating, reason)
         </div>
       </div>
 
-      <!-- 产物文件（数字员工生成的 Word/纪要/CSV 等，可下载/预览） -->
-      <div v-if="msg.files && msg.files.length" class="file-list">
-        <FileCard v-for="f in msg.files" :key="f.path" :file="f" />
+      <div v-if="inlineReports.length" class="report-archive-note" role="status">
+        <span class="archive-mark" aria-hidden="true">✓</span>
+        <span>{{ inlineReports.length }} 份 HTML 看板已归档到产物工作区</span>
+        <n-button size="tiny" text @click="openArtifactWorkspace">查看工作区 ↗</n-button>
+      </div>
+
+      <!-- 其他会话产物（文档、表格、脚本等） -->
+      <div v-if="regularFiles.length" class="file-list">
+        <FileCard v-for="f in regularFiles" :key="f.path" :file="f" />
       </div>
 
       <!-- 审批卡片 -->
@@ -135,7 +141,8 @@ emit: rated(msg, rating, reason)
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import ReasonPopover from './ReasonPopover.vue'
 import FileCard from './FileCard.vue'
@@ -150,6 +157,13 @@ defineEmits(['rate', 'approve', 'reject', 'retry'])
 const showReason = ref(false)
 const reasonSelected = ref(null)
 const feedback = useMessage()
+const router = useRouter()
+const inlineReports = computed(() => (props.msg.files || []).filter(f => f.artifact_type === 'inline_report'))
+const regularFiles = computed(() => (props.msg.files || []).filter(f => f.artifact_type !== 'inline_report'))
+
+function openArtifactWorkspace() {
+  router.push({ name: 'artifacts' })
+}
 
 function closeReason() {
   showReason.value = false
@@ -186,6 +200,9 @@ function subagentStatusText(status) {
 .user-wrapper { align-self: stretch; align-items: flex-end; }
 .bot-wrapper { width: 100%; max-width: 100%; align-self: stretch; align-items: flex-start; position: relative; }
 .file-list { width: 100%; max-width: 100%; align-self: stretch; min-width: 0; }
+.report-archive-note { display: flex; align-items: center; gap: 8px; margin: 7px 0 2px; padding: 7px 10px; border: 1px solid #e6e9f3; border-radius: 9px; background: #fafbfe; color: #6c7488; font-size: 11px; }
+.archive-mark { display: grid; width: 16px; height: 16px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #e7f5ed; color: #36875b; font-size: 10px; }
+.report-archive-note :deep(.n-button) { margin-left: auto; color: #6558bf; }
 .msg { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.7; word-break: break-word; animation: msg-in 0.25s ease-out; }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }

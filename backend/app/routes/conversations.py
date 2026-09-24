@@ -1,4 +1,5 @@
 """对话 / 消息 / 追踪 / 审批 路由。"""
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -9,6 +10,7 @@ from app import attachments, auth, runtime, approvals, conversations, catalog, t
 from app.models import MessageIn, DecisionIn, ConversationUpdateIn
 from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
 from app.streaming import conv_tenant_map
+from app.report_artifacts import archive_assistant_reports
 
 logger = logging.getLogger("app.routes.conversations")
 
@@ -129,6 +131,9 @@ async def get_conv(conv_id: str, context=Depends(auth.get_auth_context)):
     states = [s async for s in agent.aget_state_history(
         {"configurable": {"thread_id": conv_id}}, limit=1)]
     msgs = states[0].values.get("messages", []) if states else []
+    # 读取历史对话时补登记旧版内嵌看板，避免只有新生成的报告才进入工作区。
+    await asyncio.to_thread(archive_assistant_reports, msgs,
+                            meta.get("user_id") or "default", conv_id)
     return {
         "employee_id": emp,
         "title": meta["title"],

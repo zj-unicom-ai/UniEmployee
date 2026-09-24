@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 
 from app import runtime, traces, catalog, approvals, conversations, guard
 from app.artifact_storage import snapshot_artifact
+from app.report_artifacts import archive_inline_reports
 from app import db as dblayer
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
@@ -621,6 +622,13 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                                 sub_name = args["subagent_type"]
                                 pending_subagents[tc.get("id", "")] = sub_name
                                 yield sse({"type": "subagent", "name": sub_name, "status": "started"})
+        # 助手可将 HTML 看板直接内嵌在回复中。归档为受控 HTML 文件，
+        # 让它同时保留对话内预览和产物工作区的下载/共享能力。
+        inline_reports = await asyncio.to_thread(
+            archive_inline_reports, bot_text, user_id, conv_id, turn_no)
+        for report in inline_reports:
+            yield sse({"type": "file", **report, "conv_id": conv_id,
+                       "artifact_type": "inline_report"})
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
         # 输出敏感词检测：记录日志供审计（不打断已完成回复）

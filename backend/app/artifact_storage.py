@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 logger = logging.getLogger("app.artifact_storage")
+MAX_ARTIFACT_SIZE = 100 * 1024 * 1024
 
 
 def snapshot_artifact(workspace_root: Path, user_id: str, conv_id: str,
