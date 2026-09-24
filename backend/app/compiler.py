@@ -668,10 +668,10 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     )
 
     stage_meta = [
-        {"stage": "employee", "status": "done",
+        {"stage": "employee", "status": "configured",
          "detail_text": f"{spec.name}（{spec.role}）· {spec.model} · 工具 {len(tool_names)} 个"},
-        {"stage": "sop", "status": "done", "detail_text": sop_detail},
-        {"stage": "skills", "status": "done",
+        {"stage": "sop", "status": "configured", "detail_text": sop_detail},
+        {"stage": "skills", "status": "configured",
          "detail_text": "\n".join(f"· {s['name']}" for s in skill_summaries) or "（无）"},
     ]
     return agent, stage_meta, mcp_client

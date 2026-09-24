@@ -14,6 +14,8 @@ import time
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations, guard
+from app.artifact_storage import snapshot_artifact
+from app.report_artifacts import archive_inline_reports
 from app import db as dblayer
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
@@ -353,7 +355,7 @@ def first_message_text(input_) -> str:
 class _WorkspaceFileWatcher:
     """探测 workspace/data 下回合内新增/修改的产物文件，供 SSE 推 file 事件。
 
-    数字员工经 execute/write_file 生成的 Word/纪要/CSV 等产物，此前只以文本路径
+    数字员工经 execute/write_file/generate_solution_doc 生成的 Word/纪要/CSV 等产物，此前只以文本路径
     出现在回答里，前端无法下载或预览。快照-对比目录（排除 uploads/ 与隐藏文件、
     超大与超量截断），由 _stream_run 在文件型工具完成后推 {"type":"file", ...}，
     前端渲染为可下载/可预览的文件卡片。
@@ -371,20 +373,32 @@ class _WorkspaceFileWatcher:
     def _scan(self) -> dict[str, float]:
         out: dict[str, float] = {}
         root = WORKSPACE_DATA
-        scan_root = root / self.user_id if self.user_id else root
-        try:
-            for p in scan_root.rglob("*"):
-                if not p.is_file():
-                    continue
-                rel = p.relative_to(root)
-                if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
-                    continue
-                try:
-                    out[rel.as_posix()] = p.stat().st_mtime
-                except OSError:
-                    continue
-        except OSError:
-            pass
+        # 本地 shell 员工可能把产物直接写到 workspace/data 根目录；
+        # 扫描根级文件，后续登记时会复制到创建者私有快照，并只递归当前用户目录。
+        scan_roots = [root / self.user_id] if self.user_id else [root]
+        if self.user_id:
+            try:
+                for p in root.iterdir():
+                    if p.is_file() and not p.is_symlink() and not p.name.startswith("."):
+                        out[p.relative_to(root).as_posix()] = p.stat().st_mtime
+            except OSError:
+                pass
+        for scan_root in scan_roots:
+            try:
+                for p in scan_root.rglob("*"):
+                    if not p.is_file():
+                        continue
+                    if p.is_symlink():
+                        continue
+                    rel = p.relative_to(root)
+                    if any(part in self.EXCLUDE_PARTS or part.startswith(".") for part in rel.parts):
+                        continue
+                    try:
+                        out[rel.as_posix()] = p.stat().st_mtime
+                    except OSError:
+                        continue
+            except OSError:
+                pass
         return out
 
     def snapshot(self) -> None:
@@ -484,7 +498,6 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)) + 1
     except Exception:
         turn_no = None
-    skill_stage_on = False
     bot_text = ""
 
     # 数据分析专家桥接：把 conv_id 注入工具执行上下文，
@@ -569,7 +582,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 透传工具真实执行状态：LangGraph 会把工具异常包装为
                         # status='error' 的 ToolMessage，前端据此显示失败标记。
                         tool_status = "error" if getattr(m, "status", None) == "error" else "end"
-                        yield sse({"type": "tool", "name": name, "args": {}, "status": tool_status,
+                        yield sse({"type": "tool", "id": getattr(m, "tool_call_id", "") or "",
+                                   "name": name, "args": {}, "status": tool_status,
                                    "preview": preview})
                         # 数据分析专家：sql_db_query / file_table_query 工具执行后，
                         # 从会话缓冲取出 SQL 文本发 sql SSE 事件，让前端 SqlViewer 渲染。
@@ -578,17 +592,23 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name in ("sql_db_query", "file_table_query") and _ANALYST_HOOK:
                             for item in analyst_pop_query_results(conv_id):
                                 yield sse({"type": "sql", "sql": item.get("sql", "")})
-                        # 产物文件探测：write_file/execute/edit_file/run_python 之后
+                        # 产物文件探测：文件型工具完成后
                         # 对比 workspace/data 快照，把新增/修改的产物推 file 事件，
                         # 前端渲染成可下载卡片（此前只以文本路径出现在回答里，无法下载）。
                         # 同步落库 conversation_files：file 事件是即时推送，
                         # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python",
-                                    "publish_briefing"):
+                                    "publish_briefing", "generate_solution_doc"):
                             for f in file_watcher.diff():
-                                conversations.add_file(conv_id, f["name"], f["path"],
-                                                       f.get("size", 0), turn_no)
-                                yield sse({"type": "file", **f, "turn_no": turn_no})
+                                f = await asyncio.to_thread(
+                                    snapshot_artifact, WORKSPACE_DATA, user_id,
+                                    conv_id, turn_no, f)
+                                if not f:
+                                    continue
+                                artifact_id = conversations.add_file(
+                                    conv_id, f["name"], f["path"], f.get("size", 0), turn_no)
+                                yield sse({"type": "file", **f, "artifact_id": artifact_id,
+                                           "conv_id": conv_id, "turn_no": turn_no})
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,
@@ -596,20 +616,19 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                     elif getattr(m, "tool_calls", None):
                         for tc in m.tool_calls:
                             name, args = tc.get("name", ""), tc.get("args", {})
-                            yield sse({"type": "tool", "name": name, "args": args, "status": "start"})
+                            yield sse({"type": "tool", "id": tc.get("id", ""),
+                                       "name": name, "args": args, "status": "start"})
                             if name == "task" and isinstance(args, dict) and args.get("subagent_type"):
                                 sub_name = args["subagent_type"]
                                 pending_subagents[tc.get("id", "")] = sub_name
                                 yield sse({"type": "subagent", "name": sub_name, "status": "started"})
-                            if not skill_stage_on:
-                                skill_stage_on = True
-                                yield sse({"type": "stage", "stage": "skill", "status": "active",
-                                           "detail_text": f"调用 {name}"})
-                            if "SKILL.md" in json.dumps(args, ensure_ascii=False):
-                                skill_name = re.search(r"skills/([^/]+)/SKILL\.md", json.dumps(args))
-                                yield sse({"type": "stage", "stage": "skill", "status": "active",
-                                           "detail_text": f"激活技能：{skill_name.group(1) if skill_name else ''}"})
-
+        # 助手可将 HTML 看板直接内嵌在回复中。归档为受控 HTML 文件，
+        # 让它同时保留对话内预览和产物工作区的下载/共享能力。
+        inline_reports = await asyncio.to_thread(
+            archive_inline_reports, bot_text, user_id, conv_id, turn_no)
+        for report in inline_reports:
+            yield sse({"type": "file", **report, "conv_id": conv_id,
+                       "artifact_type": "inline_report"})
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
         # 输出敏感词检测：记录日志供审计（不打断已完成回复）
@@ -621,7 +640,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                           user_id=user_id, employee_id=emp_id, conversation_id=conv_id,
                           extra={"word": hit["word"], "category": hit["category"],
                                  "preview": bot_text[:300]})
-        yield sse({"type": "stage", "stage": "report", "status": "done"})
+        yield sse({"type": "stage", "stage": "report", "status": "done",
+                   "detail_text": "运行已结束"})
         yield sse({"type": "message_end", "message_id": trace_run_id,
                     "run_id": trace_run_id, "employee_id": emp_id,
                     "conversation_id": conv_id})

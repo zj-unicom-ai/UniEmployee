@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     preview      TEXT DEFAULT '',
     message_count INTEGER DEFAULT 0,
     model        TEXT,
+    pinned       INTEGER DEFAULT 0,
+    archived_at  TEXT,
+    title_locked INTEGER DEFAULT 0,
     created_at   TEXT,
     updated_at   TEXT
 );
@@ -60,8 +63,23 @@ CREATE TABLE IF NOT EXISTS conversation_files (
     path TEXT NOT NULL,
     size INTEGER DEFAULT 0,
     turn_no INTEGER,
+    artifact_type TEXT DEFAULT 'file',
     created_at TEXT,
     UNIQUE(conv_id, path)
+);
+CREATE TABLE IF NOT EXISTS artifact_shares (
+    artifact_id INTEGER PRIMARY KEY,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    org_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_path_aliases (
+    artifact_id INTEGER NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(artifact_id, path)
 );
 """
 
@@ -109,10 +127,26 @@ def _migrate(con):
     # 会话级模型绑定：补 model 列
     if "model" not in cols:
         con.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
+    if "pinned" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN pinned INTEGER DEFAULT 0")
+    if "archived_at" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
+    if "title_locked" not in cols:
+        con.execute("ALTER TABLE conversations ADD COLUMN title_locked INTEGER DEFAULT 0")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_conv_owner_archive "
+                "ON conversations(tenant_id, user_id, archived_at, pinned, updated_at)")
     # 会话产物文件：turn_no 归属轮次（老表补列）
     fcols = dblayer.table_columns(con, "conversation_files")
     if fcols and "turn_no" not in fcols:
         con.execute("ALTER TABLE conversation_files ADD COLUMN turn_no INTEGER")
+    if fcols and "artifact_type" not in fcols:
+        con.execute("ALTER TABLE conversation_files ADD COLUMN artifact_type TEXT DEFAULT 'file'")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_files_conv_created "
+                "ON conversation_files(conv_id, created_at)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_artifact_shares_org "
+                "ON artifact_shares(tenant_id, org_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_artifact_path_aliases_path "
+                "ON artifact_path_aliases(tenant_id, path)")
     con.commit()
 
 
@@ -176,7 +210,7 @@ def touch(conv_id: str, *, title: str | None = None, preview: str | None = None,
 
 
 def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, exclude_channel=False,
-           exclude_auto=False):
+           exclude_auto=False, archived: bool | None = None, query: str = ""):
     sql = "WHERE deleted_at IS NULL"; params = []
     if employee_id: sql += " AND employee_id=?"; params.append(employee_id)
     if user_id: sql += " AND user_id=?"; params.append(user_id)
@@ -186,6 +220,15 @@ def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, excl
     # exclude_auto：过滤自动任务会话（c_auto_ 前缀），用于员工专属会话页（如数据问数）
     # 避免把"定时获取资讯/退款事件处理"等自动任务会话混入员工历史列表。
     if exclude_auto: sql += " AND conv_id NOT LIKE 'c_auto_%'"
+    if archived is True: sql += " AND archived_at IS NOT NULL"
+    if archived is False: sql += " AND archived_at IS NULL"
+    term = query.strip().lower()[:100]
+    if term:
+        # LIKE 中的用户输入按字面匹配；! 用作 SQLite/PostgreSQL 通用的转义字符。
+        pattern = "%" + term.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+        sql += " AND (LOWER(COALESCE(title,'')) LIKE ? ESCAPE '!' "
+        sql += "OR LOWER(COALESCE(preview,'')) LIKE ? ESCAPE '!')"
+        params.extend((pattern, pattern))
     return sql, params
 
 
@@ -198,8 +241,8 @@ def list_for(employee_id: str | None = None, user_id: str | None = None,
     """
     with _conn() as con:
         wh, params = _where(employee_id, user_id, tenant_id, exclude_channel=True,
-                            exclude_auto=exclude_auto)
-        sql = f"SELECT * FROM conversations {wh} ORDER BY updated_at DESC, created_at DESC, conv_id DESC"
+                            exclude_auto=exclude_auto, archived=False)
+        sql = f"SELECT * FROM conversations {wh} ORDER BY pinned DESC, updated_at DESC, created_at DESC, conv_id DESC"
         if limit:
             sql += " LIMIT ?"; params.append(limit)
         rows = con.execute(sql, params).fetchall()
@@ -219,13 +262,16 @@ def list_for_channel(channel_id: str, user_id: str | None = None,
 
 
 def list_paged(employee_id: str | None = None, user_id: str | None = None,
-               page: int = 1, page_size: int = 10, tenant_id: str | None = None) -> dict:
+               page: int = 1, page_size: int = 10, tenant_id: str | None = None,
+               query: str = "", archived: bool = False, exclude_auto: bool = False) -> dict:
     """分页会话清单，返回 {items, total, page, page_size}。"""
     page = max(1, page)
+    page_size = min(max(1, page_size), 100)
     with _conn() as con:
-        sql, params = _where(employee_id, user_id, tenant_id, exclude_channel=True)
+        sql, params = _where(employee_id, user_id, tenant_id, exclude_channel=True,
+                             exclude_auto=exclude_auto, archived=archived, query=query)
         total = con.execute(f"SELECT COUNT(*) FROM conversations {sql}", params).fetchone()[0]
-        full = f"SELECT * FROM conversations {sql} ORDER BY updated_at DESC, created_at DESC, conv_id DESC LIMIT ? OFFSET ?"
+        full = f"SELECT * FROM conversations {sql} ORDER BY pinned DESC, updated_at DESC, created_at DESC, conv_id DESC LIMIT ? OFFSET ?"
         rows = con.execute(full, params + [page_size, (page - 1) * page_size]).fetchall()
     return {"items": [dict(r) for r in rows], "total": total,
             "page": page, "page_size": page_size, "pages": (total + page_size - 1) // page_size}
@@ -235,8 +281,37 @@ def set_title(conv_id: str, title: str):
     """强制更新会话标题（用于 AI 提炼标题覆盖首句截断）。"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     with _conn() as con:
-        con.execute("UPDATE conversations SET title=?, updated_at=? WHERE conv_id=?",
+        con.execute("UPDATE conversations SET title=?, updated_at=? "
+                    "WHERE conv_id=? AND COALESCE(title_locked,0)=0",
                     (title[:40], now, conv_id))
+
+
+def update_metadata(conv_id: str, *, title: str | None = None,
+                    pinned: bool | None = None, archived: bool | None = None) -> dict | None:
+    """更新用户可管理的会话属性；手动标题不再被异步 AI 标题覆盖。"""
+    values = []
+    params = []
+    if title is not None:
+        clean_title = title.strip()
+        if not clean_title or len(clean_title) > 60:
+            raise ValueError("会话标题须为 1–60 个字符")
+        values.extend(("title=?", "title_locked=1"))
+        params.append(clean_title)
+    if pinned is not None:
+        values.append("pinned=?")
+        params.append(int(pinned))
+    if archived is not None:
+        values.append("archived_at=?")
+        params.append(time.strftime("%Y-%m-%dT%H:%M:%S") if archived else None)
+    if not values:
+        raise ValueError("没有可更新的会话属性")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    values.append("updated_at=?")
+    params.extend((now, conv_id))
+    with _conn() as con:
+        con.execute(f"UPDATE conversations SET {', '.join(values)} "
+                    "WHERE conv_id=? AND deleted_at IS NULL", params)
+    return get(conv_id)
 
 
 def claim(conv_id: str, user_id: str):
@@ -255,7 +330,7 @@ def get(conv_id: str) -> dict | None:
 
 
 def add_file(conv_id: str, name: str, path: str, size: int = 0,
-             turn_no: int | None = None) -> None:
+             turn_no: int | None = None, artifact_type: str = "file") -> int | None:
     """登记回合产物文件（SSE file 事件同步落库，历史会话恢复时可见）。
 
     turn_no 为归属的用户轮次（1-based），历史恢复时把文件挂回生成它的那条回答。
@@ -266,11 +341,16 @@ def add_file(conv_id: str, name: str, path: str, size: int = 0,
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         with _conn() as con:
             con.execute(
-                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,turn_no,created_at) "
-                "VALUES(?,?,?,?,?,?)", (conv_id, name, path, size, turn_no, now))
+                "INSERT OR IGNORE INTO conversation_files(conv_id,name,path,size,turn_no,artifact_type,created_at) "
+                "VALUES(?,?,?,?,?,?,?)", (conv_id, name, path, size, turn_no,
+                                           artifact_type or "file", now))
+            row = con.execute(
+                "SELECT id FROM conversation_files WHERE conv_id=? AND path=?",
+                (conv_id, path)).fetchone()
             con.commit()
+        return int(row["id"]) if row else None
     except Exception:
-        pass
+        return None
 
 
 def list_files(conv_id: str) -> list[dict]:
@@ -278,11 +358,171 @@ def list_files(conv_id: str) -> list[dict]:
     try:
         with _conn() as con:
             rows = con.execute(
-                "SELECT name,path,size,turn_no,created_at FROM conversation_files "
+                "SELECT id AS artifact_id,conv_id,name,path,size,turn_no,artifact_type,created_at FROM conversation_files "
                 "WHERE conv_id=? ORDER BY id DESC", (conv_id,)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def _artifact_access_filter(user_id: str, tenant_id: str, org_id: str | None,
+                            role: str) -> tuple[str, list]:
+    """统一定义产物的租户、属主、部门共享和管理员可见范围。"""
+    clauses = ["c.tenant_id=?", "c.deleted_at IS NULL"]
+    params: list = [tenant_id]
+    if role != "admin":
+        clauses.append("(c.user_id=? OR (s.org_id IS NOT NULL AND s.org_id=?))")
+        params.extend([user_id, org_id or ""])
+    return " AND ".join(clauses), params
+
+
+def list_workspace_artifacts(user_id: str, tenant_id: str, org_id: str | None,
+                             *, role: str = "user", scope: str = "all", query: str = "",
+                             page: int = 1, page_size: int = 24,
+                             show_scripts: bool = False) -> dict:
+    """列出当前用户可见的产物；部门共享只授权文件，不授权源会话。"""
+    page = max(1, int(page))
+    page_size = min(100, max(1, int(page_size)))
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
+    clauses = [access_filter]
+    if not show_scripts:
+        clauses.append("LOWER(f.name) NOT LIKE '%.py'")
+    if scope == "mine":
+        clauses.append("c.user_id=?")
+        params.append(user_id)
+    elif scope == "shared":
+        clauses.extend(["s.org_id IS NOT NULL", "c.user_id<>?"])
+        params.append(user_id)
+        if role != "admin":
+            clauses.append("s.org_id=?")
+            params.append(org_id or "")
+    term = (query or "").strip().lower()[:100]
+    if term:
+        escaped = term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        clauses.append("(LOWER(f.name) LIKE ? ESCAPE '!' "
+                        "OR (c.user_id=? AND LOWER(c.title) LIKE ? ESCAPE '!') "
+                        "OR (c.user_id=? AND LOWER(c.employee_id) LIKE ? ESCAPE '!'))")
+        pattern = f"%{escaped}%"
+        params.extend([pattern, user_id, pattern, user_id, pattern])
+    where = " AND ".join(clauses)
+    with _conn() as con:
+        total = con.execute(
+            "SELECT COUNT(*) FROM conversation_files f "
+            "JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE {where}", params).fetchone()[0]
+        offset = (page - 1) * page_size
+        rows = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.artifact_type,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id, "
+            "CASE WHEN s.org_id IS NOT NULL THEN 1 ELSE 0 END AS shared_with_department, "
+            "CASE WHEN c.user_id=? THEN 1 ELSE 0 END AS is_owner "
+            "FROM conversation_files f "
+            "JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE {where} ORDER BY f.created_at DESC,f.id DESC LIMIT ? OFFSET ?",
+            [user_id, *params, page_size, offset]).fetchall()
+    items = [dict(r) for r in rows]
+    for item in items:
+        item["shared_with_department"] = bool(item["shared_with_department"])
+        item["is_owner"] = bool(item["is_owner"])
+    return {"items": items, "total": total, "page": page,
+            "page_size": page_size, "pages": (total + page_size - 1) // page_size}
+
+
+def get_artifact(artifact_id: int) -> dict | None:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.artifact_type,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
+            "s.org_id AS shared_org_id "
+            "FROM conversation_files f JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            "WHERE f.id=? AND c.deleted_at IS NULL", (artifact_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_artifact_path(artifact_id: int, path: str, size: int) -> bool:
+    """迁移产物到私有快照路径；保留旧 path 别名，ID 和共享 ACL 不变。"""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT f.path,c.tenant_id FROM conversation_files f "
+            "JOIN conversations c ON c.conv_id=f.conv_id WHERE f.id=?",
+            (artifact_id,)).fetchone()
+        if not row:
+            return False
+        old_path = row["path"]
+        if old_path != path:
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            con.execute(
+                "INSERT INTO artifact_path_aliases(artifact_id,tenant_id,path,created_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(artifact_id,path) DO NOTHING",
+                (artifact_id, row["tenant_id"], old_path, now))
+        cur = con.execute(
+            "UPDATE conversation_files SET path=?,size=? WHERE id=?",
+            (path, size, artifact_id))
+        con.commit()
+    return cur.rowcount > 0
+
+
+def get_accessible_artifact(artifact_id: int, user_id: str, tenant_id: str,
+                            org_id: str | None, role: str = "user") -> dict | None:
+    """Resolve an artifact only when the caller owns it, is its department recipient, or is admin."""
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
+            "s.org_id AS shared_org_id "
+            "FROM conversation_files f JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE f.id=? AND {access_filter}", [artifact_id, *params]).fetchone()
+    return dict(row) if row else None
+
+
+def get_accessible_artifact_by_path(path: str, user_id: str, tenant_id: str,
+                                    org_id: str | None, role: str = "user") -> dict | None:
+    """旧版 path 下载入口只允许解析到当前用户有权访问的已登记产物。"""
+    access_filter, params = _artifact_access_filter(user_id, tenant_id, org_id, role)
+    with _conn() as con:
+        row = con.execute(
+            "SELECT f.id AS artifact_id,f.conv_id,f.name,f.path,f.size,f.turn_no,f.created_at, "
+            "c.employee_id,c.title AS conversation_title,c.user_id AS owner_id,c.tenant_id, "
+            "s.org_id AS shared_org_id "
+            "FROM conversation_files f "
+            "JOIN conversations c ON c.conv_id=f.conv_id "
+            "LEFT JOIN artifact_shares s ON s.artifact_id=f.id AND s.tenant_id=c.tenant_id "
+            f"WHERE (f.path=? OR EXISTS (SELECT 1 FROM artifact_path_aliases a "
+            "WHERE a.artifact_id=f.id AND a.tenant_id=c.tenant_id AND a.path=?)) "
+            f"AND {access_filter} ORDER BY f.id DESC LIMIT 1",
+            [path, path, *params]).fetchone()
+    return dict(row) if row else None
+
+
+def set_artifact_department_share(artifact_id: int, user_id: str, tenant_id: str,
+                                 org_id: str | None, shared: bool) -> str:
+    """将产物共享到发布者当前部门；返回 ok/not_found/forbidden/no_department。"""
+    artifact = get_artifact(artifact_id)
+    if not artifact or artifact["tenant_id"] != tenant_id:
+        return "not_found"
+    if artifact["owner_id"] != user_id:
+        return "forbidden"
+    if shared and not org_id:
+        return "no_department"
+    with _conn() as con:
+        if shared:
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            con.execute(
+                "INSERT INTO artifact_shares(artifact_id,tenant_id,org_id,created_by,created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(artifact_id) DO UPDATE SET "
+                "tenant_id=excluded.tenant_id,org_id=excluded.org_id, "
+                "created_by=excluded.created_by,created_at=excluded.created_at",
+                (artifact_id, tenant_id, org_id, user_id, now))
+        else:
+            con.execute("DELETE FROM artifact_shares WHERE artifact_id=? AND tenant_id=?",
+                        (artifact_id, tenant_id))
+        con.commit()
+    return "ok"
 
 
 def delete(conv_id: str) -> bool:

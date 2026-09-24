@@ -56,6 +56,37 @@ async def admin_get_employee(emp_id: str):
     return cfg
 
 
+@router.put("/employees/{emp_id}/quick-prompts")
+async def admin_update_employee_quick_prompts(emp_id: str, body: dict, request: Request,
+                                              admin: dict = Depends(auth.require_admin)):
+    prompts = body.get("prompts")
+    if not isinstance(prompts, list):
+        raise HTTPException(400, "prompts 必须是数组")
+    if len(prompts) > 3:
+        raise HTTPException(400, "每个员工最多配置 3 条快捷问题")
+    normalized = []
+    for item in prompts:
+        if not isinstance(item, str):
+            raise HTTPException(400, "快捷问题必须是文本")
+        value = item.strip()
+        if not value:
+            continue
+        if len(value) > 160:
+            raise HTTPException(400, "每条快捷问题最多 160 个字符")
+        if value not in normalized:
+            normalized.append(value)
+    before = catalog.get_full_employee(emp_id)
+    if not before:
+        raise HTTPException(404, "员工不存在")
+    if not catalog.update_employee_quick_prompts(emp_id, normalized):
+        raise HTTPException(404, "员工不存在")
+    after = catalog.get_full_employee(emp_id)
+    audit.log("update", "employee_quick_prompts", emp_id, admin, request,
+              before={"prompts": before.get("quick_prompts", [])},
+              after={"prompts": after.get("quick_prompts", [])})
+    return {"employee_id": emp_id, "prompts": after.get("quick_prompts", [])}
+
+
 @router.post("/employees")
 async def admin_create_employee(body: dict, request: Request,
                                 admin: dict = Depends(auth.require_admin)):

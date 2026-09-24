@@ -21,6 +21,12 @@ class DecisionIn(BaseModel):
     decision: str  # approve / reject
 
 
+class ConversationUpdateIn(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+
+
 class LoginIn(BaseModel):
     username: str
     password: str

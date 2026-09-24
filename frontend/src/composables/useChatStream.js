@@ -66,6 +66,7 @@ export function extractReport(md) {
 export function useChatStream({ stageStates, stageDetail, messages, scrollToBottom }) {
   const sending = ref(false)
   let activeController = null
+  let activeMessageIdx = null
 
   function abortActiveStream() {
     if (activeController) {
@@ -74,11 +75,19 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     }
   }
 
+  function stopActiveStream() {
+    const msg = activeMessageIdx == null ? null : messages.value[activeMessageIdx]
+    if (!activeController || !msg) return
+    msg.status = 'stopped'
+    msg._streamTerminal = true
+    setStage('report', 'stopped', '已由用户停止')
+    touch()
+    abortActiveStream()
+  }
+
   function resetPipeline() {
     Object.keys(stageStates).forEach(k => delete stageStates[k])
     Object.keys(stageDetail).forEach(k => delete stageDetail[k])
-    stageStates.input = 'done'
-    stageDetail.input = new Date().toLocaleTimeString()
   }
 
   function setStage(id, status, detail) {
@@ -95,11 +104,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const msg = messages.value[msgIdx]
     if (!msg) return
     if (ev.type === 'stage') {
-      if (ev.stage === 'report' && ev.status === 'done') {
-        setStage('planning', 'done'); setStage('skill', 'done'); setStage('report', 'done', '')
-      } else {
-        setStage(ev.stage, ev.status, ev.detail_text)
-      }
+      setStage(ev.stage, ev.status, ev.detail_text)
     } else if (ev.type === 'thinking') {
       if (!msg.trace) msg.trace = []
       let box = msg.trace.find(t => t.type === 'think' && !t._closed)
@@ -107,6 +112,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       box.content += ev.content
       touch()
     } else if (ev.type === 'token') {
+      setStage('report', 'active', '正在生成回复')
       if (!msg._md) msg._md = ''
       msg._md += ev.content
       // 报告生成技能输出 HTML 时，抽出整段 HTML 走 iframe srcdoc 渲染，
@@ -120,13 +126,19 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (!msg.trace) msg.trace = []
       const args = ev.args && Object.keys(ev.args).length ? JSON.stringify(ev.args) : ''
       if (ev.status === 'start') {
-        msg.trace.push({ type: 'tool', name: ev.name, args, status: 'start' })
+        msg.trace.push({ type: 'tool', id: ev.id || '', name: ev.name, args, status: 'start' })
       } else {
         const st = ev.status === 'error' ? 'error' : 'done'
-        const pending = msg.trace.find(t => t.type === 'tool' && t.status === 'start' && t.name === ev.name)
+        const pending = msg.trace.find(t => t.type === 'tool' && t.status === 'start' &&
+          (ev.id ? t.id === ev.id : t.name === ev.name))
         if (pending) { pending.status = st; pending.preview = ev.preview || '' }
-        else msg.trace.push({ type: 'tool', name: ev.name, args, status: st, preview: ev.preview || '' })
+        else msg.trace.push({ type: 'tool', id: ev.id || '', name: ev.name, args, status: st, preview: ev.preview || '' })
       }
+      const tools = msg.trace.filter(t => t.type === 'tool')
+      const hasError = tools.some(t => t.status === 'error')
+      const hasPending = tools.some(t => t.status === 'start')
+      setStage('skill', hasPending ? 'active' : hasError ? 'error' : 'done',
+        `${ev.name || '工具'}：${ev.status === 'start' ? '调用中' : ev.status === 'error' ? '调用失败' : '调用完成'}`)
       touch()
     } else if (ev.type === 'sql') {
       // 数据分析专家：sql_db_query 工具执行后回传 SQL 语句，由 SqlViewer 渲染
@@ -138,7 +150,9 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       // 数字员工产物文件（Word 方案/纪要/CSV 等）：渲染成可下载/可预览的文件卡片
       if (!msg.files) msg.files = []
       if (!msg.files.some(f => f.path === ev.path)) {
-        msg.files.push({ name: ev.name, path: ev.path, size: ev.size })
+        msg.files.push({ artifact_id: ev.artifact_id, conv_id: ev.conv_id,
+          name: ev.name, path: ev.path, size: ev.size,
+          artifact_type: ev.artifact_type || 'file' })
       }
       touch()
     } else if (ev.type === 'subagent') {
@@ -152,7 +166,11 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       if (ev.output) sa.output = ev.output
       touch()
     } else if (ev.type === 'todos') {
-      setStage('planning', 'active', ev.items.map(t => `${t.status === 'completed' ? '☑' : '☐'} ${t.content}`).join('\n'))
+      if (ev.items?.length) {
+        const allDone = ev.items.every(t => t.status === 'completed')
+        setStage('planning', allDone ? 'done' : 'active',
+          ev.items.map(t => `${t.status === 'completed' ? '☑' : '☐'} ${t.content}`).join('\n'))
+      }
     } else if (ev.type === 'approval_required') {
       msg.approval = {
         id: ev.approval_id,
@@ -166,6 +184,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     } else if (ev.type === 'error') {
       // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
       msg.error = ev.message || '任务执行出错，请稍后重试'
+      msg.status = 'error'
       msg._streamTerminal = true
       setStage('report', 'error', msg.error)
       touch()
@@ -200,6 +219,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       msg.error = msg._md || msg.html || msg.content
         ? '连接已中断，当前结果可能不完整，请刷新历史或继续追问。'
         : '连接已中断，未收到最终结果，请重试。'
+      msg.status = 'interrupted'
       setStage('report', 'error', msg.error)
       touch()
     }
@@ -207,7 +227,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     scrollToBottom?.()
   }
 
-  async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '') {
+  async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '', options = {}) {
     if (!endpoint || sending.value) return
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachments.length) return
@@ -215,11 +235,17 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
     const userMsg = { role: 'user', content: trimmed, time }
     if (attachments.length) userMsg.attachments = attachments
-    messages.value.push(userMsg)
+    if (options.appendUser !== false) messages.value.push(userMsg)
     const botIdx = messages.value.length
-    messages.value.push({ role: 'bot', content: '', html: '', _md: '', trace: [], time })
+    const botMsg = {
+      role: 'bot', content: '', html: '', _md: '', trace: [], time,
+      _retryPayload: { endpoint, text: trimmed, attachments, dataSource, model },
+    }
+    messages.value.push(botMsg)
     sending.value = true
+    activeMessageIdx = botIdx
     resetPipeline()
+    setStage('input', 'done', new Date().toLocaleTimeString())
     const controller = new AbortController()
     abortActiveStream()
     activeController = controller
@@ -241,12 +267,26 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         body: JSON.stringify({ message: trimmed, attachments, model: model || '' }),
         signal: controller.signal,
       })
+      if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
+      options.onAccepted?.()
       await readStream(resp, botIdx)
       if (activeController === controller) activeController = null
     } catch (e) {
-      if (e.name !== 'AbortError') messages.value[botIdx].content = '⚠ 连接失败：' + e.message
+      const msg = messages.value[botIdx]
+      if (e.name !== 'AbortError' && msg) {
+        msg.error = `请求失败：${e.message || '网络连接不可用'}`
+        msg.status = 'error'
+        setStage('report', 'error', msg.error)
+        touch()
+      } else if (e.name === 'AbortError' && msg && !msg._streamTerminal) {
+        msg.status = 'interrupted'
+        msg.error = '连接已中断，当前结果可能不完整。'
+        setStage('report', 'error', msg.error)
+        touch()
+      }
       if (activeController === controller) activeController = null
     }
+    if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
     scrollToBottom?.()
   }
@@ -263,6 +303,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     const controller = new AbortController()
     abortActiveStream()
     activeController = controller
+    activeMessageIdx = botIdx
     try {
       const resp = await fetch(`/api/approvals/${approvalId}/decision`, {
         method: 'POST',
@@ -270,12 +311,23 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         body: JSON.stringify({ decision }),
         signal: controller.signal,
       })
+      if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
       await readStream(resp, botIdx)
       if (activeController === controller) activeController = null
     } catch (e) {
-      if (e.name !== 'AbortError') messages.value[botIdx].content = '⚠ ' + e.message
+      const reply = messages.value[botIdx]
+      if (e.name !== 'AbortError' && reply) {
+        reply.error = `审批恢复失败：${e.message || '网络连接不可用'}`
+        reply.status = 'error'
+        touch()
+      } else if (e.name === 'AbortError' && reply && !reply._streamTerminal) {
+        reply.status = 'interrupted'
+        reply.error = '审批恢复连接已中断，请刷新会话确认审批状态。'
+        touch()
+      }
       if (activeController === controller) activeController = null
     }
+    if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
   }
 
@@ -286,5 +338,6 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     setStage,
     resetPipeline,
     abortActiveStream,
+    stopActiveStream,
   }
 }

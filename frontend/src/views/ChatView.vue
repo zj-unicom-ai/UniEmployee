@@ -3,27 +3,69 @@
 重构后：布局编排 + 员工/会话管理，渲染委托给子组件
 -->
 <template>
-  <div class="chat-layout">
+  <div class="chat-layout" :class="{ 'full-width-mode': fullWidthMode }">
+    <button
+      v-if="historyOpen || executionOpen"
+      class="drawer-backdrop"
+      aria-label="关闭侧栏"
+      @click="closeDrawers"
+    ></button>
     <ConversationSidebar
       :list="convList"
       :active-id="convId"
       :emp-names="empNames"
+      :open="historyOpen"
+      :query="historyQuery"
+      :archived-only="historyArchived"
+      :loading="historyLoading"
+      :has-more="historyHasMore"
+      :error="historyError"
       @select="openConversation"
-      @new="newConv"
+      @close="historyOpen = false"
+      @search="onHistorySearch"
+      @archive-filter="onArchiveFilter"
+      @load-more="loadMoreHistory"
+      @retry-load="() => loadHistory(currentEmp)"
+      @rename="(id, title) => updateConversationMeta(id, { title })"
+      @pin="(id, pinned) => updateConversationMeta(id, { pinned })"
+      @archive="(id, archived) => updateConversationMeta(id, { archived })"
     />
 
     <PipelineSidebar
       :states="stageStates"
       :detail="stageDetail"
+      :open="executionOpen"
+      @close="executionOpen = false"
     />
 
     <div class="chat-main">
       <div class="chat-header">
+        <n-button
+          quaternary
+          circle
+          aria-label="打开历史会话"
+          title="历史会话"
+          :aria-expanded="historyOpen"
+          @click="toggleDrawer('history')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10" /></svg>
+        </n-button>
+        <n-button
+          size="small"
+          class="new-conversation-button"
+          :disabled="stream.sending.value || uploading"
+          aria-label="新对话"
+          title="新对话"
+          @click="newConv"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          <span>新对话</span>
+        </n-button>
         <n-select
           :value="currentEmp"
           :options="empOptions"
           size="small"
-          style="width:200px"
+          class="employee-select"
           @update:value="selectEmployee"
         />
         <n-select
@@ -32,14 +74,50 @@
           :options="modelOptions"
           size="small"
           placeholder="选择模型"
-          style="width:160px"
+          class="model-select"
           @update:value="(v) => currentModel = v"
         />
         <span class="emp-meta">{{ empMeta }}</span>
-        <n-button size="small" @click="openTrace">🔎 执行过程</n-button>
+        <n-button quaternary class="execution-button" :aria-expanded="executionOpen" @click="toggleDrawer('execution')">执行详情</n-button>
+        <n-button size="small" class="trace-button" @click="openTrace">完整 Trace</n-button>
+        <n-button
+          quaternary
+          circle
+          class="layout-mode-button"
+          :aria-pressed="fullWidthMode"
+          :aria-label="fullWidthMode ? '切换到标准宽度模式' : '切换到全屏宽度模式'"
+          :title="fullWidthMode ? '切换到标准宽度' : '切换到全屏宽度'"
+          @click="toggleWidthMode"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path v-if="!fullWidthMode" d="M4 9V4h5M4 4l6 6M20 15v5h-5M20 20l-6-6M15 4h5v5M20 4l-6 6M9 20H4v-5M4 20l6-6" />
+            <path v-else d="M9 3v6H3M3 9l7-7M15 21v-6h6M21 15l-7 7M21 9h-6V3M15 3l7 7M3 15h6v6M9 21l-7-7" />
+          </svg>
+        </n-button>
       </div>
 
       <div class="msgs" ref="msgsRef">
+        <div class="message-lane">
+        <section v-if="!messages.length" class="chat-welcome" aria-label="新对话快捷问题">
+          <div class="welcome-avatar">{{ (currentEmployee?.name || 'AI').slice(0, 1) }}</div>
+          <h1>你好，我是{{ currentEmployee?.name || '数字员工' }}</h1>
+          <p class="welcome-role">{{ currentEmployee?.role || '你的数字员工助手' }}</p>
+          <p class="welcome-instruction">选择一个问题开始对话</p>
+          <div class="quick-prompt-list">
+            <button
+              v-for="(prompt, index) in quickPrompts"
+              :key="`${index}-${prompt}`"
+              type="button"
+              class="quick-prompt"
+              :disabled="stream.sending.value || uploading"
+              @click="askQuickPrompt(prompt)"
+            >
+              <span class="prompt-mark" aria-hidden="true">✦</span>
+              <span class="prompt-text">{{ prompt }}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+            </button>
+          </div>
+        </section>
         <ChatMessage
           v-for="(msg, idx) in messages" :key="idx"
           :msg="msg"
@@ -47,23 +125,30 @@
           @rate="submitRating"
           @approve="(id, midx) => decide(id, 'approve', midx)"
           @reject="(id, midx) => decide(id, 'reject', midx)"
+          @retry="retryMessage"
         />
+        </div>
       </div>
 
       <InputBar
+        ref="inputBarRef"
         :disabled="stream.sending.value"
+        :sending="stream.sending.value"
         :uploading="uploading"
-        :hint="hint"
+        :full-width="fullWidthMode"
         @send="onSend"
+        @stop="stream.stopActiveStream"
       />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useMessage } from 'naive-ui'
 import api from '../api.js'
+import { DEFAULT_QUICK_PROMPTS } from '../utils/quickPrompts.js'
 import { useChatStream } from '../composables/useChatStream.js'
 import ConversationSidebar from '../components/chat/ConversationSidebar.vue'
 import PipelineSidebar from '../components/chat/PipelineSidebar.vue'
@@ -74,19 +159,57 @@ import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.
 defineOptions({ name: 'ChatView' })
 const router = useRouter()
 const route = useRoute()
+const message = useMessage()
 
 /* ---------- 基础状态 ---------- */
 const employees = ref([])
 const empNames = reactive({})
 const currentEmp = ref(null)
+const inputBarRef = ref(null)
 const convId = ref(null)
+const persistedConvId = ref(null)
+const routeReady = ref(false)
 const convList = ref([])
+const historyQuery = ref('')
+const historyArchived = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyPage = ref(0)
+const historyTotal = ref(0)
+const HISTORY_PAGE_SIZE = 20
+const historyHasMore = computed(() => historyPage.value * HISTORY_PAGE_SIZE < historyTotal.value)
+let historyRequestSeq = 0
+let historySearchTimer = null
 const messages = ref([])
 const empMeta = ref('')
-const hint = ref('向数字员工提问吧。')
 const msgsRef = ref(null)
 const stageStates = reactive({})
 const stageDetail = reactive({})
+const historyOpen = ref(false)
+const executionOpen = ref(false)
+const fullWidthMode = ref(false)
+try {
+  fullWidthMode.value = localStorage.getItem('uniemployee-chat-width-mode') === 'full'
+} catch {}
+
+function toggleWidthMode() {
+  fullWidthMode.value = !fullWidthMode.value
+  try {
+    localStorage.setItem('uniemployee-chat-width-mode', fullWidthMode.value ? 'full' : 'standard')
+  } catch {}
+}
+
+function closeDrawers() {
+  historyOpen.value = false
+  executionOpen.value = false
+}
+
+function toggleDrawer(which) {
+  const isOpen = which === 'history' ? historyOpen.value : executionOpen.value
+  closeDrawers()
+  if (!isOpen && which === 'history') historyOpen.value = true
+  if (!isOpen && which === 'execution') executionOpen.value = true
+}
 
 /* ---------- 模型选择 ---------- */
 const aiModels = ref([])
@@ -95,11 +218,6 @@ const modelOptions = computed(() =>
   aiModels.value.map(m => ({ label: m.name, value: m.base_model }))
 )
 
-const HINTS = {
-  xiaosu: '试试：\n① X1音箱续航多久？买一个多少钱？\n② 查一下订单O12345\n③ 音箱坏了不出声了，我要投诉！\n④ O12345我想退款\n⑤ 记住我姓张，回复要通俗一点\n⑥ 查一下张总的会员等级\n⑦ S2台灯和S2 Pro有什么区别？',
-  'market-intel': '试试：\n① 最近有什么值得关注的行业动态？出一份今日简报\n② 声湃科技把 Mini3 降到 299 了，出个对标分析\n③ 刷到消息说光屿智能融资了 3 个亿，要不要紧？\n④ 简报好了，归档发布（走人工审批）',
-}
-
 // 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
 // 不应在本页可被选择（否则会丢失定制上下文如数据源/SQL 工具注入）。
 const empOptions = computed(() =>
@@ -107,6 +225,17 @@ const empOptions = computed(() =>
     .filter(e => !isCustomEmployee(e))
     .map(e => ({ label: e.role || e.name, value: e.id }))
 )
+const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
+const quickPrompts = computed(() => {
+  const configured = Array.isArray(currentEmployee.value?.quick_prompts)
+    ? currentEmployee.value.quick_prompts.filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
+    : []
+  return configured.length ? configured : DEFAULT_QUICK_PROMPTS
+})
+
+function askQuickPrompt(prompt) {
+  inputBarRef.value?.sendText(prompt)
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -117,11 +246,26 @@ function scrollToBottom() {
 /* ---------- SSE 流 ---------- */
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
+async function setChatUrl(query, replace = false) {
+  const target = { name: 'chat', query }
+  if (router.resolve(target).fullPath !== route.fullPath) {
+    await router[replace ? 'replace' : 'push'](target)
+  }
+}
+
+function markConversationPersisted(cid) {
+  if (convId.value !== cid || route.name !== 'chat') return
+  persistedConvId.value = cid
+  // 新会话在第一条消息被服务端接收后才落库，此时地址才可以用于刷新恢复。
+  void setChatUrl({ conv: cid }, true)
+}
+
 /* ---------- 发送 / 审批 ---------- */
 const uploading = ref(false)
 
-async function onSend(text, files = []) {
+async function onSend(text, files = [], onAccepted = () => {}) {
   if (!convId.value) return
+  const targetConvId = convId.value
   let attachments = []
   if (files.length) {
     uploading.value = true
@@ -129,7 +273,7 @@ async function onSend(text, files = []) {
       for (const f of files) {
         const form = new FormData()
         form.append('file', f)
-        const { data } = await api.post(`/conversations/${convId.value}/attachments`, form)
+        const { data } = await api.post(`/conversations/${targetConvId}/attachments`, form)
         if (data.error) {
           messages.value.push({ role: 'bot', content: '⚠ 附件「' + f.name + '」上传失败：' + data.error, html: '', time: fmtNow() })
         } else {
@@ -142,7 +286,25 @@ async function onSend(text, files = []) {
     uploading.value = false
     if (!attachments.length) return
   }
-  await stream.sendTo(`/api/conversations/${convId.value}/messages`, text, attachments, null, currentModel.value)
+  await stream.sendTo(`/api/conversations/${targetConvId}/messages`, text, attachments, null, currentModel.value, {
+    onAccepted: () => {
+      onAccepted()
+      markConversationPersisted(targetConvId)
+    },
+  })
+  await loadHistory(currentEmp.value)
+}
+
+async function retryMessage(msg) {
+  const request = msg?._retryPayload
+  if (!request || stream.sending.value) return
+  const failedIndex = messages.value.indexOf(msg)
+  if (failedIndex >= 0) messages.value.splice(failedIndex, 1)
+  const targetConvId = convId.value
+  await stream.sendTo(request.endpoint, request.text, request.attachments, request.dataSource, request.model, {
+    appendUser: false,
+    onAccepted: () => markConversationPersisted(targetConvId),
+  })
   await loadHistory(currentEmp.value)
 }
 
@@ -169,26 +331,91 @@ async function submitRating(msg, rating, idx, reason = '') {
 }
 
 /* ---------- 历史会话 ---------- */
-async function loadHistory(empId) {
+async function loadHistory(empId = currentEmp.value, append = false) {
+  if (!empId || (append && historyLoading.value)) return
+  const requestSeq = ++historyRequestSeq
+  const page = append ? historyPage.value + 1 : 1
+  if (!append) {
+    convList.value = []
+    historyTotal.value = 0
+  }
+  historyLoading.value = true
+  historyError.value = ''
   try {
-    const { data } = await api.get('/conversations', { params: { employee_id: empId, limit: 15 } })
-    convList.value = data || []
-  } catch {}
+    const { data } = await api.get('/conversations', {
+      params: {
+        employee_id: empId, page, page_size: HISTORY_PAGE_SIZE,
+        q: historyQuery.value.trim(), archived: historyArchived.value,
+      },
+    })
+    if (requestSeq !== historyRequestSeq) return
+    const items = data.items || []
+    if (append) {
+      const knownIds = new Set(convList.value.map(item => item.conv_id))
+      convList.value = [...convList.value, ...items.filter(item => !knownIds.has(item.conv_id))]
+    } else {
+      convList.value = items
+    }
+    historyPage.value = page
+    historyTotal.value = data.total || 0
+  } catch (e) {
+    if (requestSeq === historyRequestSeq) historyError.value = e.response?.data?.detail || '会话加载失败'
+  } finally {
+    if (requestSeq === historyRequestSeq) historyLoading.value = false
+  }
 }
 
-async function openConversation(cid) {
+function onHistorySearch(value) {
+  historyQuery.value = value || ''
+  historyRequestSeq++
+  clearTimeout(historySearchTimer)
+  historyLoading.value = true
+  historySearchTimer = setTimeout(() => loadHistory(currentEmp.value), 300)
+}
+
+function onArchiveFilter(value) {
+  if (historyArchived.value === value) return
+  historyArchived.value = value
+  clearTimeout(historySearchTimer)
+  loadHistory(currentEmp.value)
+}
+
+function loadMoreHistory() {
+  if (historyHasMore.value) loadHistory(currentEmp.value, true)
+}
+
+async function updateConversationMeta(cid, changes) {
+  try {
+    await api.patch(`/conversations/${cid}`, changes)
+    if (changes.archived === true && cid === convId.value) {
+      await selectEmployee(currentEmp.value)
+    } else {
+      await loadHistory(currentEmp.value)
+    }
+    message.success(changes.title ? '会话已重命名' : changes.archived === true ? '会话已归档' : changes.archived === false ? '会话已移出归档' : changes.pinned ? '会话已置顶' : '已取消置顶')
+  } catch (e) {
+    message.error(e.response?.data?.detail || '会话操作失败，请稍后重试')
+  }
+}
+
+async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换会话')
+    return false
+  }
   try {
     const { data } = await api.get(`/conversations/${cid}`)
-    if (data.error) return
+    if (!syncUrl && route.query.conv !== cid) return false
+    if (data.error) { message.error(data.error); return false }
     // 会话属于定制型员工时，重定向到该员工的专属对话路由，避免丢失定制上下文
     const targetRoute = routeNameForEmployee(data.employee_id)
     if (targetRoute !== 'chat') {
-      router.replace({ name: targetRoute, query: { conv: cid } })
-      return
+      await router.replace({ name: targetRoute, query: { conv: cid } })
+      return true
     }
     convId.value = cid
+    persistedConvId.value = cid
     currentEmp.value = data.employee_id
-    hint.value = HINTS[data.employee_id] || '向数字员工提问吧。'
     // 恢复会话绑定的模型；未绑定时用列表中的默认模型
     currentModel.value = data.model || defaultModelBase()
     // 产物文件按归属轮次（turn_no）挂到生成它的那条回答消息上；
@@ -238,23 +465,45 @@ async function openConversation(cid) {
     }
     await loadHistory(data.employee_id)
     scrollToBottom()
-  } catch {}
+    closeDrawers()
+    if (syncUrl) await setChatUrl({ conv: cid }, replaceUrl)
+    return true
+  } catch (e) {
+    message.error(e.response?.data?.detail || '会话加载失败')
+    return false
+  }
 }
 
 /* ---------- 员工切换 ---------- */
-async function selectEmployee(empId) {
-  currentEmp.value = empId
-  hint.value = HINTS[empId] || '向数字员工提问吧。'
-  // 切换员工时重置为默认模型
-  currentModel.value = defaultModelBase()
+async function selectEmployee(empId, { syncUrl = true, replaceUrl = false } = {}) {
+  if (stream.sending.value) {
+    message.warning('请先停止当前生成，再切换员工')
+    return false
+  }
+  historyQuery.value = ''
+  historyArchived.value = false
+  clearTimeout(historySearchTimer)
+  const requestedRoute = route.fullPath
+  let newId
   try {
     const { data } = await api.post(`/employees/${empId}/conversations`)
-    convId.value = data.conversation_id
-  } catch { return }
+    newId = data.conversation_id
+  } catch (e) {
+    message.error(e.response?.data?.detail || '新建会话失败')
+    return false
+  }
+  if (!syncUrl && route.fullPath !== requestedRoute) return false
+  currentEmp.value = empId
+  // 切换员工时重置为默认模型
+  currentModel.value = defaultModelBase()
+  convId.value = newId
+  persistedConvId.value = null
   messages.value = []
   stream.resetPipeline()
   empMeta.value = '已切换到该员工（记忆跨会话保留）'
   await loadHistory(empId)
+  if (syncUrl) await setChatUrl({ emp: empId }, replaceUrl)
+  return true
 }
 
 function defaultModelBase() {
@@ -269,8 +518,11 @@ async function loadAiModels() {
   } catch {}
 }
 
-function newConv() {
-  if (currentEmp.value) selectEmployee(currentEmp.value)
+async function newConv() {
+  if (currentEmp.value) {
+    await selectEmployee(currentEmp.value)
+    closeDrawers()
+  }
 }
 
 function openTrace() {
@@ -297,38 +549,109 @@ onMounted(async () => {
     const qconv = route.query.conv
     if (qconv) {
       // 先尝试打开指定会话；若该会话属于定制型员工，openConversation 会重定向到对应路由
-      await openConversation(qconv)
+      const opened = await openConversation(qconv, { syncUrl: false })
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
-      if (!convId.value && data.length) await selectEmployee(data[0].id)
+      if (!opened && empOptions.value.length) await selectEmployee(empOptions.value[0].value, { replaceUrl: true })
     } else if (data.length) {
       // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
       const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
-      await selectEmployee(target ? target.id : data[0].id)
+      await selectEmployee(target ? target.id : (empOptions.value[0]?.value || data[0].id), { replaceUrl: true })
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message
+  } finally {
+    routeReady.value = true
+  }
+})
+
+watch(() => [route.query.conv, route.query.emp], async ([cid, emp]) => {
+  if (!routeReady.value) return
+  if (typeof cid === 'string' && cid) {
+    if (cid !== persistedConvId.value) {
+      const opened = await openConversation(cid, { syncUrl: false })
+      if (!opened && route.query.conv === cid) {
+        await setChatUrl(persistedConvId.value ? { conv: persistedConvId.value } : { emp: currentEmp.value }, true)
+      }
+    }
+    return
+  }
+  const targetEmp = typeof emp === 'string' && empOptions.value.some(e => e.value === emp)
+    ? emp : (empOptions.value[0]?.value || null)
+  if (targetEmp && (persistedConvId.value || currentEmp.value !== targetEmp)) {
+    const requestedRoute = route.fullPath
+    const created = await selectEmployee(targetEmp, { syncUrl: false })
+    if (!created && route.fullPath === requestedRoute) {
+      await setChatUrl(persistedConvId.value ? { conv: persistedConvId.value } : { emp: currentEmp.value }, true)
+    }
   }
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(historySearchTimer)
+  historyRequestSeq++
   stream.abortActiveStream()
 })
 </script>
 
 <style scoped>
 .chat-layout {
+  position: relative;
   display: flex;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-header {
-  padding: 10px 16px;
+  min-height: 58px;
+  padding: 8px 20px;
   border-bottom: 1px solid #e2e8f0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   background: #ffffff;
 }
-.emp-meta { font-size: 12px; color: #64748b; flex: 1; }
-.msgs { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.chat-header :deep(svg) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.employee-select { width: 220px; flex: 0 0 auto; }
+.new-conversation-button { flex: 0 0 auto; }
+.model-select { width: 170px; flex: 0 0 auto; }
+.emp-meta { font-size: 12px; color: #64748b; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgs { flex: 1; overflow-y: auto; padding: 28px clamp(24px, 4vw, 72px) 18px; min-height: 0; }
+.message-lane { width: min(100%, 1080px); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.chat-layout.full-width-mode .message-lane { width: 100%; max-width: none; }
+.chat-welcome { width: min(100%, 540px); margin: auto; padding: 18px 0 10vh; text-align: center; transform: translateY(-3vh); }
+.welcome-avatar { display: grid; width: 58px; height: 58px; margin: 0 auto 16px; place-items: center; border-radius: 19px 19px 19px 6px; background: linear-gradient(145deg, #eef2ff, #dbeafe); color: #3157c8; font-size: 24px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(49, 87, 200, .08); }
+.chat-welcome h1 { margin: 0; color: #172033; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+.welcome-role { margin: 7px 0 0; color: #64748b; font-size: 13px; }
+.welcome-instruction { margin: 20px 0 12px; color: #94a3b8; font-size: 12px; }
+.quick-prompt-list { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.quick-prompt { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid #edf0f5; border-radius: 11px; background: #fafbfc; color: #334155; cursor: pointer; text-align: left; transition: border-color .15s, background .15s, transform .15s; }
+.quick-prompt:hover:not(:disabled) { border-color: #c7d2fe; background: #f6f8ff; transform: translateY(-1px); }
+.quick-prompt:focus-visible { outline: 2px solid #3157c8; outline-offset: 2px; }
+.quick-prompt:disabled { cursor: wait; opacity: .55; }
+.prompt-mark { color: #635bdb; font-size: 17px; line-height: 1; }
+.prompt-text { min-width: 0; flex: 1; font-size: 13px; line-height: 1.5; }
+.quick-prompt svg { width: 16px; height: 16px; fill: none; stroke: #64748b; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.drawer-backdrop { position: absolute; inset: 0; z-index: 30; border: 0; background: rgba(15, 23, 42, 0.2); cursor: default; }
+
+@media (max-width: 900px) {
+  .chat-header { padding: 8px 12px; gap: 8px; }
+  .employee-select { width: 190px; }
+  .model-select { width: 140px; }
+  .msgs { padding: 20px 18px 14px; }
+  .emp-meta { display: none; }
+}
+
+@media (max-width: 640px) {
+  .chat-header { min-height: 54px; }
+  .new-conversation-button { width: 34px; padding: 0; }
+  .new-conversation-button span { display: none; }
+  .employee-select { flex: 1 1 auto; width: auto; min-width: 0; }
+  .model-select, .execution-button, .trace-button, .layout-mode-button { display: none; }
+  .chat-header > :deep(.n-button) { flex-shrink: 0; }
+  .msgs { padding: 16px 12px 10px; }
+  .message-lane { gap: 8px; }
+  .chat-welcome { width: min(100%, 480px); padding: 12px 4px 8vh; }
+  .chat-welcome h1 { font-size: 19px; }
+}
 </style>

@@ -36,7 +36,7 @@ from .users import (
 from .employees import (
     list_employees_meta, get_employee_config, get_effective_config,
     get_full_employee, get_skill_dirs_for_employee, catalog,
-    create_employee, update_employee, delete_employee,
+    create_employee, update_employee, update_employee_quick_prompts, delete_employee,
 )
 
 # resources
@@ -84,7 +84,7 @@ __all__ = [
     # employees
     "list_employees_meta", "get_employee_config", "get_effective_config",
     "get_full_employee", "get_skill_dirs_for_employee", "catalog", "create_employee", "update_employee",
-    "delete_employee",
+    "update_employee_quick_prompts", "delete_employee",
     # resources
     "upsert_skill", "get_skill", "get_skill_content", "update_skill_content",
     "employees_using_skill", "delete_skill",
