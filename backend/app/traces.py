@@ -348,25 +348,69 @@ def _ensure_evaluations_table():
         user_id      TEXT,
         rating       INTEGER NOT NULL,    -- 1=👍  -1=👎
         reason       TEXT,
-        created_at   TEXT
+        created_at   TEXT,
+        tenant_id    TEXT NOT NULL DEFAULT 'default',
+        question_preview TEXT DEFAULT '',
+        answer_preview TEXT DEFAULT '',
+        status       TEXT DEFAULT 'open',
+        resolution_note TEXT DEFAULT '',
+        updated_at   TEXT
     )""")
     con.execute("CREATE INDEX IF NOT EXISTS idx_evals_emp ON evaluations(employee_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_evals_run ON evaluations(run_id)")
+    # Online feedback fields are added lazily so existing traces databases are
+    # upgraded safely on both SQLite and PostgreSQL installations.
+    cols = dblayer.table_columns(con, "evaluations")
+    migrations = {
+        "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+        "question_preview": "TEXT DEFAULT ''",
+        "answer_preview": "TEXT DEFAULT ''",
+        "status": "TEXT DEFAULT 'open'",
+        "resolution_note": "TEXT DEFAULT ''",
+        "updated_at": "TEXT",
+    }
+    for name, definition in migrations.items():
+        if name not in cols:
+            con.execute(f"ALTER TABLE evaluations ADD COLUMN {name} {definition}")
+    enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
+    if enterprise_tenant != "default":
+        con.execute("UPDATE evaluations SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
+                    (enterprise_tenant,))
+    con.execute("CREATE INDEX IF NOT EXISTS idx_evals_tenant_created ON evaluations(tenant_id, created_at)")
     con.commit()
     con.close()
 
 
 def insert_evaluation(run_id, message_id, employee_id, conversation_id,
-                      user_id, rating, reason=""):
+                      user_id, rating, reason="", question_preview="",
+                      answer_preview="", tenant_id="default"):
     """记录一条用户反馈评价。"""
     try:
         _ensure_evaluations_table()
         con = _conn()
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        existing = con.execute(
+            "SELECT id FROM evaluations WHERE run_id=? AND user_id=? AND tenant_id=? ORDER BY id LIMIT 1",
+            (run_id, user_id, tenant_id or "default"),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE evaluations SET message_id=?, employee_id=?, conversation_id=?, rating=?, reason=?, "
+                "question_preview=?, answer_preview=?, updated_at=? WHERE id=?",
+                (message_id, employee_id, conversation_id, rating, reason,
+                 _clip(question_preview, 1000), _clip(answer_preview, 2000), now, existing["id"]),
+            )
+            con.commit()
+            con.close()
+            return
         con.execute(
-            "INSERT INTO evaluations(run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at)"
-            " VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO evaluations(run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at,"
+            "tenant_id,question_preview,answer_preview,status,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, message_id, employee_id, conversation_id, user_id,
-             rating, reason, datetime.datetime.now(datetime.timezone.utc).isoformat()),
+             rating, reason, now,
+             tenant_id or "default", _clip(question_preview, 1000), _clip(answer_preview, 2000),
+             "open", now),
         )
         con.commit()
         con.close()
@@ -374,7 +418,7 @@ def insert_evaluation(run_id, message_id, employee_id, conversation_id,
         logger.warning("insert_evaluation 失败", exc_info=True)
 
 
-def get_evaluation_stats(employee_id=None, period="30d"):
+def get_evaluation_stats(employee_id=None, period="30d", tenant_id=None):
     """返回聚合统计指标，供管理员评估页面使用。"""
     _ensure_evaluations_table()
     days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
@@ -384,6 +428,9 @@ def get_evaluation_stats(employee_id=None, period="30d"):
     # runs 聚合
     where = "WHERE r.started_at >= ?"
     params: list[Any] = [since]
+    if tenant_id:
+        where += " AND r.tenant_id = ?"
+        params.append(tenant_id)
     if employee_id:
         where += " AND r.employee_id = ?"
         params.append(employee_id)
@@ -391,19 +438,26 @@ def get_evaluation_stats(employee_id=None, period="30d"):
         SELECT COUNT(*) AS total_runs,
                AVG(r.duration_ms) AS avg_duration_ms,
                AVG(r.total_tokens) AS avg_tokens,
-               SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END)*1.0 / MAX(COUNT(*),1) AS error_rate
+               CASE WHEN COUNT(*) = 0 THEN 0.0
+                    ELSE SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END)*1.0 / COUNT(*) END AS error_rate
         FROM runs r {where}
     """, params).fetchone()
 
     # 工具成功率
     tool_row = con.execute(f"""
-        SELECT SUM(CASE WHEN e.status='ok' THEN 1 ELSE 0 END)*1.0 / MAX(SUM(CASE WHEN e.etype='tool' THEN 1 ELSE 0 END),1) AS tool_success_rate
+        SELECT COALESCE(SUM(CASE WHEN e.etype='tool' THEN 1 ELSE 0 END),0) AS tool_total,
+               CASE WHEN COALESCE(SUM(CASE WHEN e.etype='tool' THEN 1 ELSE 0 END),0) = 0 THEN 0.0
+                    ELSE SUM(CASE WHEN e.etype='tool' AND e.status='ok' THEN 1 ELSE 0 END)*1.0 /
+                         SUM(CASE WHEN e.etype='tool' THEN 1 ELSE 0 END) END AS tool_success_rate
         FROM events e JOIN runs r ON e.run_id=r.run_id {where}
     """, params).fetchone()
 
     # 用户满意度
     ewhere = "WHERE created_at >= ?"
     eparams: list[Any] = [since]
+    if tenant_id:
+        ewhere += " AND tenant_id = ?"
+        eparams.append(tenant_id)
     if employee_id:
         ewhere += " AND employee_id = ?"
         eparams.append(employee_id)
@@ -417,14 +471,19 @@ def get_evaluation_stats(employee_id=None, period="30d"):
     thumbs_up = eval_row["thumbs_up"] or 0
     score = thumbs_up / total if total else 0.0
 
-    # Top 工具
-    tw = "WHERE e.etype='tool' AND e.status='ok' AND r.started_at >= ?"
+    # Top 工具同时展示调用量和失败率，才能支持定位问题。
+    tw = "WHERE e.etype='tool' AND r.started_at >= ?"
     tparams: list[Any] = [since]
+    if tenant_id:
+        tw += " AND r.tenant_id = ?"
+        tparams.append(tenant_id)
     if employee_id:
         tw += " AND r.employee_id = ?"
         tparams.append(employee_id)
     top_tools = [dict(r) for r in con.execute(f"""
-        SELECT e.name, COUNT(*) AS count
+        SELECT e.name, COUNT(*) AS count,
+               SUM(CASE WHEN e.status='error' THEN 1 ELSE 0 END) AS failures,
+               SUM(CASE WHEN e.status='ok' THEN 1 ELSE 0 END)*1.0 / COUNT(*) AS success_rate
         FROM events e JOIN runs r ON e.run_id=r.run_id
         {tw}
         GROUP BY e.name ORDER BY count DESC LIMIT 10
@@ -441,34 +500,86 @@ def get_evaluation_stats(employee_id=None, period="30d"):
         GROUP BY DATE(r.started_at), r.employee_id ORDER BY date
     """, params).fetchall()]
 
+    # Feedback coverage is the share of runs with at least one rating.
+    rated_runs = con.execute(
+        f"SELECT COUNT(DISTINCT run_id) AS n FROM evaluations {ewhere}", eparams
+    ).fetchone()["n"] or 0
+    total_runs = row["total_runs"] or 0
+    reason_rows = con.execute(
+        f"SELECT COALESCE(NULLIF(reason,''),'unspecified') AS reason, COUNT(*) AS count "
+        f"FROM evaluations {ewhere} AND rating=-1 "
+        "GROUP BY COALESCE(NULLIF(reason,''),'unspecified') ORDER BY count DESC",
+        eparams,
+    ).fetchall()
     con.close()
     return {
-        "total_runs": row["total_runs"],
+        "total_runs": total_runs,
         "avg_duration_ms": row["avg_duration_ms"],
         "avg_tokens": row["avg_tokens"],
         "error_rate": row["error_rate"],
         "tool_success_rate": tool_row["tool_success_rate"],
+        "tool_total": tool_row["tool_total"],
         "satisfaction": {"total": total, "thumbs_up": thumbs_up,
-                         "thumbs_down": eval_row["thumbs_down"] or 0, "score": score},
+                         "thumbs_down": eval_row["thumbs_down"] or 0, "score": score,
+                         "rated_runs": rated_runs,
+                         "coverage": rated_runs / total_runs if total_runs else 0.0},
         "top_tools": top_tools,
+        "reason_breakdown": [dict(r) for r in reason_rows],
         "daily_trend": daily_trend,
     }
 
 
-def get_feedback_list(employee_id=None, rating=None, limit=50, offset=0):
-    """返回用户反馈列表，支持按员工/评分筛选。"""
+def get_feedback_list(employee_id=None, rating=None, limit=50, offset=0,
+                      period="30d", reason=None, status=None, tenant_id=None):
+    """返回可分页的问题反馈，所有筛选条件使用同一时间范围和租户口径。"""
     _ensure_evaluations_table()
-    where, params = "WHERE 1=1", []
+    days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
+    where, params = "WHERE created_at >= ?", [since]
+    if tenant_id:
+        where += " AND tenant_id = ?"
+        params.append(tenant_id)
     if employee_id:
         where += " AND employee_id = ?"
         params.append(employee_id)
     if rating is not None:
         where += " AND rating = ?"
         params.append(rating)
+    if reason:
+        if reason == "unspecified":
+            where += " AND (reason IS NULL OR reason = '')"
+        else:
+            where += " AND reason = ?"
+            params.append(reason)
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
     con = _conn()
+    total = con.execute(f"SELECT COUNT(*) AS total FROM evaluations {where}", params).fetchone()["total"]
     rows = con.execute(f"""
-        SELECT id,run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at
-        FROM evaluations {where} ORDER BY created_at DESC LIMIT ? OFFSET ?
+        SELECT id,run_id,message_id,employee_id,conversation_id,user_id,rating,reason,created_at,
+               question_preview,answer_preview,status,resolution_note,updated_at
+        FROM evaluations {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
     """, params + [limit, offset]).fetchall()
     con.close()
-    return [dict(r) for r in rows]
+    return {"items": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset}
+
+
+def update_feedback_status(feedback_id, status, resolution_note="", tenant_id=None):
+    """更新差评处置状态；状态由路由层校验，租户范围由调用者传入。"""
+    _ensure_evaluations_table()
+    where = "id = ?"
+    params: list[Any] = [status, _clip(resolution_note, 1000),
+                         datetime.datetime.now(datetime.timezone.utc).isoformat(), feedback_id]
+    if tenant_id:
+        where += " AND tenant_id = ?"
+        params.append(tenant_id)
+    con = _conn()
+    cur = con.execute(
+        f"UPDATE evaluations SET status=?, resolution_note=?, updated_at=? WHERE {where}", params
+    )
+    con.commit()
+    con.close()
+    return bool(cur.rowcount)

@@ -79,7 +79,7 @@ const convId = route.query.conv || ''
 const convTitle = ref('')
 const runs = ref([])
 const selectedRun = ref(null)
-const selectedRunId = ref(null)
+const selectedRunId = ref(route.query.run || null)
 const loading = ref(true)
 
 const STATUS_MAP = { done: { type: 'success', text: '完成' }, error: { type: 'error', text: '出错' }, interrupted: { type: 'warning', text: '等待审批' }, running: { type: 'info', text: '运行中' } }
@@ -96,7 +96,10 @@ async function loadRuns() {
     if (data.error) { loading.value = false; return }
     convTitle.value = data.title || convId
     runs.value = data.runs || []
-    if (runs.value.length) await loadDetail(runs.value[0].run_id)
+    if (runs.value.length) {
+      const target = runs.value.find(r => r.run_id === selectedRunId.value) || runs.value[0]
+      await loadDetail(target.run_id)
+    }
   } catch {} finally {
     loading.value = false
   }

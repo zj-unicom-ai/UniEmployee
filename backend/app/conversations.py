@@ -212,6 +212,9 @@ def touch(conv_id: str, *, title: str | None = None, preview: str | None = None,
 def _where(employee_id=None, user_id=None, tenant_id=None, channel_id=None, exclude_channel=False,
            exclude_auto=False, archived: bool | None = None, query: str = ""):
     sql = "WHERE deleted_at IS NULL"; params = []
+    # Benchmark conversations are retained for traceability but are surfaced
+    # in the dedicated evaluation UI, not mixed into a user's chat history.
+    sql += " AND SUBSTR(conv_id,1,7) <> 'c_eval_'"
     if employee_id: sql += " AND employee_id=?"; params.append(employee_id)
     if user_id: sql += " AND user_id=?"; params.append(user_id)
     if tenant_id: sql += " AND tenant_id=?"; params.append(tenant_id)

@@ -98,3 +98,31 @@ def test_query_isolation_and_missing():
     assert traces.list_runs("c_nothing") == []
     assert traces.get_run("r_missing") is None
     assert traces.get_run(r1)["conv_id"] == "c_a"
+
+
+def test_evaluation_feedback_dedup_tenant_scope_and_actionable_fields():
+    run_id = traces.start_run("c_eval_test", "xiaoshu", "u_eval", input_preview="查一月销售", tenant_id="tenant-a")
+    traces.finish_run(run_id, status="done")
+    traces.insert_evaluation(run_id, run_id, "xiaoshu", "c_eval_test", "u_eval", -1,
+                             "factual_error", "查一月销售", "给出的销售额与数据表不符", "tenant-a")
+    # A repeat submission updates the same run's rating instead of inflating counts.
+    traces.insert_evaluation(run_id, run_id, "xiaoshu", "c_eval_test", "u_eval", 1,
+                             "", "查一月销售", "更正后的回答", "tenant-a")
+
+    stats = traces.get_evaluation_stats("xiaoshu", "30d", "tenant-a")
+    assert stats["total_runs"] == 1
+    assert stats["satisfaction"]["total"] == 1
+    assert stats["satisfaction"]["thumbs_up"] == 1
+    assert stats["satisfaction"]["rated_runs"] == 1
+    assert stats["satisfaction"]["coverage"] == 1
+    assert stats["reason_breakdown"] == []
+
+    page = traces.get_feedback_list("xiaoshu", 1, 10, 0, "30d", tenant_id="tenant-a")
+    assert page["total"] == 1
+    assert page["items"][0]["question_preview"] == "查一月销售"
+    assert page["items"][0]["answer_preview"] == "更正后的回答"
+    assert traces.get_feedback_list(tenant_id="tenant-b")["total"] == 0
+
+    assert traces.update_feedback_status(page["items"][0]["id"], "resolved", "已修正查询口径", "tenant-a")
+    resolved = traces.get_feedback_list(status="resolved", tenant_id="tenant-a")
+    assert resolved["items"][0]["resolution_note"] == "已修正查询口径"
