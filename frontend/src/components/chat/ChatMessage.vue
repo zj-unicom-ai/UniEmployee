@@ -37,6 +37,7 @@ emit: rated(msg, rating, reason)
           已停止生成。{{ msg.content || msg.html ? '以上为当前已收到的部分内容。' : '' }}
           <n-button v-if="msg._retryPayload" text size="tiny" @click="$emit('retry', msg)">重新发送</n-button>
         </div>
+        <div v-if="msg.notice" class="msg-status running-status">{{ msg.notice }}</div>
         <div v-if="!msg.html && !msg.content && !msg.error && msg.status !== 'stopped' && msg.status !== 'retried'" class="msg-loading">
           <span class="loading-dot">.</span>
           <span class="loading-dot">.</span>

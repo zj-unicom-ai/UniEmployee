@@ -18,6 +18,14 @@
       </n-button>
       <n-button size="tiny" type="primary" :loading="downloading" @click="download">下载</n-button>
     </div>
+    <div v-if="isImage" class="image-preview">
+      <div v-if="loadingImage" class="html-preview-state">正在加载图片…</div>
+      <div v-else-if="imageError" class="html-preview-state html-preview-error">
+        {{ imageError }}
+        <n-button size="tiny" @click="loadImagePreview">重试</n-button>
+      </div>
+      <img v-else-if="imageUrl" :src="imageUrl" :alt="file.name" class="image-preview-content">
+    </div>
     <div v-if="showPreview" class="text-preview">
       <div v-if="loadingText" class="html-preview-state">正在加载文件…</div>
       <div v-else-if="textError" class="html-preview-state html-preview-error">
@@ -48,7 +56,7 @@
 <script setup>
 // 产物文件优先按 artifact_id 访问受 ACL 控制的文件端点；旧消息仍走 path 兼容入口。
 // HTML 看板、DOCX 和 Markdown 默认展开预览；其他文本类文件可按需展开。
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import api from '../../api.js'
 import ReportViewer from '../agent/analyst/ReportViewer.vue'
 import DocumentPreview from './DocumentPreview.vue'
@@ -56,6 +64,7 @@ import DocumentPreview from './DocumentPreview.vue'
 const props = defineProps({ file: { type: Object, required: true } })
 
 const PREVIEW_EXTS = ['md', 'txt', 'csv', 'log', 'json']
+const IMAGE_PREVIEW_MAX_BYTES = 20 * 1024 * 1024
 const downloading = ref(false)
 const showPreview = ref(false)
 const previewText = ref('')
@@ -70,12 +79,16 @@ const showDocxPreview = ref(false)
 const loadingDocx = ref(false)
 const docxError = ref('')
 const docxHtml = ref('')
+const imageUrl = ref('')
+const imageError = ref('')
+const loadingImage = ref(false)
 const requestSeq = ref(0)
 let previewController = null
 
 const ext = computed(() => (props.file.name || '').split('.').pop().toLowerCase())
 const isHtml = computed(() => ext.value === 'html' || ext.value === 'htm')
 const isDocx = computed(() => ext.value === 'docx')
+const isImage = computed(() => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'].includes(ext.value))
 const icon = computed(() => {
   if (isHtml.value) return '📊'
   if (ext.value === 'docx' || ext.value === 'doc') return '📄'
@@ -219,6 +232,47 @@ async function loadDocxPreview() {
   }
 }
 
+function clearImageUrl() {
+  if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
+  imageUrl.value = ''
+}
+
+async function loadImagePreview() {
+  previewController?.abort()
+  clearImageUrl()
+  const seq = ++requestSeq.value
+  if (props.file.size > IMAGE_PREVIEW_MAX_BYTES) {
+    imageError.value = '图片超过 20 MB，暂不支持页面内预览，请下载查看'
+    return
+  }
+  const controller = new AbortController()
+  previewController = controller
+  loadingImage.value = true
+  imageError.value = ''
+  try {
+    // 用带 Bearer token 的 API 客户端取 blob，不能把受 ACL 保护的文件地址直接交给 <img>。
+    const endpoint = fileEndpoint()
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
+      responseType: 'blob',
+      timeout: 30000,
+      signal: controller.signal,
+    })
+    if (seq !== requestSeq.value) return
+    if (!res.data?.type?.startsWith('image/')) {
+      imageError.value = '文件内容不是可预览的图片，请下载检查'
+      return
+    }
+    imageUrl.value = URL.createObjectURL(res.data)
+  } catch (e) {
+    if (seq === requestSeq.value && e.code !== 'ERR_CANCELED') {
+      imageError.value = '图片预览失败：' + errorMessage(e, '请稍后重试')
+    }
+  } finally {
+    if (seq === requestSeq.value) loadingImage.value = false
+  }
+}
+
 function toggleHtmlPreview() {
   showHtmlPreview.value = !showHtmlPreview.value
   if (showHtmlPreview.value && !reportHtml.value) loadHtmlPreview()
@@ -243,12 +297,22 @@ watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|')
   docxHtml.value = ''
   docxError.value = ''
   loadingDocx.value = false
+  clearImageUrl()
+  imageError.value = ''
+  loadingImage.value = false
   showHtmlPreview.value = isHtml.value
   showDocxPreview.value = isDocx.value
   if (ext.value === 'md') loadTextPreview()
   else if (isHtml.value) loadHtmlPreview()
   else if (isDocx.value) loadDocxPreview()
+  else if (isImage.value) loadImagePreview()
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  previewController?.abort()
+  requestSeq.value += 1
+  clearImageUrl()
+})
 </script>
 
 <style scoped>
@@ -294,6 +358,8 @@ watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|')
 }
 .html-preview { margin-top: 8px; }
 .docx-preview { margin-top: 8px; }
+.image-preview { display: flex; justify-content: center; align-items: center; min-height: 48px; margin-top: 8px; overflow: auto; background: #f1f5f9; border-radius: 6px; }
+.image-preview-content { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; }
 .html-preview-state { display: flex; align-items: center; gap: 8px; min-height: 48px; color: #64748b; font-size: 12px; }
 .html-preview-error { color: #b91c1c; }
 </style>
