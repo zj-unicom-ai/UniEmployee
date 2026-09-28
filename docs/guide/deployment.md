@@ -41,11 +41,12 @@ curl http://localhost:8787/readyz
 
 生产化追加清单：
 
+- [ ] 在 `.env` 设置 `APP_ENV=production`；使用独立的新库接入真实数据，旧演示库先核对并隔离 `seed` 来源实体和实验 CRM 指派，移出 `workspace` 中的已知模拟 CSV（程序不自动删除），逐项核对 RAGFlow 知识库来源
 - [ ] `JWT_SECRET` 换随机长串；登录后立即改默认管理员密码（保持 `admin123` 时系统会强制首登改密）
 - [ ] 前面加 HTTPS 反向代理（Nginx/Caddy），不要裸露 8787
 - [ ] `LOG_FILE` 指到挂载卷，配日志轮转
 - [ ] 配置每日备份（见下）
-- [ ] 启用沙箱时给 server 配 `SANDBOX_API_KEY` 并去掉其 `OPENSANDBOX_INSECURE_SERVER`
+- [ ] 执行型员工在生产模式下必须启用 `SANDBOX_ENABLED=1` 并部署 OpenSandbox；给 server 配 `SANDBOX_API_KEY` 并去掉其 `OPENSANDBOX_INSECURE_SERVER`，实测容器挂载和密钥隔离
 - [ ] 用到 Playwright 连接器时确认镜像内已 `npx playwright install --with-deps chromium`
 
 ## 形态三：已有 PostgreSQL 实例
@@ -65,11 +66,14 @@ curl http://localhost:8787/readyz
 ./scripts/backup.sh                    # 备份到项目根/backups，默认保留 7 份
 BACKUP_KEEP=30 ./scripts/backup.sh /data/backups   # 自定义目录与保留份数
 PGBIN=/opt/homebrew/opt/postgresql@16/bin ./scripts/backup.sh   # 指定 pg_dump 位置
+BACKUP_PG_CONTAINER=uniemployee-pg ./scripts/backup.sh  # 宿主机没有 pg_dump 时使用容器内工具
 ```
 
-脚本对 7 个业务库逐个 `pg_dump -Fc` 打包成带时间戳的 tar.gz，连接参数自动从 `.env` 读取。任一关键库导出失败都会返回非 0 且不生成归档，避免把部分备份误当完整备份。建议 crontab 每日一次：`0 3 * * * /path/to/scripts/backup.sh`。
+脚本对 7 个业务库逐个 `pg_dump -Fc`，并将 `workspace` 和 `manifest.txt` 一起打包成带时间戳的 tar.gz；连接参数默认从 `.env` 读取。数据库导出或文件归档失败都会返回非 0，且不生成正式归档。定时备份可用 crontab：`0 3 * * * /path/to/scripts/backup.sh`。在线备份清单标记为 `online_uncoordinated`：逐库导出和文件复制不是同一事务时间点。需要一致恢复点时，先暂停应用写入，再以 `BACKUP_QUIESCED=1` 执行备份；这个变量只记录操作状态，不会替你暂停写入。
 
-恢复：解包后对每个库 `pg_restore -U <user> -d <库名> --clean <dump文件>`，再重启应用。
+恢复：停止应用写入，解包到空目录；确认 `manifest.txt` 的库前缀及一致性标记，先将 `pg/*.dump` 分别用 `pg_restore -U <user> -d <目标库> --clean` 恢复到对应业务库，再恢复 `workspace/`，最后重启应用并核对会话、Trace、上传文件和生成产物。不要在未确认目标库和文件路径前对现有环境执行覆盖恢复。
+
+隔离演练：`PYTHONPATH=backend .venv/bin/python scripts/verify_backup_restore.py --pg-container <隔离PG容器> --pg-port <映射端口> --env-file <隔离凭据文件>`。脚本只创建临时前缀的 14 个库，验证 7 库及 workspace 的备份恢复，完成后删除这些临时库；不对现有业务库执行恢复。
 
 ## 升级
 
