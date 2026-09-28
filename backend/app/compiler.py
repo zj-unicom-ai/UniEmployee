@@ -22,6 +22,7 @@ from langchain.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.spec import EmployeeSpec
+from app.subagent_budget import SubagentBudgetMiddleware, policy as subagent_budget_policy
 from app.tools.kb import create_ticket
 from app.tools.data_tools import get_my_id
 from app.tools.search import bocha_search
@@ -492,6 +493,15 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
             checkpointer,
             user_id=user_id,
         )
+        budget_cfg = subagent_budget_policy()
+        budget_middleware = ([SubagentBudgetMiddleware(enforce_concurrency=False)]
+                             if budget_cfg["max_calls_per_run"] or budget_cfg["max_concurrent_per_run"]
+                             else [])
+        subagent_middleware = []
+        if backend is not None:
+            subagent_middleware.append(FilesystemMiddleware(
+                backend=backend, tools=_fs_tools_for_subagent(cfg)))
+        subagent_middleware.extend(budget_middleware)
         subagents.append({
             "name": cfg["name"],
             "description": cfg.get("description", ""),
@@ -499,10 +509,7 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
             "tools": tools,
             "model": _init_model(cfg.get("model") or spec.model),
             "permissions": cfg.get("permissions", []),
-            "middleware": [FilesystemMiddleware(
-                backend=backend,
-                tools=_fs_tools_for_subagent(cfg),
-            )] if backend is not None else [],
+            "middleware": subagent_middleware,
         })
     return subagents
 
@@ -672,6 +679,10 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         system_prompt += "\n" + spec.subagent_policy.strip()
     sop_detail = spec.sop_text.strip() if spec.sop_text else "（无刚性 SOP，按技能规程执行）"
 
+    budget_cfg = subagent_budget_policy()
+    budget_middleware = ([SubagentBudgetMiddleware()]
+                         if budget_cfg["max_calls_per_run"] or budget_cfg["max_concurrent_per_run"]
+                         else [])
     agent = create_deep_agent(
         model=_init_model(spec.model),
         tools=tools,
@@ -680,7 +691,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         memory=["/memories/AGENTS.md"],
         subagents=subagents or None,
         middleware=[FilesystemMiddleware(backend=backend,
-                                         tools=_fs_tools_for_user(user_id))],
+                                         tools=_fs_tools_for_user(user_id)),
+                    *budget_middleware],
         backend=backend,
         interrupt_on=spec.interrupt_on,
         checkpointer=checkpointer,
