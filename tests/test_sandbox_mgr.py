@@ -342,6 +342,31 @@ def test_build_backends_sandbox_production_fails_closed(monkeypatch):
         build_backends(spec, None)
 
 
+def test_local_shell_production_requires_sandbox(monkeypatch):
+    from app.compiler import build_backends
+    from app.spec import EmployeeSpec
+
+    spec = EmployeeSpec(id="xiaoxiao", name="x", model="m", persona="p",
+                        backend="local_shell")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("SANDBOX_ENABLED", raising=False)
+    with pytest.raises(RuntimeError, match="需要启用沙箱"):
+        build_backends(spec, None)
+
+    monkeypatch.setenv("SANDBOX_ENABLED", "1")
+    backend = build_backends(spec, None)
+    assert isinstance(backend.default, RoutingSandboxBackend)
+
+
+def test_development_local_shell_does_not_inherit_app_secrets(monkeypatch):
+    from app.compiler import _local_shell_backend
+
+    monkeypatch.setenv("JWT_SECRET", "sentinel-not-a-real-secret")
+    backend = _local_shell_backend()
+    assert "JWT_SECRET" not in backend._env
+    assert "PATH" in backend._env
+
+
 # ---- 孤儿清扫（二期）----
 
 class _FakeInfo:

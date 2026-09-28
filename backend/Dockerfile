@@ -12,11 +12,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app/backend
 
-# 系统依赖：编译 bcrypt/cryptography 等可能用到，装上更稳
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl \
-    && rm -rf /var/lib/apt/lists/*
-
 # 先装依赖（利用镜像层缓存）：requirements.lock.txt 是 pip freeze 的完整可复现清单
 COPY backend/requirements.lock.txt /app/requirements.lock.txt
 RUN pip install --upgrade pip --retries 10 --timeout 60 \
@@ -33,6 +28,6 @@ EXPOSE 8787
 
 # 容器探针：依赖未就绪时 /readyz 返回 503，容器视为不健康
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD curl -fsS http://localhost:8787/readyz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8787/readyz', timeout=4)"
 
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
