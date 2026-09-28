@@ -28,6 +28,13 @@ async def list_ai_models(keyword: str = "", model_type: int = None):
     return catalog.list_models(keyword=keyword, model_type=model_type)
 
 
+@router.get("/admission")
+async def get_model_admission_stats():
+    """管理员查看本进程模型请求准入、排队等待和拒绝计数。"""
+    from app import model_admission
+    return model_admission.stats()
+
+
 @router.get("/{model_id}")
 async def get_ai_model(model_id: int):
     m = catalog.get_model(model_id)

@@ -9,6 +9,13 @@ UniEmployee 通过环境变量配置，应用启动时由 `backend/app/main.py` 
 | 变量 | 必填 | 默认 | 说明 |
 |---|---|---|---|
 | `MODEL_NAME` | ✅ | — | 员工默认模型，格式为 `init_chat_model` 可识别的 `provider:model`，如 `openai:deepseek-chat`。员工 yaml 里的 `${MODEL_NAME}` 占位符在播种/编译时替换为该值；对话页可临时切换其他已登记模型 |
+| `MODEL_MAX_CONCURRENT` | `0`（关闭） | 每进程、每模型同时运行的 Agent 数；达到上限后进入有限队列。多副本不是共享配额 |
+| `MODEL_MAX_QUEUE` | `20` | 每个模型最多等待的 Agent 数；超出直接返回“模型当前请求较多” |
+| `MODEL_QUEUE_TIMEOUT_SEC` | `15` | Agent 等待模型执行槽的最长时间；超时请求会记入 Trace 并拒绝执行 |
+| `MODEL_REQUEST_TIMEOUT_SEC` | `120` | OpenAI 兼容模型单次 API 调用超时秒数；设为 `0` 使用 provider 默认值。它限制模型调用，不限制工具执行总时长 |
+| `SUBAGENT_MAX_CALLS_PER_RUN` | `0`（不限） | 单次 Agent run 中主 Agent 与显式配置子代理可调用 `task` 的总次数；按 Trace 基线启用，修改后重启以重编译员工 |
+| `SUBAGENT_MAX_CONCURRENT_PER_RUN` | `0`（不限） | 单次 run 中主 Agent 顶层同时运行的 task 子代理数；显式子代理的总次数共享此预算，但其内部递归并发不由此 semaphore 约束 |
+| `SUBAGENT_QUEUE_TIMEOUT_SEC` | `15` | 主 Agent 等待子代理并发槽的秒数；仅并发上限大于 0 时生效 |
 | `OPENAI_BASE_URL` | ✅* | — | OpenAI 兼容协议端点。DeepSeek 官方为 `https://api.deepseek.com`；任何兼容端点（vLLM / Xinference / One-API 等）均可，用于私有化部署 |
 | `OPENAI_API_KEY` | ✅* | — | 对应端点的 API Key |
 
@@ -31,6 +38,15 @@ UniEmployee 通过环境变量配置，应用启动时由 `backend/app/main.py` 
 生产环境必须设置 `AUTH_COOKIE_SECURE=1` 并使用 HTTPS。可用 `OIDC_GROUP_ROLE_MAP`
 与 `OIDC_ORG_MAP`（均为 JSON）把身份源的组和部门码映射为平台角色、组织；身份源
 原始角色不会被直接信任。启用 SSO 后，只有标记为紧急管理员的本地帐号可用密码登录。
+
+## 部署模式与演示数据
+
+生产接入真实数据时，先在 `.env` 设置 `APP_ENV=production`。该模式关闭演示本体播种，阻止静态 mock CRM 与 CRM Lab 工具加载；旧库若仍有 default 租户未审核的 `seed` 来源本体实例或实验 CRM 指派，启动会明确报错，不自动删除数据。请先核对来源、迁移或隔离，再重新启动。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `APP_ENV` | 空（按开发环境处理） | `prod` / `production` 启用生产模式；`.env.example` 显式设为 `development` 供本地演示 |
+| `DEMO_DATA_ENABLED` | `1` | 开发环境置 `0` 可跳过演示本体播种；生产模式下始终禁用 |
 
 ## 数据库
 
@@ -66,16 +82,18 @@ PostgreSQL 模式下应用会自动创建/迁移 7 个业务库：`catalog`（�
 | `APPROVAL_TTL_SECONDS` | `86400` | 审批单过期时间（秒），过期未处理的审批单作废 |
 | `MAX_ATTACHMENT_SIZE` | `20971520`（20MB） | 会话附件上传大小上限（字节） |
 | `CONV_RECOVER_LIMIT` | `2000` | 服务启动时会话恢复的最大并发恢复量 |
+| `AGENT_RUN_EVENT_RETENTION_DAYS` | `7` | 后台 Agent 运行的 SSE 重放事件保留天数；运行状态与 Trace 关联元数据继续保留 |
 
 ## 自动化任务
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `AUTOMATIONS_DISABLED` | 空 | 置 `1` 跳过进程内调度器（cron 任务不再触发；事件入口仍可用）。调试或禁用定时能力时使用 |
+| `AUTOMATION_EXECUTION_RETENTION_DAYS` | `90` | 自动化执行历史保留天数；过期的终态记录在应用启动时清理，至少为 1 天 |
 
 ## 沙箱（OpenSandbox，可选）
 
-`backend=sandbox` 的员工（如 net-ops）的 `execute`/文件工具在沙箱容器内执行；`SANDBOX_ENABLED` 未置 `1` 时自动回退宿主机 `local_shell`。
+`backend=sandbox` 的员工（如 net-ops）的 `execute`/文件工具在沙箱容器内执行；开发模式下 `SANDBOX_ENABLED` 未置 `1` 时回退宿主机 `local_shell`，生产模式禁止回退。生产模式中的 `local_shell` 员工也必须启用沙箱。
 
 | 变量 | 默认 | 说明 |
 |---|---|---|

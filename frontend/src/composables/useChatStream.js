@@ -67,11 +67,22 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
   const sending = ref(false)
   let activeController = null
   let activeMessageIdx = null
+  let activeRunId = null
 
   function abortActiveStream() {
     if (activeController) {
       activeController.abort()
       activeController = null
+    }
+  }
+
+  async function detachActiveStream() {
+    if (!activeController) return
+    abortActiveStream()
+    // 等正在 read() 的 fetch 收到 AbortError 并完成自身清理，避免切换会话后
+    // 旧请求按消息下标改写新会话气泡。
+    for (let i = 0; i < 50 && sending.value; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
     }
   }
 
@@ -82,6 +93,12 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     msg._streamTerminal = true
     setStage('report', 'stopped', '已由用户停止')
     touch()
+    if (activeRunId) {
+      void fetch(`/api/runs/${activeRunId}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      })
+    }
     abortActiveStream()
   }
 
@@ -103,7 +120,19 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
   function handleEvent(ev, msgIdx) {
     const msg = messages.value[msgIdx]
     if (!msg) return
-    if (ev.type === 'stage') {
+    if (ev._event_seq) msg._eventSeq = Math.max(msg._eventSeq || 0, ev._event_seq)
+    if (ev.type === 'run_started') {
+      msg._agentRunId = ev.run_id
+      activeRunId = ev.run_id
+    } else if (ev.type === 'trace_started') {
+      msg.run_id = ev.trace_run_id
+    } else if (ev.type === 'run_cancelled') {
+      msg.status = 'stopped'
+      msg.notice = ''
+      msg._streamTerminal = true
+      setStage('report', 'stopped', ev.message || '运行已取消')
+      touch()
+    } else if (ev.type === 'stage') {
       setStage(ev.stage, ev.status, ev.detail_text)
     } else if (ev.type === 'thinking') {
       if (!msg.trace) msg.trace = []
@@ -215,16 +244,46 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
       }
     }
     const msg = messages.value[msgIdx]
-    if (msg && !msg._streamTerminal) {
-      msg.error = msg._md || msg.html || msg.content
-        ? '连接已中断，当前结果可能不完整，请刷新历史或继续追问。'
-        : '连接已中断，未收到最终结果，请重试。'
-      msg.status = 'interrupted'
-      setStage('report', 'error', msg.error)
-      touch()
-    }
     if (msg && msg.trace && !msg.trace.length) delete msg.trace
     scrollToBottom?.()
+    return Boolean(msg?._streamTerminal)
+  }
+
+  async function reconnectRun(runId, msgIdx, controller, maxRetries = 6) {
+    const msg = messages.value[msgIdx]
+    for (let attempt = 0; attempt < maxRetries && !controller.signal.aborted; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** attempt), 4000)))
+      try {
+        const after = msg?._eventSeq || 0
+        const resp = await fetch(`/api/runs/${runId}/events?after=${after}`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+          signal: controller.signal,
+        })
+        if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
+        if (await readStream(resp, msgIdx)) return true
+      } catch (e) {
+        if (e.name === 'AbortError') throw e
+      }
+    }
+    return false
+  }
+
+  function markBackgroundRunning(msgIdx) {
+    const msg = messages.value[msgIdx]
+    if (!msg || msg._streamTerminal) return
+    msg.status = 'running'
+    msg.notice = '连接已断开，任务仍在后台运行；重新打开该会话会自动续接。'
+    setStage('report', 'active', '后台运行中')
+    touch()
+  }
+
+  async function findActiveRun(convId) {
+    if (!convId) return null
+    const response = await fetch(`/api/conversations/${convId}/active-run`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+    })
+    if (!response.ok) return null
+    return (await response.json()).run || null
   }
 
   async function sendTo(endpoint, text, attachments = [], dataSource = null, model = '', options = {}) {
@@ -268,27 +327,86 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         signal: controller.signal,
       })
       if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
+      const responseRunId = resp.headers.get('X-Run-ID')
+      if (responseRunId) {
+        botMsg._agentRunId = responseRunId
+        activeRunId = responseRunId
+      }
       options.onAccepted?.()
-      await readStream(resp, botIdx)
+      const complete = await readStream(resp, botIdx)
+      if (!complete && responseRunId && !controller.signal.aborted) {
+        const reconnected = await reconnectRun(responseRunId, botIdx, controller)
+        if (!reconnected) markBackgroundRunning(botIdx)
+      } else if (!complete) {
+        markBackgroundRunning(botIdx)
+      }
       if (activeController === controller) activeController = null
     } catch (e) {
       const msg = messages.value[botIdx]
       if (e.name !== 'AbortError' && msg) {
+        if (!msg._agentRunId) {
+          const convId = endpoint.match(/\/conversations\/([^/?]+)\/messages/)?.[1]
+          try {
+            const active = await findActiveRun(convId)
+            if (active) msg._agentRunId = active.id
+          } catch {}
+        }
+        if (msg._agentRunId) {
+          const reconnected = await reconnectRun(msg._agentRunId, botIdx, controller)
+          if (!reconnected) markBackgroundRunning(botIdx)
+        } else {
         msg.error = `请求失败：${e.message || '网络连接不可用'}`
         msg.status = 'error'
         setStage('report', 'error', msg.error)
         touch()
+        }
       } else if (e.name === 'AbortError' && msg && !msg._streamTerminal) {
-        msg.status = 'interrupted'
-        msg.error = '连接已中断，当前结果可能不完整。'
-        setStage('report', 'error', msg.error)
-        touch()
+        markBackgroundRunning(botIdx)
       }
       if (activeController === controller) activeController = null
     }
     if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
+    if (activeMessageIdx === null) activeRunId = null
     scrollToBottom?.()
+  }
+
+  async function resumeActiveRun(convId) {
+    if (!convId || sending.value) return false
+    const lookup = await fetch(`/api/conversations/${convId}/active-run`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+    })
+    if (!lookup.ok) return false
+    const run = (await lookup.json()).run
+    if (!run) return false
+    const botIdx = messages.value.length
+    messages.value.push({
+      role: 'bot', content: '', html: '', _md: '', trace: [],
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      _agentRunId: run.id, _eventSeq: 0, status: 'running',
+    })
+    sending.value = true
+    activeMessageIdx = botIdx
+    activeRunId = run.id
+    resetPipeline()
+    setStage('report', 'active', '正在恢复后台任务')
+    const controller = new AbortController()
+    abortActiveStream()
+    activeController = controller
+    void (async () => {
+      try {
+        const complete = await reconnectRun(run.id, botIdx, controller)
+        if (!complete) markBackgroundRunning(botIdx)
+      } catch (e) {
+        if (e.name !== 'AbortError') markBackgroundRunning(botIdx)
+      } finally {
+        if (activeController === controller) activeController = null
+        if (activeMessageIdx === botIdx) activeMessageIdx = null
+        activeRunId = null
+        sending.value = false
+      }
+    })()
+    return true
   }
 
   async function decide(approvalId, decision, msgIdx) {
@@ -312,7 +430,18 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         signal: controller.signal,
       })
       if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)
-      await readStream(resp, botIdx)
+      const responseRunId = resp.headers.get('X-Run-ID')
+      if (responseRunId) {
+        messages.value[botIdx]._agentRunId = responseRunId
+        activeRunId = responseRunId
+      }
+      const complete = await readStream(resp, botIdx)
+      if (!complete && responseRunId && !controller.signal.aborted) {
+        const reconnected = await reconnectRun(responseRunId, botIdx, controller)
+        if (!reconnected) markBackgroundRunning(botIdx)
+      } else if (!complete) {
+        markBackgroundRunning(botIdx)
+      }
       if (activeController === controller) activeController = null
     } catch (e) {
       const reply = messages.value[botIdx]
@@ -321,14 +450,13 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
         reply.status = 'error'
         touch()
       } else if (e.name === 'AbortError' && reply && !reply._streamTerminal) {
-        reply.status = 'interrupted'
-        reply.error = '审批恢复连接已中断，请刷新会话确认审批状态。'
-        touch()
+        markBackgroundRunning(botIdx)
       }
       if (activeController === controller) activeController = null
     }
     if (activeMessageIdx === botIdx) activeMessageIdx = null
     sending.value = false
+    activeRunId = null
   }
 
   return {
@@ -338,6 +466,8 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     setStage,
     resetPipeline,
     abortActiveStream,
+    detachActiveStream,
     stopActiveStream,
+    resumeActiveRun,
   }
 }

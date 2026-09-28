@@ -158,14 +158,27 @@ class EvaluationIn(BaseModel):
     conversation_id: str = ""
     rating: int   # 1 or -1
     reason: str = ""
+    question_preview: str = ""
+    answer_preview: str = ""
 
 @router.post("/evaluations")
 async def submit_evaluation(body: EvaluationIn,
-                            user: dict = Depends(auth.get_current_user)):
+                            context=Depends(auth.get_auth_context)):
+    from fastapi import HTTPException
     from app import traces
+    if body.rating not in (1, -1):
+        raise HTTPException(400, "rating 必须为 1 或 -1")
+    if not body.run_id:
+        raise HTTPException(400, "缺少关联的运行记录")
+    run = traces.get_run(body.run_id, tenant_id=context.tenant_id)
+    if not run or run.get("user_id") != context.user_id:
+        raise HTTPException(404, "关联的运行记录不存在")
     traces.insert_evaluation(
-        run_id=body.run_id, message_id=body.message_id,
-        employee_id=body.employee_id, conversation_id=body.conversation_id,
-        user_id=user["id"], rating=body.rating, reason=body.reason,
+        run_id=body.run_id, message_id=body.message_id or body.run_id,
+        employee_id=run.get("employee_id") or body.employee_id,
+        conversation_id=run.get("conv_id") or body.conversation_id,
+        user_id=context.user_id, rating=body.rating, reason=body.reason,
+        question_preview=body.question_preview or run.get("input_preview", ""),
+        answer_preview=body.answer_preview, tenant_id=context.tenant_id,
     )
     return {"ok": True}

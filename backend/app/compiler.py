@@ -22,6 +22,7 @@ from langchain.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.spec import EmployeeSpec
+from app.subagent_budget import SubagentBudgetMiddleware, policy as subagent_budget_policy
 from app.tools.kb import create_ticket
 from app.tools.data_tools import get_my_id
 from app.tools.search import bocha_search
@@ -34,6 +35,7 @@ from app.agent.analyst.tools.sql_tools import ANALYST_SQL_TOOLS
 from app.agent.analyst.fileqa.tools import ANALYST_FILE_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
 from app.sandbox_mgr import RoutingSandboxBackend, enabled as sandbox_enabled
+from app.demo_isolation import ensure_connector_allowed, is_production
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV_BIN = str(ROOT / ".venv" / "bin")
@@ -385,9 +387,18 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
     if spec.mcp_servers and os.environ.get("MCP_DISABLED") != "1":
         servers = {}
         for name, cfg in spec.mcp_servers.items():
+            ensure_connector_allowed(name)
             cfg = dict(cfg)
             transport = (cfg.get("transport") or "stdio").lower()
             if transport == "stdio":
+                if name == "crm_lab":
+                    # MCP 子进程的 env 不继承应用进程的全部变量；仅传入此
+                    # 连接器必需的地址与只读密钥，密钥不写入 catalog 配置。
+                    cfg["env"] = {
+                        **(cfg.get("env") or {}),
+                        "CRM_LAB_API_URL": os.environ.get("CRM_LAB_API_URL", "http://127.0.0.1:18780"),
+                        "CRM_LAB_READ_KEY": os.environ.get("CRM_LAB_READ_KEY", ""),
+                    }
                 # ${PYTHON_BIN} 模板 = 本项目 Python 解释器，args 按仓库相对路径补 ROOT
                 # （保留旧的纯 Python 连接器兼容，如 crm）。其它 command（如 npx）原样透传，
                 # env/args 由配置直接给 MultiServerMCPClient，支持 node 型 MCP 连接器。
@@ -441,8 +452,11 @@ def _init_model(model: str):
         cfg = resolve_runtime_model(model)
     except Exception:
         cfg = None
+    request_timeout = max(0.0, float(os.environ.get("MODEL_REQUEST_TIMEOUT_SEC", "120")))
     if cfg:
         kwargs = {"use_responses_api": False}
+        if request_timeout > 0:
+            kwargs["timeout"] = request_timeout
         if cfg.get("api_key"):
             kwargs["api_key"] = cfg["api_key"]
         if cfg.get("api_domain"):
@@ -450,7 +464,10 @@ def _init_model(model: str):
         return init_chat_model(cfg["base_model"], **kwargs)
     # 回退到环境变量
     if model.startswith("openai:"):
-        return init_chat_model(model, use_responses_api=False)
+        kwargs = {"use_responses_api": False}
+        if request_timeout > 0:
+            kwargs["timeout"] = request_timeout
+        return init_chat_model(model, **kwargs)
     return model
 
 
@@ -476,6 +493,15 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
             checkpointer,
             user_id=user_id,
         )
+        budget_cfg = subagent_budget_policy()
+        budget_middleware = ([SubagentBudgetMiddleware(enforce_concurrency=False)]
+                             if budget_cfg["max_calls_per_run"] or budget_cfg["max_concurrent_per_run"]
+                             else [])
+        subagent_middleware = []
+        if backend is not None:
+            subagent_middleware.append(FilesystemMiddleware(
+                backend=backend, tools=_fs_tools_for_subagent(cfg)))
+        subagent_middleware.extend(budget_middleware)
         subagents.append({
             "name": cfg["name"],
             "description": cfg.get("description", ""),
@@ -483,10 +509,7 @@ async def _assemble_subagents(spec: EmployeeSpec, checkpointer, backend=None,
             "tools": tools,
             "model": _init_model(cfg.get("model") or spec.model),
             "permissions": cfg.get("permissions", []),
-            "middleware": [FilesystemMiddleware(
-                backend=backend,
-                tools=_fs_tools_for_subagent(cfg),
-            )] if backend is not None else [],
+            "middleware": subagent_middleware,
         })
     return subagents
 
@@ -532,13 +555,12 @@ def _local_shell_backend() -> LocalShellBackend:
         root_dir=str(PROJECT_ROOT),
         virtual_mode=False,
         env={"PATH": f"{VENV_BIN}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
-        inherit_env=True,
+        inherit_env=False,
     )
 
 
 def _production_mode() -> bool:
-    return (os.environ.get("APP_ENV", "").lower() in ("prod", "production")
-            or os.environ.get("REQUIRE_SANDBOX", "") == "1")
+    return is_production() or os.environ.get("REQUIRE_SANDBOX", "") == "1"
 
 
 def _fs_tools_for_user(user_id: str | None) -> list[str] | str:
@@ -570,7 +592,12 @@ def _fs_tools_for_subagent(cfg: dict) -> list[str]:
 def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     """构造 CompositeBackend：默认后端 + /data、/skills、/memories、/sops 路由。"""
     if spec.backend == "local_shell":
-        default_backend = _local_shell_backend()
+        if _production_mode():
+            if not sandbox_enabled():
+                raise RuntimeError("生产模式的执行型员工需要启用沙箱，禁止使用宿主机 LocalShellBackend")
+            default_backend = RoutingSandboxBackend()
+        else:
+            default_backend = _local_shell_backend()
     elif spec.backend == "sandbox":
         # sandbox 员工：execute/fs 工具进 OpenSandbox 沙箱（按会话路由，见 sandbox_mgr）。
         # 开关未置 1（测试/开发/未部署 server）回退宿主机 LocalShellBackend，零行为变化。
@@ -652,6 +679,10 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         system_prompt += "\n" + spec.subagent_policy.strip()
     sop_detail = spec.sop_text.strip() if spec.sop_text else "（无刚性 SOP，按技能规程执行）"
 
+    budget_cfg = subagent_budget_policy()
+    budget_middleware = ([SubagentBudgetMiddleware()]
+                         if budget_cfg["max_calls_per_run"] or budget_cfg["max_concurrent_per_run"]
+                         else [])
     agent = create_deep_agent(
         model=_init_model(spec.model),
         tools=tools,
@@ -660,7 +691,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         memory=["/memories/AGENTS.md"],
         subagents=subagents or None,
         middleware=[FilesystemMiddleware(backend=backend,
-                                         tools=_fs_tools_for_user(user_id))],
+                                         tools=_fs_tools_for_user(user_id)),
+                    *budget_middleware],
         backend=backend,
         interrupt_on=spec.interrupt_on,
         checkpointer=checkpointer,

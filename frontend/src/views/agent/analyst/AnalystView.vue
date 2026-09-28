@@ -533,8 +533,7 @@ async function newConv({ syncUrl = true, replaceUrl = false } = {}) {
 
 async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
   if (stream.sending.value) {
-    message.warning('请先停止当前生成，再切换会话')
-    return false
+    await stream.detachActiveStream()
   }
   try {
     const data = await analystApi.getAnalystConversation(cid)
@@ -588,6 +587,7 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
     scrollToBottom()
     closeDrawers()
     await loadHistory()
+    await stream.resumeActiveRun(cid)
     if (syncUrl) await setAnalystUrl({ conv: cid }, replaceUrl)
     return true
   } catch (e) {

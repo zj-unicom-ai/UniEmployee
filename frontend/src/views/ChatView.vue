@@ -318,6 +318,7 @@ async function submitRating(msg, rating, idx, reason = '') {
   if (msg._evaluated) return
   msg._evaluated = rating
   messages.value = [...messages.value]
+  const precedingUser = [...messages.value.slice(0, idx)].reverse().find(item => item.role === 'user')
   try {
     await api.post('/me/evaluations', {
       run_id: msg.run_id || '',
@@ -326,8 +327,14 @@ async function submitRating(msg, rating, idx, reason = '') {
       conversation_id: msg.conversation_id || convId.value || '',
       rating,
       reason,
+      question_preview: precedingUser?.content || '',
+      answer_preview: msg._md || msg.content || '',
     })
-  } catch {}
+  } catch (e) {
+    msg._evaluated = null
+    messages.value = [...messages.value]
+    message.error(e.response?.data?.detail || '评价未保存，请重试')
+  }
 }
 
 /* ---------- 历史会话 ---------- */
@@ -400,8 +407,7 @@ async function updateConversationMeta(cid, changes) {
 
 async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
   if (stream.sending.value) {
-    message.warning('请先停止当前生成，再切换会话')
-    return false
+    await stream.detachActiveStream()
   }
   try {
     const { data } = await api.get(`/conversations/${cid}`)
@@ -464,6 +470,7 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
       }
     }
     await loadHistory(data.employee_id)
+    await stream.resumeActiveRun(cid)
     scrollToBottom()
     closeDrawers()
     if (syncUrl) await setChatUrl({ conv: cid }, replaceUrl)

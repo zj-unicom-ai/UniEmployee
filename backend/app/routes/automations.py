@@ -4,11 +4,11 @@
 - 事件入口 POST /api/automations/events/{event_key} 面向外部系统，
   靠任务级 secret 校验（未配置 secret 则直接放行）
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app import automations, auth, runtime
 from app.models import (
-    AutomationCreate, AutomationUpdate, AutomationEventIn,
+    AutomationCreate, AutomationUpdate, AutomationEventIn, AutomationRetryIn,
 )
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
@@ -102,20 +102,26 @@ async def delete_automation(aid: str,
 
 
 @router.post("/events/{event_key}")
-async def event_trigger(event_key: str, body: AutomationEventIn):
+async def event_trigger(event_key: str, body: AutomationEventIn,
+                        idempotency_key: str = Header(alias="Idempotency-Key")):
     """外部事件入口：触发所有监听该事件的任务并返回执行结果。"""
     autos = automations.list_by_event(event_key)
     if not autos:
         raise HTTPException(404, "没有启用中的任务监听该事件")
+    key = idempotency_key.strip()
+    if not key or len(key) > 200:
+        raise HTTPException(400, "Idempotency-Key 长度须为 1-200 个字符")
     results = []
     for auto in autos:
         if auto.get("secret") and auto["secret"] != (body.secret or ""):
             continue
-        r = await automations.execute(auto, payload=body.payload, trigger="event")
+        r = await automations.execute(auto, payload=body.payload, trigger="event",
+                                      trigger_key=key)
         results.append({"id": auto["id"], "name": auto["name"], **r})
     if not results:
         raise HTTPException(403, "secret 校验失败")
-    return {"event": event_key, "triggered": len(results), "results": results}
+    return {"event": event_key, "triggered": len(results),
+            "idempotency_key": key, "results": results}
 
 
 @router.post("/{aid}/run")
@@ -127,4 +133,40 @@ async def run_automation(aid: str,
     if not auto:
         raise HTTPException(404, "任务不存在")
     result = await automations.execute(auto, trigger="manual")
+    return result
+
+
+@router.get("/{aid}/executions")
+async def list_automation_executions(aid: str, limit: int = 50,
+                                     user: dict = Depends(auth.get_current_user_or_fallback)):
+    _require_admin(user)
+    if not automations.get(aid):
+        raise HTTPException(404, "任务不存在")
+    return {"items": automations.list_executions(aid, limit)}
+
+
+@router.post("/{aid}/executions/{execution_id}/retry")
+async def retry_automation_execution(aid: str, execution_id: str,
+                                     body: AutomationRetryIn | None = None,
+                                     idempotency_key: str = Header(alias="Idempotency-Key"),
+                                     user: dict = Depends(auth.get_current_user_or_fallback)):
+    """仅显式重跑失败/中断记录；不自动重试，避免重复业务副作用。"""
+    _require_admin(user)
+    auto = automations.get(aid)
+    if not auto:
+        raise HTTPException(404, "任务不存在")
+    previous = automations.get_execution(execution_id)
+    if not previous or previous["automation_id"] != aid:
+        raise HTTPException(404, "执行记录不存在")
+    if previous["status"] not in ("error", "interrupted"):
+        raise HTTPException(409, f"当前状态不支持人工重跑：{previous['status']}")
+    key = idempotency_key.strip()
+    if not key:
+        raise HTTPException(400, "Idempotency-Key 不能为空")
+    if len(key) > 200:
+        raise HTTPException(400, "Idempotency-Key 长度不能超过 200 个字符")
+    result = await automations.execute(
+        auto, payload=body.payload if body else None, trigger="manual_retry",
+        trigger_key=key, retry_of=execution_id)
+    result["retry_of"] = execution_id
     return result

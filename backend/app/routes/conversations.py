@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
-from app import attachments, auth, runtime, approvals, conversations, catalog, traces
+from app import attachments, auth, runtime, approvals, conversations, catalog, traces, agent_runs
 from app.models import MessageIn, DecisionIn, ConversationUpdateIn
-from app.streaming import _stream_run, employee_of, reconstruct, conv_emp_map, conv_owner_map
+from app.streaming import employee_of, reconstruct, conv_emp_map, conv_owner_map
 from app.streaming import conv_tenant_map
 from app.report_artifacts import archive_assistant_reports
 
@@ -194,42 +194,101 @@ async def send_message(conv_id: str, body: MessageIn,
     preview = text[:60] or f"[附件] {atts[0]['name']}"
     # 模型选择：请求体 model > 会话绑定 model > 员工默认
     req_model = (body.model or "").strip()
-    if not meta:
-        conversations.create(conv_id, emp, title=title, preview=preview,
-                             count=1, user_id=uid, model=req_model or None,
-                             tenant_id=context.tenant_id)
-    else:
-        if meta.get("user_id") == "default":
-            conversations.claim(conv_id, uid)
-        conversations.touch(conv_id, title=title, preview=preview, bump=1)
-        if req_model:
-            conversations.set_model(conv_id, req_model)
-    content = attachments.compose_user_content(body.message, atts)
-    # 数据分析员工：CSV/Excel 附件自动注册为 DuckDB 表（表格问答），
-    # 注册摘要替换默认处理指引——xiaoshu 是 standard 后端无 run_python。
-    if emp == "xiaoshu":
-        try:
-            from app.agent.analyst.fileqa import manager as fileqa_manager
-            reg_summary = fileqa_manager.register_attachments(atts, uid)
-        except Exception:
-            logger.warning("表格附件注册异常 conv=%s", conv_id, exc_info=True)
-            reg_summary = ""
-        if reg_summary:
-            content = attachments.compose_user_content(
-                body.message, atts,
-                guidance="csv/xlsx 数据文件已自动注册为可查询数据表，"
-                         "用 file_table_list 查看表结构，用 file_table_query "
-                         "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
-    # 最终使用的模型：请求体优先，其次会话绑定
-    bound_model = (meta or {}).get("model") or ""
-    use_model = req_model or bound_model
-    input_ = {"messages": [{"role": "user", "content": content}]}
+    try:
+        run = agent_runs.create(conv_id=conv_id, tenant_id=context.tenant_id,
+                                user_id=uid, employee_id=emp)
+    except agent_runs.ActiveRunError as exc:
+        raise HTTPException(409, {"error": "active_run", "run_id": exc.run_id}) from exc
+    try:
+        if not meta:
+            conversations.create(conv_id, emp, title=title, preview=preview,
+                                 count=1, user_id=uid, model=req_model or None,
+                                 tenant_id=context.tenant_id)
+        else:
+            if meta.get("user_id") == "default":
+                conversations.claim(conv_id, uid)
+            conversations.touch(conv_id, title=title, preview=preview, bump=1)
+            if req_model:
+                conversations.set_model(conv_id, req_model)
+        content = attachments.compose_user_content(body.message, atts)
+        # 数据分析员工：CSV/Excel 附件自动注册为 DuckDB 表（表格问答）。
+        if emp == "xiaoshu":
+            try:
+                from app.agent.analyst.fileqa import manager as fileqa_manager
+                reg_summary = fileqa_manager.register_attachments(atts, uid)
+            except Exception:
+                logger.warning("表格附件注册异常 conv=%s", conv_id, exc_info=True)
+                reg_summary = ""
+            if reg_summary:
+                content = attachments.compose_user_content(
+                    body.message, atts,
+                    guidance="csv/xlsx 数据文件已自动注册为可查询数据表，"
+                             "用 file_table_list 查看表结构，用 file_table_query "
+                             "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
+        use_model = req_model or (meta or {}).get("model") or ""
+        input_ = {"messages": [{"role": "user", "content": content}]}
+        agent_runs.launch(
+            run["id"], input_, user_id=uid, role=context.role,
+            datasource_id=datasource_id, data_source=data_source,
+            model_override=use_model, tenant_id=context.tenant_id,
+            auth_context=context.as_runtime_config(),
+        )
+    except Exception:
+        agent_runs.finish(run["id"], "error", "运行启动前准备失败")
+        raise
     return StreamingResponse(
-        _stream_run(conv_id, input_, user_id=uid, role=context.role,
-                    datasource_id=datasource_id, data_source=data_source,
-                    model_override=use_model, tenant_id=context.tenant_id,
-                    auth_context=context.as_runtime_config()),
-        media_type="text/event-stream")
+        agent_runs.subscribe(run["id"]), media_type="text/event-stream",
+        headers={"X-Run-ID": run["id"]},
+    )
+
+
+def _owned_run(run_id: str, context) -> dict:
+    run = agent_runs.get(run_id)
+    if not run or not context.same_tenant(run["tenant_id"]):
+        raise HTTPException(404, "运行记录不存在")
+    if not context.owns(run["user_id"]):
+        raise HTTPException(403, "无权访问该运行记录")
+    meta = conversations.get(run["conv_id"])
+    if not meta:
+        raise HTTPException(404, "会话不存在")
+    _ensure_conversation_access(context, meta)
+    _ensure_employee_access(context, run["employee_id"])
+    return run
+
+
+@router.get("/conversations/{conv_id}/active-run")
+async def get_active_run(conv_id: str, context=Depends(auth.get_auth_context)):
+    meta = conversations.get(conv_id)
+    if not meta:
+        raise HTTPException(404, "会话不存在")
+    _ensure_conversation_access(context, meta)
+    _ensure_employee_access(context, meta["employee_id"])
+    return {"run": agent_runs.active_for_conversation(conv_id)}
+
+
+@router.get("/runs/{run_id}")
+async def get_agent_run(run_id: str, context=Depends(auth.get_auth_context)):
+    return _owned_run(run_id, context)
+
+
+@router.get("/runs/{run_id}/events")
+async def stream_agent_run_events(run_id: str, after: int = 0,
+                                  context=Depends(auth.get_auth_context)):
+    _owned_run(run_id, context)
+    if after < 0:
+        raise HTTPException(422, "after 必须为非负整数")
+    return StreamingResponse(agent_runs.subscribe(run_id, after),
+                             media_type="text/event-stream")
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_agent_run(run_id: str, context=Depends(auth.get_auth_context)):
+    run = _owned_run(run_id, context)
+    if run["status"] in agent_runs.TERMINAL:
+        return {"run_id": run_id, "status": run["status"]}
+    if not agent_runs.cancel(run_id):
+        raise HTTPException(409, "运行不在本进程，无法取消；请刷新状态")
+    return {"run_id": run_id, "status": "cancelling"}
 
 
 @router.get("/conversations/{conv_id}/traces")
@@ -269,19 +328,36 @@ async def decide(approval_id: str, body: DecisionIn,
     if not context.allows("*") and not context.owns(record.get("user_id")):
         raise HTTPException(403, "无权处理该审批单")
     _ensure_employee_access(context, record["employee_id"])
-    record = approvals.decide(approval_id, body.decision, tenant_id=context.tenant_id)
-    if not record:
-        raise HTTPException(404, "审批单不存在或已处理")
     uid = record.get("user_id") or "default"
-    if record.get("inner_thread"):
-        summary = await runtime.resume_refund(record["inner_thread"], body.decision == "approve")
-        resume = Command(resume=summary)
-    else:
-        decisions = [{"type": body.decision}]
-        if body.decision == "reject":
-            decisions[0]["message"] = "审批人已拒绝该请求"
-        resume = Command(resume={"decisions": decisions})
+    try:
+        run = agent_runs.create(conv_id=record["conversation_id"],
+                                tenant_id=context.tenant_id, user_id=uid,
+                                employee_id=record["employee_id"])
+    except agent_runs.ActiveRunError as exc:
+        raise HTTPException(409, {"error": "active_run", "run_id": exc.run_id}) from exc
+    try:
+        record = approvals.decide(approval_id, body.decision, tenant_id=context.tenant_id)
+        if not record:
+            raise HTTPException(404, "审批单不存在或已处理")
+        if record.get("inner_thread"):
+            agent_runs.launch(
+                run["id"], None, user_id=uid, role=context.role,
+                tenant_id=context.tenant_id, auth_context=context.as_runtime_config(),
+                refund_thread=record["inner_thread"],
+                refund_approved=body.decision == "approve",
+            )
+        else:
+            decisions = [{"type": body.decision}]
+            if body.decision == "reject":
+                decisions[0]["message"] = "审批人已拒绝该请求"
+            resume = Command(resume={"decisions": decisions})
+            agent_runs.launch(run["id"], resume, user_id=uid, role=context.role,
+                              tenant_id=context.tenant_id,
+                              auth_context=context.as_runtime_config())
+    except Exception:
+        agent_runs.finish(run["id"], "error", "审批恢复启动失败")
+        raise
     return StreamingResponse(
-        _stream_run(record["conversation_id"], resume, user_id=uid, role=context.role,
-                    tenant_id=context.tenant_id, auth_context=context.as_runtime_config()),
-        media_type="text/event-stream")
+        agent_runs.subscribe(run["id"]), media_type="text/event-stream",
+        headers={"X-Run-ID": run["id"]},
+    )

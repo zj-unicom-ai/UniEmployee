@@ -8,9 +8,11 @@ import shutil
 import time
 import uuid
 import zipfile
+import hashlib
+import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 
 from app import audit, auth, catalog, runtime, traces
 from app.models import (UserCreateIn, UserUpdateIn, PasswordIn,
@@ -18,6 +20,7 @@ from app.models import (UserCreateIn, UserUpdateIn, PasswordIn,
 from app.paths import PROJECT_ROOT
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
+logger = logging.getLogger("app.routes.admin")
 
 SKILLS_CUSTOM_DIR = PROJECT_ROOT / "backend" / "skills-custom"
 
@@ -573,12 +576,239 @@ async def admin_unassign_employee(uid: str, emp_id: str, request: Request,
 
 @router.get("/evaluation/stats")
 async def admin_evaluation_stats(employee_id: str = "", period: str = "30d",
-                                  admin: dict = Depends(auth.require_admin)):
-    return traces.get_evaluation_stats(employee_id or None, period)
+                                  context=Depends(auth.get_auth_context)):
+    return traces.get_evaluation_stats(employee_id or None, period, context.tenant_id)
 
 
 @router.get("/evaluation/feedback")
 async def admin_evaluation_feedback(employee_id: str = "", rating: int = None,
-                                     limit: int = 50, offset: int = 0,
-                                     admin: dict = Depends(auth.require_admin)):
-    return traces.get_feedback_list(employee_id or None, rating, limit, offset)
+                                     limit: int = 50, offset: int = 0, period: str = "30d",
+                                     reason: str = "", status: str = "",
+                                     context=Depends(auth.get_auth_context)):
+    return traces.get_feedback_list(employee_id or None, rating, limit, offset,
+                                    period, reason or None, status or None, context.tenant_id)
+
+
+@router.patch("/evaluation/feedback/{feedback_id}")
+async def admin_update_evaluation_feedback(feedback_id: int, body: dict, request: Request,
+                                          admin: dict = Depends(auth.require_admin),
+                                          context=Depends(auth.get_auth_context)):
+    status = body.get("status")
+    if status not in {"open", "investigating", "resolved"}:
+        raise HTTPException(400, "status 必须是 open、investigating 或 resolved")
+    note = body.get("resolution_note", "")
+    if not isinstance(note, str) or len(note) > 1000:
+        raise HTTPException(400, "resolution_note 最多 1000 个字符")
+    ok = traces.update_feedback_status(feedback_id, status, note, context.tenant_id)
+    if not ok:
+        raise HTTPException(404, "反馈记录不存在")
+    audit.log("update", "evaluation_feedback", str(feedback_id), admin, request,
+              after={"status": status, "resolution_note": note})
+    return {"ok": True}
+
+
+def _validate_eval_text(value, name: str, max_length: int, required: bool = False) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(400, f"{name} 必须是文本")
+    value = value.strip()
+    if required and not value:
+        raise HTTPException(400, f"{name} 不能为空")
+    if len(value) > max_length:
+        raise HTTPException(400, f"{name} 最多 {max_length} 个字符")
+    return value
+
+
+@router.get("/evaluation/suites")
+async def admin_list_evaluation_suites(employee_id: str = "",
+                                      context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    return evaluation_sets.list_suites(context.tenant_id, employee_id or None)
+
+
+@router.post("/evaluation/suites")
+async def admin_create_evaluation_suite(body: dict, request: Request,
+                                        admin: dict = Depends(auth.require_admin),
+                                        context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    employee_id = _validate_eval_text(body.get("employee_id"), "employee_id", 100, True)
+    if not catalog.get_employee_config(employee_id):
+        raise HTTPException(404, "数字员工不存在")
+    name = _validate_eval_text(body.get("name"), "name", 100, True)
+    description = _validate_eval_text(body.get("description", ""), "description", 1000)
+    suite = evaluation_sets.create_suite(context.tenant_id, employee_id, name, description, admin["id"])
+    audit.log("create", "evaluation_suite", suite["id"], admin, request,
+              after={"employee_id": employee_id, "name": name})
+    return suite
+
+
+@router.get("/evaluation/suites/{suite_id}")
+async def admin_get_evaluation_suite(suite_id: str, context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    suite = evaluation_sets.get_suite(suite_id, context.tenant_id)
+    if not suite:
+        raise HTTPException(404, "评测集不存在")
+    return suite
+
+
+@router.put("/evaluation/suites/{suite_id}")
+async def admin_update_evaluation_suite(suite_id: str, body: dict, request: Request,
+                                        admin: dict = Depends(auth.require_admin),
+                                        context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    name = _validate_eval_text(body.get("name"), "name", 100, True)
+    description = _validate_eval_text(body.get("description", ""), "description", 1000)
+    if not evaluation_sets.update_suite(suite_id, context.tenant_id, name, description):
+        raise HTTPException(404, "评测集不存在")
+    audit.log("update", "evaluation_suite", suite_id, admin, request,
+              after={"name": name, "description": description})
+    return {"ok": True}
+
+
+@router.delete("/evaluation/suites/{suite_id}")
+async def admin_delete_evaluation_suite(suite_id: str, request: Request,
+                                        admin: dict = Depends(auth.require_admin),
+                                        context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    if not evaluation_sets.delete_suite(suite_id, context.tenant_id):
+        raise HTTPException(404, "评测集不存在")
+    audit.log("delete", "evaluation_suite", suite_id, admin, request)
+    return {"ok": True}
+
+
+@router.post("/evaluation/suites/{suite_id}/cases")
+async def admin_save_evaluation_case(suite_id: str, body: dict, request: Request,
+                                     admin: dict = Depends(auth.require_admin),
+                                     context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    prompt = _validate_eval_text(body.get("prompt"), "prompt", 4000, True)
+    criteria = _validate_eval_text(body.get("criteria"), "criteria", 2000, True)
+    tags = body.get("tags", [])
+    if not isinstance(tags, list) or len(tags) > 10 or any(not isinstance(t, str) or len(t) > 40 for t in tags):
+        raise HTTPException(400, "tags 必须是最多 10 个、每个不超过 40 字符的文本数组")
+    case_id = body.get("id")
+    if case_id is not None and not isinstance(case_id, str):
+        raise HTTPException(400, "id 必须是文本")
+    enabled = body.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise HTTPException(400, "enabled 必须是布尔值")
+    case = evaluation_sets.save_case(suite_id, context.tenant_id, prompt, criteria,
+                                     [t.strip() for t in tags if t.strip()], enabled, case_id)
+    if not case:
+        raise HTTPException(404, "评测集或用例不存在")
+    audit.log("update" if case_id else "create", "evaluation_case", case["id"], admin, request,
+              after={"suite_id": suite_id, "enabled": case["enabled"]})
+    return case
+
+
+@router.delete("/evaluation/cases/{case_id}")
+async def admin_delete_evaluation_case(case_id: str, request: Request,
+                                       admin: dict = Depends(auth.require_admin),
+                                       context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    if not evaluation_sets.delete_case(case_id, context.tenant_id):
+        raise HTTPException(404, "评测用例不存在")
+    audit.log("delete", "evaluation_case", case_id, admin, request)
+    return {"ok": True}
+
+
+async def _execute_evaluation_benchmark(run_id: str, suite: dict, context_data: dict):
+    """在隔离会话中调用真实员工；用例由管理员显式创建并触发。"""
+    from app import evaluation_sets, conversations, traces
+    from app.streaming import _stream_run
+    evaluation_sets.mark_benchmark_running(run_id)
+    had_errors = False
+    for index, case in enumerate(suite["cases"]):
+        conv_id = f"c_eval_{run_id}_{index}"
+        answer, trace_run_id, state = "", "", "completed"
+        started = time.perf_counter()
+        try:
+            conversations.create(conv_id, suite["employee_id"], title=f"基准评测：{suite['name']}",
+                                 preview=case["prompt"][:60], count=1,
+                                 user_id=context_data["user_id"], tenant_id=context_data["tenant_id"])
+            input_ = {"messages": [{"role": "user", "content": case["prompt"]}]}
+            async for raw in _stream_run(conv_id, input_, user_id=context_data["user_id"],
+                                         role="admin", tenant_id=context_data["tenant_id"],
+                                         auth_context=context_data):
+                if not raw.startswith("data: "):
+                    continue
+                try:
+                    event = json.loads(raw[6:].strip())
+                except (ValueError, TypeError):
+                    continue
+                if event.get("type") == "token":
+                    answer += event.get("content", "")
+                elif event.get("type") == "error":
+                    state = "error"
+                elif event.get("type") == "message_end":
+                    trace_run_id = event.get("run_id", "")
+        except Exception:
+            logger.exception("基准评测用例执行失败 suite_run=%s case=%s", run_id, case["id"])
+            state = "error"
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        trace = traces.get_run(trace_run_id, tenant_id=context_data["tenant_id"]) if trace_run_id else None
+        try:
+            evaluation_sets.save_benchmark_result(
+                run_id, case["id"], trace_run_id, conv_id, answer[:12000],
+                state, duration_ms, (trace or {}).get("total_tokens", 0),
+            )
+        except Exception:
+            logger.exception("基准评测结果写入失败 suite_run=%s case=%s", run_id, case["id"])
+            had_errors = True
+        had_errors = had_errors or state == "error"
+    evaluation_sets.finish_benchmark_run(run_id, "completed_with_errors" if had_errors else "completed")
+
+
+@router.post("/evaluation/suites/{suite_id}/runs")
+async def admin_run_evaluation_suite(suite_id: str, background_tasks: BackgroundTasks,
+                                     request: Request, admin: dict = Depends(auth.require_admin),
+                                     context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    suite = evaluation_sets.suite_for_run(suite_id, context.tenant_id)
+    if not suite:
+        raise HTTPException(404, "评测集不存在")
+    if not suite["cases"]:
+        raise HTTPException(400, "评测集里还没有启用的用例")
+    if len(suite["cases"]) > 25:
+        raise HTTPException(400, "单次最多运行 25 个启用用例")
+    config = catalog.get_full_employee(suite["employee_id"]) or {}
+    config_hash = hashlib.sha256(json.dumps(config, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    run_id = evaluation_sets.create_benchmark_run(suite, context.tenant_id, context.user_id,
+                                                  config_hash, len(suite["cases"]))
+    background_tasks.add_task(_execute_evaluation_benchmark, run_id, suite, context.as_runtime_config())
+    audit.log("create", "evaluation_benchmark_run", run_id, admin, request,
+              after={"suite_id": suite_id, "case_count": len(suite["cases"]), "config_hash": config_hash})
+    return {"id": run_id, "status": "queued", "total_cases": len(suite["cases"]),
+            "config_hash": config_hash}
+
+
+@router.get("/evaluation/suites/{suite_id}/runs")
+async def admin_list_evaluation_runs(suite_id: str, context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    if not evaluation_sets.get_suite(suite_id, context.tenant_id):
+        raise HTTPException(404, "评测集不存在")
+    return evaluation_sets.list_benchmark_runs(suite_id, context.tenant_id)
+
+
+@router.get("/evaluation/runs/{run_id}")
+async def admin_get_evaluation_run(run_id: str, context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    result = evaluation_sets.get_benchmark_run(run_id, context.tenant_id)
+    if not result:
+        raise HTTPException(404, "评测运行不存在")
+    return result
+
+
+@router.patch("/evaluation/runs/{run_id}/results/{result_id}")
+async def admin_grade_evaluation_result(run_id: str, result_id: str, body: dict,
+                                        request: Request, admin: dict = Depends(auth.require_admin),
+                                        context=Depends(auth.get_auth_context)):
+    from app import evaluation_sets
+    grade = body.get("grade", "")
+    if grade not in {"", "pass", "fail", "needs_review"}:
+        raise HTTPException(400, "grade 必须是 pass、fail、needs_review 或空值")
+    note = _validate_eval_text(body.get("review_note", ""), "review_note", 1000)
+    if not evaluation_sets.grade_benchmark_result(result_id, run_id, context.tenant_id, grade, note):
+        raise HTTPException(404, "评测结果不存在")
+    audit.log("update", "evaluation_benchmark_result", result_id, admin, request,
+              after={"grade": grade, "review_note": note})
+    return {"ok": True}

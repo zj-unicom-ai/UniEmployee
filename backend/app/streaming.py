@@ -17,6 +17,8 @@ from app import runtime, traces, catalog, approvals, conversations, guard
 from app.artifact_storage import snapshot_artifact
 from app.report_artifacts import archive_inline_reports
 from app import db as dblayer
+from app import model_admission
+from app import subagent_budget
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
 # 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
@@ -463,10 +465,14 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     if role == "admin":
         # admin 无分配时 get_agent 内部回退纯模板；传 user_id 让个人画像同样注入
         agent, stage_meta = await runtime.get_agent(emp_id, user_id, model_override=model_override or None)
+        employee_cfg = catalog.get_employee_config(emp_id) or {}
+        admission_model = model_override or employee_cfg.get("model") or "default"
     else:
         asg = catalog.get_assignment(user_id, emp_id)
         overrides = asg["overrides"] if asg else {}
         agent, stage_meta = await runtime.get_agent(emp_id, user_id, overrides, model_override=model_override or None)
+        employee_cfg = catalog.get_employee_config(emp_id) or {}
+        admission_model = model_override or overrides.get("model") or employee_cfg.get("model") or "default"
     for st in stage_meta:
         yield sse({"type": "stage", **st})
 
@@ -480,7 +486,10 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         pass
     trace_run_id = traces.start_run(conv_id, emp_id, user_id, tenant_id=tenant_id,
                                     input_preview=input_preview, kind=kind)
+    yield sse({"type": "trace_started", "trace_run_id": trace_run_id})
     tracer = traces.TraceHandler(trace_run_id)
+    admission_lease = None
+    subagent_budget_run = None
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
     file_watcher = _WorkspaceFileWatcher(user_id=user_id)
 
@@ -539,6 +548,18 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         fileqa_set_user_id(user_id)
 
     try:
+        try:
+            admission_lease = await model_admission.acquire(admission_model)
+        except model_admission.AdmissionRejected as e:
+            error = f"{type(e).__name__}: {e}"
+            traces.finish_run(trace_run_id, status="error", error=error)
+            yield sse({"type": "error", "error_code": "model_capacity_exceeded",
+                       "message": "模型当前请求较多，请稍后重试"})
+            return
+        if admission_lease["wait_ms"] > 0:
+            yield sse({"type": "model_admission", "status": "admitted",
+                       "model": admission_model, "wait_ms": admission_lease["wait_ms"]})
+        subagent_budget_run = subagent_budget.begin_run()
         async for event in agent.astream(input_, config=config,
                                          stream_mode=["updates", "messages"], version="v2"):
             if isinstance(event, dict):
@@ -612,7 +633,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         if name == "task" and getattr(m, "tool_call_id", None) in pending_subagents:
                             sub_name = pending_subagents.pop(m.tool_call_id)
                             yield sse({"type": "subagent", "name": sub_name,
-                                       "status": "completed", "output": text_of(m)[:2000]})
+                                       "status": "failed" if tool_status == "error" else "completed",
+                                       "output": text_of(m)[:2000]})
                     elif getattr(m, "tool_calls", None):
                         for tc in m.tool_calls:
                             name, args = tc.get("name", ""), tc.get("args", {})
@@ -682,6 +704,16 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             logger.warning("错误提示写入 checkpoint 失败 conv=%s", conv_id, exc_info=True)
         yield sse({"type": "error", "error_code": error_code, "message": user_message})
     finally:
+        if subagent_budget_run:
+            budget, budget_token = subagent_budget_run
+            budget_result = subagent_budget.snapshot(budget)
+            subagent_budget.end_run(budget_token, budget)
+            if budget_result["calls"] or budget_result["rejected"]:
+                logger.info("子代理预算 trace=%s employee=%s calls=%s rejected=%s peak=%s wait_ms=%s",
+                            trace_run_id, emp_id, budget_result["calls"], budget_result["rejected"],
+                            budget_result["peak_concurrent"], budget_result["wait_ms_total"])
+        if admission_lease:
+            model_admission.release(admission_lease)
         # 始终清理分析师 contextvar，避免下次 astream 复用旧 conv_id
         if _ANALYST_HOOK:
             analyst_clear_conv_id()
