@@ -407,8 +407,7 @@ async function updateConversationMeta(cid, changes) {
 
 async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}) {
   if (stream.sending.value) {
-    message.warning('请先停止当前生成，再切换会话')
-    return false
+    await stream.detachActiveStream()
   }
   try {
     const { data } = await api.get(`/conversations/${cid}`)
@@ -471,6 +470,7 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
       }
     }
     await loadHistory(data.employee_id)
+    await stream.resumeActiveRun(cid)
     scrollToBottom()
     closeDrawers()
     if (syncUrl) await setChatUrl({ conv: cid }, replaceUrl)

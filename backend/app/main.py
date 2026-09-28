@@ -96,6 +96,12 @@ async def lifespan(app):
     stale_runs = traces.finish_stale_running()
     if stale_runs:
         log.warning("已将上次进程遗留的 running Trace 标记为 abandoned：%d 条", stale_runs)
+    from app import agent_runs
+    agent_runs.init_tables()
+    abandoned_agent_runs = agent_runs.recover_abandoned()
+    if abandoned_agent_runs:
+        log.warning("已将上次进程遗留的 Agent 运行标记为 abandoned：%d 条", abandoned_agent_runs)
+    agent_runs.purge_events()
     # checkpointer（对话状态）与 store（长期记忆）按后端选择实现：
     # sqlite  -> AsyncSqliteSaver/AsyncSqliteStore（文件库）
     # postgres -> AsyncPostgresSaver/AsyncPostgresStore（连接由库内部池化管理）
@@ -127,6 +133,7 @@ async def lifespan(app):
         log.info("启动完成，开始接收请求")
         yield
         await scheduler.stop()
+        await agent_runs.shutdown()
         await runtime.shutdown_mcp()
         if dblayer.is_pg():
             dblayer.close_all_pools()
