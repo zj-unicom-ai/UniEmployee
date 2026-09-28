@@ -10,6 +10,7 @@ from .db import _conn, ROOT
 from .users import create_user, get_user_by_username, set_must_change_password, list_users
 from .employees import list_employees_meta
 from app.spec import load_spec
+from app.demo_isolation import DEMO_CONNECTOR_IDS, is_production
 
 
 def _skill_desc(skill_dir: Path) -> str:
@@ -323,6 +324,8 @@ def seed_if_empty():
 
     # --- connectors ---
     for cid, cname, cdesc, ccfg in CONNECTOR_SEEDS:
+        if is_production() and cid in DEMO_CONNECTOR_IDS:
+            continue
         cur.execute(
             "INSERT OR IGNORE INTO connectors(id,name,description,config) VALUES(?,?,?,?)",
             (cid, cname, cdesc, json.dumps(ccfg, ensure_ascii=False)))
@@ -350,6 +353,8 @@ def seed_if_empty():
         for s in sel.get("sops", []):
             cur.execute("INSERT OR IGNORE INTO employee_sops VALUES(?,?)", (emp_id, s))
         for c in sel.get("cons", []):
+            if is_production() and c in DEMO_CONNECTOR_IDS:
+                continue
             cur.execute("INSERT OR IGNORE INTO employee_connectors VALUES(?,?)", (emp_id, c))
     con.commit()
     con.close()
@@ -361,10 +366,14 @@ def backfill_connectors():
     con = _conn()
     cur = con.cursor()
     for cid, cname, cdesc, ccfg in CONNECTOR_SEEDS:
+        if is_production() and cid in DEMO_CONNECTOR_IDS:
+            continue
         cur.execute(
             "INSERT OR IGNORE INTO connectors(id,name,description,config) VALUES(?,?,?,?)",
             (cid, cname, cdesc, json.dumps(ccfg, ensure_ascii=False)))
     for cid, emps in CONNECTOR_ASSIGN.items():
+        if is_production() and cid in DEMO_CONNECTOR_IDS:
+            continue
         for e in emps:
             # 仅当该员工确实存在才指派
             if cur.execute("SELECT 1 FROM employees WHERE id=? AND deleted_at IS NULL",
@@ -567,6 +576,8 @@ def backfill_employees_if_missing():
         for s in sel.get("sops", []):
             cur.execute("INSERT OR IGNORE INTO employee_sops VALUES(?,?)", (emp_id, s))
         for c in sel.get("cons", []):
+            if is_production() and c in DEMO_CONNECTOR_IDS:
+                continue
             cur.execute("INSERT OR IGNORE INTO employee_connectors VALUES(?,?)", (emp_id, c))
         added.append(emp_id)
 

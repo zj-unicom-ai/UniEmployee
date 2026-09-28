@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import auth, catalog, conversations, ontology, runtime, scheduler, traces
+from app import auth, catalog, conversations, demo_isolation, ontology, runtime, scheduler, traces
 from app import db as dblayer
 from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
@@ -78,10 +78,9 @@ async def lifespan(app):
     ontology.init()
     ontology.seed_schema_if_empty()
     ontology.backfill_schema_types()
-    ontology.seed_demo_if_empty()
-    ontology.seed_netops_demo_if_empty()
-    ontology.seed_netops_resources_if_empty()
-    ontology.seed_crm_demo_if_empty()
+    if not demo_isolation.seed_ontology_demo_if_enabled():
+        log.info("演示本体数据播种已关闭")
+    demo_isolation.assert_production_data_isolation()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

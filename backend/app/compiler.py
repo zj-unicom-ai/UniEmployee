@@ -34,6 +34,7 @@ from app.agent.analyst.tools.sql_tools import ANALYST_SQL_TOOLS
 from app.agent.analyst.fileqa.tools import ANALYST_FILE_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
 from app.sandbox_mgr import RoutingSandboxBackend, enabled as sandbox_enabled
+from app.demo_isolation import ensure_connector_allowed, is_production
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV_BIN = str(ROOT / ".venv" / "bin")
@@ -532,13 +533,12 @@ def _local_shell_backend() -> LocalShellBackend:
         root_dir=str(PROJECT_ROOT),
         virtual_mode=False,
         env={"PATH": f"{VENV_BIN}:{os.environ.get('PATH', '/usr/bin:/bin')}"},
-        inherit_env=True,
+        inherit_env=False,
     )
 
 
 def _production_mode() -> bool:
-    return (os.environ.get("APP_ENV", "").lower() in ("prod", "production")
-            or os.environ.get("REQUIRE_SANDBOX", "") == "1")
+    return is_production() or os.environ.get("REQUIRE_SANDBOX", "") == "1"
 
 
 def _fs_tools_for_user(user_id: str | None) -> list[str] | str:
@@ -570,7 +570,12 @@ def _fs_tools_for_subagent(cfg: dict) -> list[str]:
 def build_backends(spec: EmployeeSpec, store, user_id: str | None = None):
     """构造 CompositeBackend：默认后端 + /data、/skills、/memories、/sops 路由。"""
     if spec.backend == "local_shell":
-        default_backend = _local_shell_backend()
+        if _production_mode():
+            if not sandbox_enabled():
+                raise RuntimeError("生产模式的执行型员工需要启用沙箱，禁止使用宿主机 LocalShellBackend")
+            default_backend = RoutingSandboxBackend()
+        else:
+            default_backend = _local_shell_backend()
     elif spec.backend == "sandbox":
         # sandbox 员工：execute/fs 工具进 OpenSandbox 沙箱（按会话路由，见 sandbox_mgr）。
         # 开关未置 1（测试/开发/未部署 server）回退宿主机 LocalShellBackend，零行为变化。
