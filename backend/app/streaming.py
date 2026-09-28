@@ -17,6 +17,7 @@ from app import runtime, traces, catalog, approvals, conversations, guard
 from app.artifact_storage import snapshot_artifact
 from app.report_artifacts import archive_inline_reports
 from app import db as dblayer
+from app import model_admission
 from app.compiler import _init_model
 from app.paths import WORKSPACE_DATA
 # 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
@@ -463,10 +464,14 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     if role == "admin":
         # admin 无分配时 get_agent 内部回退纯模板；传 user_id 让个人画像同样注入
         agent, stage_meta = await runtime.get_agent(emp_id, user_id, model_override=model_override or None)
+        employee_cfg = catalog.get_employee_config(emp_id) or {}
+        admission_model = model_override or employee_cfg.get("model") or "default"
     else:
         asg = catalog.get_assignment(user_id, emp_id)
         overrides = asg["overrides"] if asg else {}
         agent, stage_meta = await runtime.get_agent(emp_id, user_id, overrides, model_override=model_override or None)
+        employee_cfg = catalog.get_employee_config(emp_id) or {}
+        admission_model = model_override or overrides.get("model") or employee_cfg.get("model") or "default"
     for st in stage_meta:
         yield sse({"type": "stage", **st})
 
@@ -539,6 +544,18 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
         fileqa_set_user_id(user_id)
 
     try:
+        try:
+            admission_lease = await model_admission.acquire(admission_model)
+        except model_admission.AdmissionRejected as e:
+            error = f"{type(e).__name__}: {e}"
+            traces.finish_run(trace_run_id, status="error", error=error)
+            yield sse({"type": "error", "error_code": "model_capacity_exceeded",
+                       "message": "模型当前请求较多，请稍后重试"})
+            return
+        if admission_lease["wait_ms"] > 0:
+            yield sse({"type": "model_admission", "status": "admitted",
+                       "model": admission_model, "wait_ms": admission_lease["wait_ms"]})
+        subagent_budget_run = subagent_budget.begin_run()
         async for event in agent.astream(input_, config=config,
                                          stream_mode=["updates", "messages"], version="v2"):
             if isinstance(event, dict):

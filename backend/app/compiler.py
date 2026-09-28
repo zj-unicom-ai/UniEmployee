@@ -451,8 +451,11 @@ def _init_model(model: str):
         cfg = resolve_runtime_model(model)
     except Exception:
         cfg = None
+    request_timeout = max(0.0, float(os.environ.get("MODEL_REQUEST_TIMEOUT_SEC", "120")))
     if cfg:
         kwargs = {"use_responses_api": False}
+        if request_timeout > 0:
+            kwargs["timeout"] = request_timeout
         if cfg.get("api_key"):
             kwargs["api_key"] = cfg["api_key"]
         if cfg.get("api_domain"):
@@ -460,7 +463,10 @@ def _init_model(model: str):
         return init_chat_model(cfg["base_model"], **kwargs)
     # 回退到环境变量
     if model.startswith("openai:"):
-        return init_chat_model(model, use_responses_api=False)
+        kwargs = {"use_responses_api": False}
+        if request_timeout > 0:
+            kwargs["timeout"] = request_timeout
+        return init_chat_model(model, **kwargs)
     return model
 
 
