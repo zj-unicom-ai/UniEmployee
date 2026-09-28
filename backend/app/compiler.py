@@ -386,9 +386,18 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
     if spec.mcp_servers and os.environ.get("MCP_DISABLED") != "1":
         servers = {}
         for name, cfg in spec.mcp_servers.items():
+            ensure_connector_allowed(name)
             cfg = dict(cfg)
             transport = (cfg.get("transport") or "stdio").lower()
             if transport == "stdio":
+                if name == "crm_lab":
+                    # MCP 子进程的 env 不继承应用进程的全部变量；仅传入此
+                    # 连接器必需的地址与只读密钥，密钥不写入 catalog 配置。
+                    cfg["env"] = {
+                        **(cfg.get("env") or {}),
+                        "CRM_LAB_API_URL": os.environ.get("CRM_LAB_API_URL", "http://127.0.0.1:18780"),
+                        "CRM_LAB_READ_KEY": os.environ.get("CRM_LAB_READ_KEY", ""),
+                    }
                 # ${PYTHON_BIN} 模板 = 本项目 Python 解释器，args 按仓库相对路径补 ROOT
                 # （保留旧的纯 Python 连接器兼容，如 crm）。其它 command（如 npx）原样透传，
                 # env/args 由配置直接给 MultiServerMCPClient，支持 node 型 MCP 连接器。

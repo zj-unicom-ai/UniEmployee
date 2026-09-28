@@ -75,6 +75,27 @@ def test_python_bin_connector_backward_compat():
     assert c["args"] == [str(compiler.ROOT / "app/connectors/crm_server.py")]
 
 
+def test_crm_lab_receives_only_runtime_connection_env(monkeypatch):
+    """只读密钥由运行时传给 MCP 子进程，不保存在 catalog 种子里。"""
+    monkeypatch.setenv("CRM_LAB_API_URL", "http://api:8000")
+    monkeypatch.setenv("CRM_LAB_READ_KEY", "test-read-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+    _, _, _, lab_cfg = next(c for c in seeds.CONNECTOR_SEEDS if c[0] == "crm_lab")
+    assert "CRM_LAB_READ_KEY" not in str(lab_cfg)
+    spec = EmployeeSpec(
+        id="emp_crm_lab", name="测试", role="测试",
+        model="dummy-model", persona="人设",
+        mcp_servers={"crm_lab": lab_cfg},
+    )
+    cfg = _run(spec)["crm_lab"]
+    assert cfg["command"] == sys.executable
+    assert cfg["args"] == [str(compiler.ROOT / "app/connectors/crm_lab_server.py")]
+    assert cfg["env"] == {
+        "CRM_LAB_API_URL": "http://api:8000",
+        "CRM_LAB_READ_KEY": "test-read-key",
+    }
+
+
 def test_http_connector_transport_normalized():
     """HTTP 型连接器：transport "http" 归一化为 "streamable_http"，url 原样透传。"""
     spec = EmployeeSpec(

@@ -1,0 +1,13 @@
+# 本地 CRM Lab 联调覆盖文件：让应用容器访问同级独立 Compose 的 API 服务。
+services:
+  uniemployee:
+    environment:
+      CRM_LAB_API_URL: http://api:8000
+    networks:
+      - default
+      - crm_lab
+
+networks:
+  crm_lab:
+    name: uniemployee-crm-lab_default
+    external: true
