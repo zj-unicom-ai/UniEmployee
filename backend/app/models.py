@@ -128,3 +128,7 @@ class AutomationUpdate(BaseModel):
 class AutomationEventIn(BaseModel):
     payload: object = None              # 事件数据（注入 {{payload}}）
     secret: str | None = None
+
+
+class AutomationRetryIn(BaseModel):
+    payload: object = None              # 重跑事件任务时由管理员重新提交，执行记录不复制保存 payload

@@ -10,9 +10,12 @@ outbound_webhook 推送到外部 IM。
 
 表结构与 channels 同库（conversations.db），双方言（sqlite/postgres）。
 """
+import asyncio
 import json
 import logging
+import os
 import time
+import uuid
 from datetime import datetime, timedelta
 
 import httpx
@@ -44,6 +47,23 @@ CREATE TABLE IF NOT EXISTS automations (
     created_at   TEXT,
     updated_at   TEXT
 );
+CREATE TABLE IF NOT EXISTS automation_executions (
+    id              TEXT PRIMARY KEY,
+    automation_id   TEXT NOT NULL,
+    trigger_type    TEXT NOT NULL,
+    trigger_key     TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    conversation_id TEXT DEFAULT '',
+    error           TEXT DEFAULT '',
+    retry_of        TEXT DEFAULT '',
+    created_at      TEXT NOT NULL,
+    started_at      TEXT DEFAULT '',
+    heartbeat_at    TEXT DEFAULT '',
+    finished_at     TEXT DEFAULT '',
+    UNIQUE (automation_id, trigger_type, trigger_key)
+);
+CREATE INDEX IF NOT EXISTS idx_auto_exec_created
+    ON automation_executions(automation_id, created_at DESC);
 """
 
 TS = "%Y-%m-%dT%H:%M"          # 触发点（分钟精度，字符串比较即时间比较）
@@ -265,6 +285,85 @@ def mark_result(aid: str, status: str, error: str = "", conv_id: str = "") -> No
         con.commit()
 
 
+def create_execution(aid: str, trigger: str, trigger_key: str,
+                     retry_of: str = "") -> tuple[dict, bool]:
+    """创建执行记录；唯一键冲突表示重复投递，返回旧记录且不重复执行。"""
+    execution_id = "aex_" + uuid.uuid4().hex
+    now = time.strftime(TS_FULL)
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO automation_executions"
+            "(id, automation_id, trigger_type, trigger_key, status, retry_of, created_at) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (automation_id, trigger_type, trigger_key) DO NOTHING",
+            (execution_id, aid, trigger, trigger_key, "queued", retry_of, now))
+        con.commit()
+        row = con.execute(
+            "SELECT * FROM automation_executions WHERE automation_id=? AND trigger_type=? AND trigger_key=?",
+            (aid, trigger, trigger_key)).fetchone()
+    result = dict(row)
+    return result, result["id"] == execution_id
+
+
+def update_execution(execution_id: str, status: str, *, conv_id: str = "",
+                     error: str = "", finished: bool = False) -> None:
+    now = time.strftime(TS_FULL)
+    with _conn() as con:
+        con.execute(
+            "UPDATE automation_executions SET status=?, conversation_id=CASE WHEN ?='' THEN conversation_id ELSE ? END,"
+            " error=?, started_at=CASE WHEN ?='running' AND started_at='' THEN ? ELSE started_at END,"
+            " heartbeat_at=?, finished_at=CASE WHEN ?=1 THEN ? ELSE finished_at END WHERE id=?",
+            (status, conv_id, conv_id, error[:1000], status, now, now,
+             1 if finished else 0, now, execution_id))
+        con.commit()
+
+
+def get_execution(execution_id: str) -> dict | None:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM automation_executions WHERE id=?", (execution_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_executions(aid: str, limit: int = 50) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM automation_executions WHERE automation_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (aid, max(1, min(int(limit), 200)))).fetchall()
+    return [dict(row) for row in rows]
+
+
+def recover_stale_executions(max_age_seconds: int = 120) -> int:
+    """把心跳过期的 queued/running 标成 interrupted，供人工判断后重跑。"""
+    cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
+    stamp = cutoff.strftime(TS_FULL)
+    now = time.strftime(TS_FULL)
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE automation_executions SET status='interrupted', error='执行进程心跳超时；请检查会话后人工重跑', finished_at=? "
+            "WHERE status IN ('queued','running') AND COALESCE(NULLIF(heartbeat_at,''), created_at)<?",
+            (now, stamp))
+        con.commit()
+    return cur.rowcount
+
+
+def purge_executions(retention_days: int | None = None) -> int:
+    days = retention_days if retention_days is not None else int(os.environ.get("AUTOMATION_EXECUTION_RETENTION_DAYS", "90"))
+    if days < 1:
+        raise ValueError("自动化执行记录保留期限至少为 1 天")
+    cutoff = (datetime.now() - timedelta(days=days)).strftime(TS_FULL)
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM automation_executions WHERE status NOT IN ('queued','running') AND created_at<?",
+            (cutoff,))
+        con.commit()
+    return cur.rowcount
+
+
+async def _execution_heartbeat(execution_id: str) -> None:
+    while True:
+        await asyncio.sleep(20)
+        update_execution(execution_id, "running")
+
+
 # ---------------------------------------------------------------------------
 # 市场情报员工 V2 值守种子任务（幂等，默认停用——管理员在自动化任务页开启）
 # ---------------------------------------------------------------------------
@@ -353,9 +452,26 @@ async def _push(channel: dict, conv_id: str, reply: str) -> None:
         log.warning("自动任务结果推送失败 channel=%s", channel.get("id"), exc_info=True)
 
 
-async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
-    """执行一次自动任务：新建会话 -> 跑 agent -> 记状态 -> 可选推送。"""
+async def execute(auto: dict, payload=None, trigger: str = "cron",
+                  trigger_key: str | None = None, retry_of: str = "",
+                  execution_id: str | None = None) -> dict:
+    """执行一次自动任务，并用触发键保证重试请求幂等。"""
     from app.streaming import _stream_run  # 延迟导入避免环
+
+    trigger_key = str(uuid.uuid4()) if trigger_key is None else str(trigger_key)
+    if execution_id:
+        execution = get_execution(execution_id)
+        if (not execution or execution["automation_id"] != auto["id"]
+                or execution["trigger_type"] != trigger or execution["trigger_key"] != trigger_key
+                or execution["status"] != "queued"):
+            raise ValueError("预创建的自动化执行记录与本次触发不匹配")
+        created = True
+    else:
+        execution, created = create_execution(auto["id"], trigger, trigger_key, retry_of)
+    if not created:
+        return {"execution_id": execution["id"], "conversation_id": execution["conversation_id"],
+                "status": execution["status"], "error": execution["error"],
+                "duplicate": True, "approval_id": "", "reply": ""}
 
     emp_id = auto["employee_id"]
     user_id = auto.get("run_as") or "default"
@@ -368,6 +484,8 @@ async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
                          channel_id=auto.get("channel_id") or None,
                          title=f"[自动] {auto['name']}"[:40],
                          preview=prompt[:60], count=1)
+    update_execution(execution["id"], "running", conv_id=conv_id)
+    heartbeat = asyncio.create_task(_execution_heartbeat(execution["id"]))
     input_ = {"messages": [{"role": "user", "content": prompt}]}
     parts: list[str] = []
     status, error = "ok", ""
@@ -392,12 +510,16 @@ async def execute(auto: dict, payload=None, trigger: str = "cron") -> dict:
     except Exception as e:
         status, error = "error", f"{type(e).__name__}: {e}"
         log.exception("自动任务执行异常 id=%s", auto["id"])
+    finally:
+        heartbeat.cancel()
+        await asyncio.gather(heartbeat, return_exceptions=True)
 
     reply = "".join(parts).strip()
     mark_result(auto["id"], status, error, conv_id)
+    update_execution(execution["id"], status, conv_id=conv_id, error=error, finished=True)
     if reply:
         conversations.touch(conv_id, preview=reply[:60], bump=1)
     if channel and status == "ok":
         await _push(channel, conv_id, reply)
-    return {"conversation_id": conv_id, "status": status, "error": error,
+    return {"execution_id": execution["id"], "conversation_id": conv_id, "status": status, "error": error,
             "reply": reply, "approval_id": approval_id}

@@ -20,12 +20,15 @@ INTERVAL = 30  # 扫描周期（秒）
 
 async def run_due(auto: dict, now: datetime) -> None:
     """抢占并执行一个到期任务。"""
+    scheduled_for = auto["next_fire_at"]
+    execution, _ = automations.create_execution(auto["id"], "cron", scheduled_for)
     nxt = automations.next_fire(auto["cron_expr"], now)
     if not automations.claim_next(
             auto["id"], auto["next_fire_at"],
             nxt.strftime(automations.TS) if nxt else None):
         return  # 已被其他实例/上一轮慢执行抢占
-    result = await automations.execute(auto, trigger="cron")
+    result = await automations.execute(auto, trigger="cron", trigger_key=scheduled_for,
+                                       execution_id=execution["id"])
     if result["status"] == "ok":
         log.info("自动任务完成 id=%s name=%s conv=%s",
                  auto["id"], auto["name"], result["conversation_id"])

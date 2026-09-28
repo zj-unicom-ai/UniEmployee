@@ -87,6 +87,10 @@ async def lifespan(app):
     # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
     from app import automations as _automations
     _automations.backfill_seeds()
+    recovered_automation_runs = _automations.recover_stale_executions()
+    if recovered_automation_runs:
+        log.warning("已将心跳超时的自动化执行标记为 interrupted：%d 条", recovered_automation_runs)
+    _automations.purge_executions()
     # 上次进程意外退出可能留下 status=running 的 Trace；启动时收口为
     # abandoned，避免运维排障时误判为仍在执行。
     stale_runs = traces.finish_stale_running()

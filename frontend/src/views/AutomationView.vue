@@ -14,6 +14,28 @@
                   size="small" :row-key="r => r.id" :pagination="false" />
     <n-empty v-if="!loading && !items.length" description="还没有自动化任务，点击右上角新建" style="padding: 48px 0" />
 
+    <n-modal v-model:show="showExecutions" preset="card" title="执行记录" style="width: min(1000px, 94vw)">
+      <div class="exec-toolbar">
+        <span>{{ selectedAutomation?.name }}：最近 {{ executionItems.length }} 次执行</span>
+        <n-button size="tiny" @click="loadExecutions" :loading="executionLoading">刷新</n-button>
+      </div>
+      <n-data-table :columns="executionColumns" :data="executionItems" :loading="executionLoading"
+                    :bordered="false" size="small" :pagination="false" :row-key="r => r.id" />
+      <n-empty v-if="!executionLoading && !executionItems.length" description="暂无执行记录" />
+      <n-form-item v-if="retryTarget?.trigger_type === 'event'" label="事件 payload（JSON）">
+        <n-input v-model:value="retryPayloadText" type="textarea" :rows="4"
+                 placeholder="重跑不会保存或自动复用事件正文，请粘贴本次要重放的 payload JSON" />
+      </n-form-item>
+      <template #footer>
+        <div class="modal-footer">
+          <span v-if="retryTarget" class="retry-hint">确认后会创建新的人工重跑记录；此操作可能再次产生业务副作用。</span>
+          <n-button size="small" @click="retryTarget = null">取消</n-button>
+          <n-button v-if="retryTarget" size="small" type="warning" :loading="retryLoading"
+                    @click="retryExecution(retryTarget)">确认人工重跑</n-button>
+        </div>
+      </template>
+    </n-modal>
+
     <!-- 新建 / 编辑 -->
     <n-modal v-model:show="showForm" preset="card" :title="editingId ? '编辑任务' : '新建任务'"
              style="width: 640px" :mask-closable="false">
@@ -46,6 +68,7 @@
           </n-form-item>
           <n-form-item v-if="form.event_key" label="调用地址">
             <code class="event-url">{{ eventUrlPreview }}</code>
+            <div class="field-hint">调用时必须携带稳定的 Idempotency-Key 请求头；同一事件的网络重试使用同一个值，可避免重复执行。</div>
           </n-form-item>
         </template>
         <n-form-item label="执行员工" required>
@@ -112,6 +135,13 @@ const employees = ref([])
 const channels = ref([])
 const showForm = ref(false)
 const showResult = ref(false)
+const showExecutions = ref(false)
+const executionLoading = ref(false)
+const retryLoading = ref(false)
+const executionItems = ref([])
+const selectedAutomation = ref(null)
+const retryTarget = ref(null)
+const retryPayloadText = ref('')
 const editingId = ref(null)
 const runResult = ref(null)
 const runningIds = ref(new Set())
@@ -226,6 +256,50 @@ async function runNow(row) {
   }
 }
 
+async function openExecutions(row) {
+  selectedAutomation.value = row
+  retryTarget.value = null
+  retryPayloadText.value = ''
+  showExecutions.value = true
+  await loadExecutions()
+}
+
+async function loadExecutions() {
+  if (!selectedAutomation.value) return
+  executionLoading.value = true
+  try {
+    const { data } = await api.get(`/automations/${selectedAutomation.value.id}/executions`)
+    executionItems.value = data.items || []
+  } catch (err) {
+    message.error('执行记录加载失败：' + (err.response?.data?.detail || err.message))
+  } finally {
+    executionLoading.value = false
+  }
+}
+
+async function retryExecution(row) {
+  let payload
+  if (row.trigger_type === 'event' && retryPayloadText.value.trim()) {
+    try { payload = JSON.parse(retryPayloadText.value) } catch { message.error('payload 不是有效 JSON'); return }
+  }
+  retryLoading.value = true
+  try {
+    const headers = { 'Idempotency-Key': crypto.randomUUID() }
+    const body = payload === undefined ? {} : { payload }
+    const { data } = await api.post(
+      `/automations/${selectedAutomation.value.id}/executions/${row.id}/retry`, body, { headers })
+    retryTarget.value = null
+    retryPayloadText.value = ''
+    message.success(`重跑已完成：${data.status}`)
+    await loadExecutions()
+    await load()
+  } catch (err) {
+    message.error('重跑失败：' + (err.response?.data?.detail || err.message))
+  } finally {
+    retryLoading.value = false
+  }
+}
+
 async function del(row) {
   try {
     await api.delete(`/automations/${row.id}`)
@@ -273,6 +347,8 @@ const columns = [
       onUpdateValue: v => toggleEnabled(r, v) }) },
   { title: '操作', key: 'actions', width: 180,
     render: r => h('div', { class: 'cell-actions' }, [
+      h(NButton, { size: 'tiny', secondary: true, onClick: () => openExecutions(r) },
+        { default: () => '执行记录' }),
       h(NTooltip, null, { trigger: () => h(NButton, {
         size: 'tiny', secondary: true, loading: runningIds.value.has(r.id),
         onClick: () => runNow(r) }, { default: () => '运行' }),
@@ -282,6 +358,22 @@ const columns = [
       h(NButton, { size: 'tiny', secondary: true, type: 'error', onClick: () => del(r) },
         { default: () => '删除' }),
     ]) },
+]
+
+const executionColumns = [
+  { title: '触发', key: 'trigger_type', width: 95, render: r => `${r.trigger_type} · ${r.trigger_key}` },
+  { title: '状态', key: 'status', width: 110, render: r => h(NTag, {
+    size: 'tiny', type: r.status === 'ok' ? 'success' : r.status === 'running' || r.status === 'queued' ? 'info' : 'warning',
+  }, { default: () => r.status }) },
+  { title: '创建时间', key: 'created_at', width: 175 },
+  { title: '会话', key: 'conversation_id', width: 170, ellipsis: { tooltip: true } },
+  { title: '错误/说明', key: 'error', ellipsis: { tooltip: true } },
+  { title: '操作', key: 'action', width: 100, render: r =>
+    ['error', 'interrupted'].includes(r.status)
+      ? h(NButton, { size: 'tiny', type: 'primary', secondary: true,
+          onClick: () => { retryTarget.value = r; retryPayloadText.value = '' } },
+        { default: () => retryTarget.value?.id === r.id ? '待确认重跑' : '人工重跑' })
+      : null },
 ]
 
 function runCountLabel(r) {
@@ -295,6 +387,8 @@ onMounted(load)
 <style scoped>
 .auto-page { padding: 24px; height: 100%; overflow-y: auto; }
 .toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.exec-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; color: #64748b; font-size: 12px; }
+.retry-hint { margin-right: auto; color: #b45309; font-size: 12px; }
 .intro-title { font-size: 14px; font-weight: 600; color: #334155; }
 .intro-sub { font-size: 12px; color: #94a3b8; margin-top: 3px; }
 .field-hint { font-size: 11px; color: #94a3b8; margin-top: 4px; }

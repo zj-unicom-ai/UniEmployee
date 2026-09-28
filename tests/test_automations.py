@@ -137,6 +137,33 @@ def test_mark_result_updates_counters():
     assert cur["run_count"] == 1
 
 
+def test_execution_idempotency_and_retry_lineage():
+    auto = _mk_cron()
+    first, created = automations.create_execution(auto["id"], "event", "evt-123")
+    assert created is True
+    duplicate, created = automations.create_execution(auto["id"], "event", "evt-123")
+    assert created is False
+    assert duplicate["id"] == first["id"]
+    retry, created = automations.create_execution(auto["id"], "manual_retry", "retry-1", first["id"])
+    assert created is True
+    assert retry["retry_of"] == first["id"]
+    assert len(automations.list_executions(auto["id"])) == 2
+
+
+def test_stale_execution_recovery_only_affects_expired_active_rows():
+    auto = _mk_cron()
+    stale, _ = automations.create_execution(auto["id"], "event", "stale")
+    fresh, _ = automations.create_execution(auto["id"], "event", "fresh")
+    automations.update_execution(stale["id"], "running")
+    automations.update_execution(fresh["id"], "running")
+    with automations._conn() as con:
+        con.execute("UPDATE automation_executions SET heartbeat_at='2020-01-01T00:00:00' WHERE id=?", (stale["id"],))
+        con.commit()
+    assert automations.recover_stale_executions(max_age_seconds=120) == 1
+    assert automations.get_execution(stale["id"])["status"] == "interrupted"
+    assert automations.get_execution(fresh["id"])["status"] == "running"
+
+
 def test_execute_marks_awaiting_approval(monkeypatch):
     from app import conversations
     from app import streaming
@@ -161,6 +188,25 @@ def test_execute_marks_awaiting_approval(monkeypatch):
     cur = automations.get(auto["id"])
     assert cur["last_status"] == "awaiting_approval"
     assert "ap_1" in cur["last_error"]
+
+
+def test_execute_replay_does_not_run_agent_twice(monkeypatch):
+    from app import streaming
+    calls = 0
+
+    async def fake_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        yield 'data: {"type":"token","content":"完成"}\n\n'
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    auto = _mk_cron()
+    first = asyncio.run(automations.execute(auto, trigger="event", trigger_key="same-event"))
+    replay = asyncio.run(automations.execute(auto, trigger="event", trigger_key="same-event"))
+    assert calls == 1
+    assert first["execution_id"] == replay["execution_id"]
+    assert replay["duplicate"] is True
+    assert replay["conversation_id"] == first["conversation_id"]
 
 
 def test_list_by_event_filters_enabled():
