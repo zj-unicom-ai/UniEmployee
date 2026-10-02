@@ -1,12 +1,12 @@
 # 运行期依赖（顶层，固定版本）。生产部署推荐直接用 requirements.lock.txt 获得完全可复现的环境。
 fastapi==0.139.2
 uvicorn[standard]==0.51.0
-pydantic==2.11.10
+pydantic==2.12.5
 python-dotenv==1.2.2
 pyyaml==6.0.3
 PyJWT==2.13.0
 bcrypt==5.0.0
-deepagents==0.7.13
+deepagents==0.7.21
 langchain-deepseek==1.1.0
 langgraph==1.2.11
 # PostgreSQL 后端（checkpointer + store + 连接；DB_BACKEND=postgres 时必需）
