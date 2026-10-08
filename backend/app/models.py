@@ -13,6 +13,7 @@ class AttachmentIn(BaseModel):
 
 class MessageIn(BaseModel):
     message: str = ""
+    pinned_skills: list[str] = Field(default_factory=list, max_length=8)
     attachments: list[AttachmentIn] = []
     model: str = ""  # 本次请求使用的模型（base_model 名），空则用会话绑定/员工默认
 

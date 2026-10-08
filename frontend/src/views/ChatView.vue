@@ -130,6 +130,13 @@
         </div>
       </div>
 
+      <div v-if="skillOptions.length" class="skill-picker">
+        <span>本次使用技能</span>
+        <n-select v-model:value="selectedSkills" :options="skillOptions" multiple clearable
+                  :max-tag-count="2" :max="8" :disabled="stream.sending.value || uploading"
+                  placeholder="自动判断，也可主动选择" size="small" style="max-width: 480px; flex: 1"
+                  aria-label="选择本次使用的业务技能" />
+      </div>
       <InputBar
         ref="inputBarRef"
         :disabled="stream.sending.value"
@@ -225,6 +232,23 @@ const empOptions = computed(() =>
     .filter(e => !isCustomEmployee(e))
     .map(e => ({ label: e.role || e.name, value: e.id }))
 )
+const selectedSkills = ref([])
+const skillOptions = ref([])
+let skillRequestSeq = 0
+watch([currentEmp, convId], async ([employeeId]) => {
+  const requestSeq = ++skillRequestSeq
+  selectedSkills.value = []
+  skillOptions.value = []
+  if (!employeeId) return
+  try {
+    const { data } = await api.get(`/employees/${employeeId}/skills`)
+    if (requestSeq === skillRequestSeq && currentEmp.value === employeeId) {
+      skillOptions.value = data.map(s => ({ label: s.title || s.name, value: s.name }))
+    }
+  } catch {
+    if (requestSeq === skillRequestSeq && currentEmp.value === employeeId) message.warning('技能列表加载失败，可继续自动判断技能')
+  }
+})
 const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
 const quickPrompts = computed(() => {
   const configured = Array.isArray(currentEmployee.value?.quick_prompts)
@@ -287,8 +311,11 @@ async function onSend(text, files = [], onAccepted = () => {}) {
     if (!attachments.length) return
   }
   await stream.sendTo(`/api/conversations/${targetConvId}/messages`, text, attachments, null, currentModel.value, {
+    pinnedSkills: [...selectedSkills.value],
+    pinnedSkillLabels: selectedSkills.value.map(name => skillOptions.value.find(s => s.value === name)?.label || name),
     onAccepted: () => {
       onAccepted()
+      selectedSkills.value = []
       markConversationPersisted(targetConvId)
     },
   })
@@ -303,6 +330,7 @@ async function retryMessage(msg) {
   const targetConvId = convId.value
   await stream.sendTo(request.endpoint, request.text, request.attachments, request.dataSource, request.model, {
     appendUser: false,
+    pinnedSkills: request.pinnedSkills || [],
     onAccepted: () => markConversationPersisted(targetConvId),
   })
   await loadHistory(currentEmp.value)
@@ -601,6 +629,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.skill-picker { display: flex; align-items: center; gap: 12px; padding: 8px 24px; font-size: 13px; color: var(--text-secondary, #666); }
 .chat-layout {
   position: relative;
   display: flex;

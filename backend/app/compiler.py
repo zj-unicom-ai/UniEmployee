@@ -155,7 +155,7 @@ def _build_skill_routing(skills: list[dict]) -> str:
     for s in skills:
         lines.append(f"### {s['name']}")
         lines.append(f"触发条件：{s.get('triggers') or s.get('description', '（未指定）')}")
-        lines.append(f"规程路径：/skills/{s['name']}/SKILL.md")
+        lines.append(f"规程路径：/skills/{s.get('id', s['name'])}/SKILL.md")
         lines.append("")
     return "\n".join(lines)
 
@@ -656,13 +656,14 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     # --- 工具：本地注册表按名挑选 + 知识库闭包 + 通用工具 + MCP 连接器 ---
     tools, mcp_client = await _assemble_tools(spec, checkpointer, user_id=user_id)
     tool_names = [t.name for t in tools]
+    from app.skill_runtime import BusinessSkillsMiddleware, skill_snapshot, split_skill_tools
+    tools, skill_tools = split_skill_tools(tools, skill_snapshot(spec.id, user_id), spec.interrupt_on or {})
     backend = build_backends(spec, store, user_id)
     subagents = await _assemble_subagents(spec, checkpointer, backend=backend,
                                           user_id=user_id)
 
     system_prompt = spec.persona
     system_prompt += _build_user_context(user_id)
-    system_prompt += _build_skill_routing(skill_summaries)
     system_prompt += _build_sop_routing(sop_summaries)
     if any(n in (
         "ontology_find_entities", "ontology_query_relations", "ontology_expand",
@@ -692,6 +693,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
         subagents=subagents or None,
         middleware=[FilesystemMiddleware(backend=backend,
                                          tools=_fs_tools_for_user(user_id)),
+                    BusinessSkillsMiddleware(employee_id=spec.id, user_id=user_id,
+                                             backend=backend, tools=skill_tools),
                     *budget_middleware],
         backend=backend,
         interrupt_on=spec.interrupt_on,

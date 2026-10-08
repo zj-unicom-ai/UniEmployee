@@ -1,6 +1,8 @@
 ---
 name: customer-360
 description: 客户 360 画像技能。当用户询问某个客户的综合情况、合作状态、历史消费、已购产品、联系人、在途商机、合同状态，或要求做客户盘点、拜访前背景调查时使用本技能。
+metadata:
+  include_tools: ontology_customer_360
 ---
 
 # 客户 360 画像

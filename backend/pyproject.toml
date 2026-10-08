@@ -17,7 +17,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "PyJWT==2.13.0",
     "bcrypt==5.0.0",
-    "deepagents==0.7.21",
+    "deepagents==0.7.23",
     "langchain-deepseek==1.1.0",
     "langgraph==1.2.11",
     "langgraph-checkpoint-sqlite==3.1.0",

@@ -292,13 +292,15 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     if (!trimmed && !attachments.length) return
     const now = new Date()
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+    const pinnedSkills = [...(options.pinnedSkills || [])]
     const userMsg = { role: 'user', content: trimmed, time }
+    if (pinnedSkills.length) userMsg.skills = options.pinnedSkillLabels || pinnedSkills
     if (attachments.length) userMsg.attachments = attachments
     if (options.appendUser !== false) messages.value.push(userMsg)
     const botIdx = messages.value.length
     const botMsg = {
       role: 'bot', content: '', html: '', _md: '', trace: [], time,
-      _retryPayload: { endpoint, text: trimmed, attachments, dataSource, model },
+      _retryPayload: { endpoint, text: trimmed, attachments, dataSource, model, pinnedSkills },
     }
     messages.value.push(botMsg)
     sending.value = true
@@ -323,7 +325,7 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify({ message: trimmed, attachments, model: model || '' }),
+        body: JSON.stringify({ message: trimmed, attachments, model: model || '', pinned_skills: pinnedSkills }),
         signal: controller.signal,
       })
       if (!resp.ok) throw new Error(`服务返回 HTTP ${resp.status}`)

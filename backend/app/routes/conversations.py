@@ -38,6 +38,14 @@ async def list_employees(context=Depends(auth.get_auth_context)):
     return runtime.discover_assigned_employees(context.user_id)
 
 
+@router.get("/employees/{emp_id}/skills")
+async def list_employee_skills(emp_id: str, context=Depends(auth.get_auth_context)):
+    _ensure_employee_access(context, emp_id)
+    from app.skill_runtime import skill_snapshot
+    return [{"name": s["name"], "title": s["title"], "description": s["description"]}
+            for s in skill_snapshot(emp_id, context.user_id)]
+
+
 @router.get("/employees/{emp_id}/quick-prompts")
 async def list_employee_quick_prompts(emp_id: str, context=Depends(auth.get_auth_context)):
     _ensure_employee_access(context, emp_id)
@@ -182,6 +190,11 @@ async def send_message(conv_id: str, body: MessageIn,
         raise HTTPException(404, "会话不存在")
     emp = employee_of(conv_id)
     _ensure_employee_access(context, emp)
+    from app.skill_runtime import validate_pinned_skills
+    try:
+        pinned_skills = validate_pinned_skills(emp, uid, body.pinned_skills)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     # 附件只接受本用户上传目录内的路径，防止伪造 /data/ 任意路径
     atts = [a.model_dump() for a in body.attachments
             if attachments.validate_attachment_path(uid, a.path)]
@@ -226,7 +239,8 @@ async def send_message(conv_id: str, body: MessageIn,
                              "用 file_table_list 查看表结构，用 file_table_query "
                              "编写 SQL 查询分析（DuckDB 只读）。" + reg_summary)
         use_model = req_model or (meta or {}).get("model") or ""
-        input_ = {"messages": [{"role": "user", "content": content}]}
+        input_ = {"messages": [{"role": "user", "content": content}],
+                  "pinned_skills": pinned_skills}
         agent_runs.launch(
             run["id"], input_, user_id=uid, role=context.role,
             datasource_id=datasource_id, data_source=data_source,
