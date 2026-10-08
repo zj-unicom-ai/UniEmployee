@@ -82,7 +82,8 @@
                    placeholder="要执行的工作描述。可用占位符：{{now}} 当前时间；{{payload}} 事件数据（事件触发时）" />
         </n-form-item>
         <n-form-item label="运行身份">
-          <n-input v-model:value="form.run_as" placeholder="以哪个用户身份运行（影响记忆与会话归属），默认创建者" />
+          <n-input v-model:value="form.run_as" placeholder="以哪个用户身份运行（留空默认创建者）" />
+          <div class="field-hint">运行身份须为本租户有效用户，并已获授权使用所选员工；自动任务按普通用户权限运行，不继承管理员权限。</div>
         </n-form-item>
         <n-form-item label="推送频道">
           <n-select v-model:value="form.channel_id" :options="channelOptions"

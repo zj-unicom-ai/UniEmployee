@@ -336,7 +336,8 @@ async def decide(approval_id: str, body: DecisionIn,
     except agent_runs.ActiveRunError as exc:
         raise HTTPException(409, {"error": "active_run", "run_id": exc.run_id}) from exc
     try:
-        record = approvals.decide(approval_id, body.decision, tenant_id=context.tenant_id)
+        record = approvals.decide(approval_id, body.decision, tenant_id=context.tenant_id,
+                                  decided_by=context.user_id)
         if not record:
             raise HTTPException(404, "审批单不存在或已处理")
         if record.get("inner_thread"):

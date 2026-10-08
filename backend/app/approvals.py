@@ -30,6 +30,7 @@ def _conn():
             args            TEXT,
             inner_thread    TEXT,
             status          TEXT DEFAULT 'pending',
+            decided_by      TEXT DEFAULT '',
             created_at      TEXT,
             expires_at      TEXT
         )
@@ -37,6 +38,8 @@ def _conn():
     cols = dblayer.table_columns(con, "approvals")
     if "tenant_id" not in cols:
         con.execute("ALTER TABLE approvals ADD COLUMN tenant_id TEXT DEFAULT 'default'")
+    if "decided_by" not in cols:
+        con.execute("ALTER TABLE approvals ADD COLUMN decided_by TEXT DEFAULT ''")
     enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
     if enterprise_tenant != "default":
         con.execute("UPDATE approvals SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
@@ -115,13 +118,15 @@ def create(conversation_id: str, employee_id: str, tool_name: str, tool_args: di
         "args": tool_args,
         "inner_thread": inner_thread,
         "status": "pending",
+        "decided_by": "",
         "created_at": created_at,
         "expires_at": expires_at,
     }
     return record
 
 
-def decide(approval_id: str, decision: str, tenant_id: str | None = None) -> dict | None:
+def decide(approval_id: str, decision: str, tenant_id: str | None = None,
+           decided_by: str = "") -> dict | None:
     with _conn() as con:
         sql, params = "SELECT * FROM approvals WHERE approval_id=?", [approval_id]
         if tenant_id:
@@ -132,9 +137,10 @@ def decide(approval_id: str, decision: str, tenant_id: str | None = None) -> dic
         record = _expire_if_needed(con, _row_to_dict(row))
         if record["status"] != "pending" or decision not in ("approve", "reject"):
             return None
-        sql, params = "UPDATE approvals SET status=? WHERE approval_id=?", [decision, approval_id]
+        sql, params = "UPDATE approvals SET status=?, decided_by=? WHERE approval_id=?", [decision, decided_by, approval_id]
         if tenant_id:
             sql += " AND tenant_id=?"; params.append(tenant_id)
         con.execute(sql, params)
         record["status"] = decision
+        record["decided_by"] = decided_by
         return record

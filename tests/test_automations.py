@@ -3,7 +3,7 @@ from datetime import datetime
 
 import asyncio
 
-from app import automations
+from app import automations, catalog
 
 
 # ---- cron 解析与匹配 ----
@@ -68,6 +68,9 @@ def test_next_fire_impossible_returns_none():
 # ---- CRUD 与调度语义 ----
 
 def _mk_cron(**kw):
+    catalog.create_employee({"id": "xiaoshu", "name": "测试员工"})
+    catalog.create_user("default", "!test-only", user_id="default")
+    catalog.assign_employee("default", "xiaoshu", granted_by="test")
     base = dict(name="每日报表", trigger_type="cron", employee_id="xiaoshu",
                 prompt="汇总今日经营数据并输出简报", cron_expr="0 9 * * *")
     base.update(kw)

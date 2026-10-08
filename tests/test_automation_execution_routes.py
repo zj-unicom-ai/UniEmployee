@@ -7,16 +7,23 @@ import time
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import auth, automations, streaming
+from app import auth, automations, catalog, streaming
 from app.routes.automations import router
 
 
 def _client(user=None):
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[auth.get_current_user_or_fallback] = lambda: user or {
+    current_user = user or {
         "id": "u_auto_admin", "username": "admin", "role": "admin",
     }
+    catalog.create_employee({"id": "xiaoshu", "name": "测试员工"})
+    for uid in {"default", current_user["id"]}:
+        tenant_id = current_user.get("tenant_id", "default") if uid == current_user["id"] else "default"
+        role = current_user.get("role", "user") if uid == current_user["id"] else "user"
+        catalog.create_user(uid, "!test-only", role=role, tenant_id=tenant_id, user_id=uid)
+        catalog.assign_employee(uid, "xiaoshu", granted_by="test")
+    app.dependency_overrides[auth.get_current_user_or_fallback] = lambda: current_user
     return TestClient(app)
 
 
@@ -49,10 +56,10 @@ def test_webhook_idempotency_header_prevents_duplicate_agent_run(monkeypatch):
 
 
 def _signed_headers(body: bytes, secret: str, event_key: str, timestamp: str,
-                    idempotency_key: str) -> dict[str, str]:
+                    idempotency_key: str, tenant_id: str = "default") -> dict[str, str]:
     path = f"/api/automations/events/{event_key}"
     body_digest = hashlib.sha256(body).hexdigest()
-    message = "\n".join(("v1", "POST", path, timestamp,
+    message = "\n".join(("v2", "POST", path, tenant_id, timestamp,
                           idempotency_key, body_digest)).encode()
     signature = hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
     return {
@@ -61,6 +68,38 @@ def _signed_headers(body: bytes, secret: str, event_key: str, timestamp: str,
         "X-UniEmployee-Timestamp": timestamp,
         "X-UniEmployee-Signature": signature,
     }
+
+
+def test_webhook_signature_is_bound_to_tenant(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    catalog.create_employee({"id": "xiaoshu", "name": "测试员工"})
+    for user_id, tenant_id in (("u_hook_a", "tenant-a"), ("u_hook_b", "tenant-b")):
+        catalog.create_user(user_id, "!test-only", tenant_id=tenant_id, user_id=user_id)
+        catalog.assign_employee(user_id, "xiaoshu", granted_by="test")
+    executed_tenants = []
+
+    async def fake_stream(conv_id, input_, **kwargs):
+        executed_tenants.append(kwargs["tenant_id"])
+        yield 'data: {"type":"token","content":"ok"}\n\n'
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    shared_secret = "x" * 32
+    first = automations.create("租户 A", "event", "xiaoshu", "处理",
+                               event_key="shared.event", secret=shared_secret,
+                               run_as="u_hook_a", tenant_id="tenant-a")
+    automations.create("租户 B", "event", "xiaoshu", "处理",
+                       event_key="shared.event", secret=shared_secret,
+                       run_as="u_hook_b", tenant_id="tenant-b")
+    body = b'{"payload":{"id":"a-1"}}'
+    headers = _signed_headers(body, shared_secret, "shared.event", str(int(time.time())),
+                              "evt-a", tenant_id="tenant-a")
+
+    response = _client().post("/api/automations/events/shared.event",
+                              content=body, headers=headers)
+
+    assert response.status_code == 200
+    assert [result["id"] for result in response.json()["results"]] == [first["id"]]
+    assert executed_tenants == ["tenant-a"]
 
 
 def test_webhook_hmac_authenticates_body_and_idempotency_key(monkeypatch):
