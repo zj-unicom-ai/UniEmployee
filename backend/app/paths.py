@@ -5,8 +5,16 @@
 import os
 from pathlib import Path
 
+import dotenv
+
 # 项目根，用于引用 .venv、workspace 等
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# 配置必须在计算 DATA_DIR 等导入期常量之前载入；auth/catalog 会在应用
+# lifespan 之前导入本模块。shell 环境变量优先于 .env（load_dotenv 默认行为）。
+_ENV_FILE = PROJECT_ROOT / ".env"
+if not _ENV_FILE.exists():
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+dotenv.load_dotenv(_ENV_FILE)
 # 后端根（backend/）
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("APP_DATA_DIR", str(PROJECT_ROOT / "data" / "db"))).resolve()

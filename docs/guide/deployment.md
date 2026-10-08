@@ -49,6 +49,14 @@ curl http://localhost:8787/readyz
 - [ ] 执行型员工在生产模式下必须启用 `SANDBOX_ENABLED=1` 并部署 OpenSandbox；给 server 配 `SANDBOX_API_KEY` 并去掉其 `OPENSANDBOX_INSECURE_SERVER`，实测容器挂载和密钥隔离
 - [ ] 用到 Playwright 连接器时确认镜像内已 `npx playwright install --with-deps chromium`
 
+### 0.21.4 生产启动预检
+
+生产启动会在数据库初始化和任何种子/资源回填前拒绝以下配置：弱/占位 `JWT_SECRET`、非 PostgreSQL 后端、空/默认/过短的 PostgreSQL 密码、`AUTH_COOKIE_SECURE` 未开启、OpenSandbox 未启用或缺少 `SANDBOX_API_KEY`，以及已配置 `RAGFLOW_API_KEY` 但未设置 `RAGFLOW_DATASET_IDS` 白名单。已启用的事件自动化若没有至少 32 字节密钥，也会阻止启动。相关提示不会打印密钥内容。
+
+`.env` 会在计算 `APP_DATA_DIR` 等导入期配置前载入。生产还会检查 `workspace/data` 与配置的 `LOG_FILE` 位置是否可写。若历史目录中的 CRM 实验连接器、本体 `seed` 数据或已知模拟 CSV 尚未审核，应用会在种子和资源回填前汇总报告并停止；它不会自动删除、移动或迁移这些资产。RAGFlow 数据集内容无法由本地应用判定，启动日志会提示管理员人工核对来源与授权。
+
+应用无法验证反向代理是否确实只开放 HTTPS，也无法验证外部备份调度和恢复演练，因此生产启动会明确提示人工确认。企业 OIDC 仍是可选能力；未配置时请确认本地账号登录符合组织策略。`APP_ENV=development` 下不安全的 JWT/PostgreSQL/RAGFlow 配置只产生脱敏警告，不阻止开发启动。
+
 ## 形态三：已有 PostgreSQL 实例
 
 ```bash

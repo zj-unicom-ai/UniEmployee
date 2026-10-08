@@ -29,3 +29,18 @@
 | `git diff --check` | PASS | 无空白错误。 |
 
 未运行 PostgreSQL 集成、真实外部 Webhook、浏览器端到端或生产迁移演练。当前 CI 没有独立 PostgreSQL job。
+
+## 0.21.4 · P0-ENV-01
+
+日期：2026-10-08（Asia/Shanghai）
+分支：`codex/v0.21.4-p0-env-01`（基于尚未合并的 PR #73；PR #73 依赖 #72）
+基线：PR #73 head `a4cb31a`（启动时工作树干净）
+
+| 命令 | 结果 | 说明 |
+|---|---|---|
+| `PYTHONPATH=backend uv run python -m pytest -o addopts='' tests/test_startup_preflight.py tests/test_demo_isolation.py tests/test_automations.py tests/test_automation_execution_routes.py tests/test_automation_identity.py -q` | PASS：60 passed | production fail-closed、开发脱敏警告、dotenv 先于模块路径解析、启动顺序、目录权限、Webhook UTF-8 字节长度、演示资产报告和非破坏性。 |
+| `PYTHONPATH=backend uv run python -m pytest -o addopts='' tests/ -q` | PASS：592 passed、40 skipped（15.76s） | 全量后端；测试夹具使用临时 SQLite。 |
+| `npm run build`（`frontend/`） | PASS | Vite 生产构建通过；存在既有大 chunk 警告。 |
+| `git diff --check` | PASS | 无空白错误。 |
+
+未运行 PostgreSQL 启动/迁移/恢复演练：本机 Docker daemon 不可用，且未找到 `initdb`、`pg_ctl`、`psql`。未连接现有数据库或生产数据。
