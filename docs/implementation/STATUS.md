@@ -5,6 +5,8 @@
 - 任务书基线：`main` / `v0.21.1` / `abd8ed09dc744809d5478fa80f0fc60897740f55`（2026-10-02）
 - 本轮分支：`codex/v0.21.2-p0-sec-01`
 - 本轮版本：`0.21.2`
+- 实现提交：`5931f5919b49798e7bdaefa570e18b76c3062643`
+- Pull Request：[#72](https://github.com/zj-unicom-ai/UniEmployee/pull/72)
 - 初始工作树干净；未连接生产数据库、CRM 或 RAGFlow。
 
 ## 任务状态
