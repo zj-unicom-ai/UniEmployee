@@ -263,7 +263,8 @@ def test_compile_agent_limits_builtin_fs_tools_for_non_admin(monkeypatch):
     asyncio.run(compiler.compile_agent(_spec([]), None, None, user_id="u1"))
 
     middleware = captured["middleware"]
-    assert len(middleware) == 1
+    assert len(middleware) == 2
+    assert middleware[1].name == "SkillsMiddleware"
     enabled = middleware[0].__dict__["_enabled_tools"]
     assert enabled == frozenset({"ls", "read_file", "glob", "grep"})
     assert "execute" not in enabled

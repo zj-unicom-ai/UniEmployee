@@ -1,6 +1,8 @@
 ---
 name: fault-impact-analysis
 description: 故障影响分析技能。当用户报告基站故障、网络中断、退服、大面积断网，或需要评估故障影响范围、安排装维人员时使用。
+metadata:
+  include_tools: ontology_fault_impact
 ---
 
 # 故障影响分析

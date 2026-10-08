@@ -144,6 +144,14 @@ def reconstruct(messages: list) -> list[dict]:
     pending: list[dict] = []
     for m in messages:
         tname = type(m).__name__
+        if tname == "HumanMessage" and getattr(m, "additional_kwargs", {}).get("lc_source") == "pinned_skill":
+            skill = m.additional_kwargs.get("skill", {})
+            heading = re.search(r"^#\s+(.+)$", text_of(m), re.MULTILINE)
+            label = heading.group(1) if heading else skill.get("name", "业务技能")
+            user_turn = next((t for t in reversed(turns) if t["role"] == "user"), None)
+            if user_turn is not None:
+                user_turn.setdefault("skills", []).append(label)
+            continue
         if tname == "HumanMessage":
             turns.append({"role": "user", "content": text_of(m)})
             cur_ai, pending = None, []
@@ -504,7 +512,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     try:
         pre_states = [s async for s in agent.aget_state_history(config, limit=1)]
         pre_msgs = pre_states[0].values.get("messages", []) if pre_states else []
-        turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)) + 1
+        turn_no = sum(1 for m in pre_msgs if isinstance(m, HumanMessage)
+                      and m.additional_kwargs.get("lc_source") != "pinned_skill") + 1
     except Exception:
         turn_no = None
     bot_text = ""

@@ -7,6 +7,9 @@ emit: rated(msg, rating, reason)
     <!-- 用户消息 -->
     <div v-if="msg.role === 'user'" class="msg-wrapper user-wrapper">
       <div class="msg user">
+        <div v-if="msg.skills?.length" class="user-skills">
+          <span v-for="skill in msg.skills" :key="skill">技能：{{ skill }}</span>
+        </div>
         <div v-if="msg.content" class="msg-text">{{ msg.content }}</div>
         <div v-if="msg.attachments && msg.attachments.length" class="user-atts">
           <span v-for="(a, ai) in msg.attachments" :key="ai" class="user-att" :title="a.path">
@@ -195,6 +198,7 @@ function subagentStatusText(status) {
 </script>
 
 <style scoped>
+.user-skills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; font-size: 12px; opacity: .8; }
 .msg-wrapper { display: flex; flex-direction: column; gap: 2px; }
 /* 用户消息：wrapper 撑满整行（时间/按钮贴真正的右边缘），宽度限制放在气泡上保持聊天气泡感；
    bot 回复（长文/表格/代码）放宽到接近全宽，避免右侧大片空白 */

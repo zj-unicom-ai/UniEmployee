@@ -170,6 +170,8 @@ def archive_assistant_reports(messages: list, user_id: str,
     for message in messages or []:
         kind = type(message).__name__
         if kind == "HumanMessage":
+            if getattr(message, "additional_kwargs", {}).get("lc_source") == "pinned_skill":
+                continue
             turn_no += 1
             continue
         if kind != "AIMessage":

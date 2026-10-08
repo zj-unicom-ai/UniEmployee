@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 _store = None          # 生命周期启动时由 lifespan 注入（AsyncSqliteStore / AsyncPostgresStore）
 _checkpointer = None  # 生命周期启动时由 lifespan 注入（AsyncSqliteSaver / AsyncPostgresSaver）
 _agents = {}          # emp_id -> (agent, stage_meta)
+_skill_bindings = {}   # 编译时的技能工具绑定签名
 _mcp_clients = {}     # emp_id -> mcp_client | None
+_retired_mcp_clients = []  # 保留正在运行的旧图连接器，退出时统一关闭
 _lock = asyncio.Lock()
 
 
@@ -101,10 +103,12 @@ def invalidate(employee_id: str):
     """配置变更后丢弃缓存，下次 get_agent 重新编译。
     同时清掉该员工的全部按用户变体（emp_id|user_id）。"""
     _agents.pop(employee_id, None)
+    _skill_bindings.pop(employee_id, None)
     _mcp_clients.pop(employee_id, None)
     for k in list(_agents.keys()):
         if k.startswith(f"{employee_id}|"):
             _agents.pop(k, None)
+            _skill_bindings.pop(k, None)
             _mcp_clients.pop(k, None)
 
 
@@ -112,6 +116,7 @@ def invalidate_user(employee_id: str, user_id: str):
     """只丢弃某用户视角的 agent 变体，不动模板路径和其他用户。"""
     key = f"{employee_id}|{user_id}"
     _agents.pop(key, None)
+    _skill_bindings.pop(key, None)
     _mcp_clients.pop(key, None)
 
 
@@ -121,6 +126,7 @@ def invalidate_user_agents(user_id: str):
     for k in list(_agents.keys()):
         if k.endswith(suffix):
             _agents.pop(k, None)
+            _skill_bindings.pop(k, None)
             _mcp_clients.pop(k, None)
 
 
@@ -145,9 +151,11 @@ async def _close_mcp_client(client) -> None:
 async def shutdown_mcp() -> None:
     """应用退出时关闭全部 MCP client，并清空 agent 缓存。"""
     async with _lock:
-        clients = list(_mcp_clients.values())
+        clients = [*list(_mcp_clients.values()), *_retired_mcp_clients]
+        _retired_mcp_clients.clear()
         _mcp_clients.clear()
         _agents.clear()
+        _skill_bindings.clear()
     for client in clients:
         await _close_mcp_client(client)
 
@@ -188,8 +196,7 @@ async def sync_skills_to_store(employee_id: str, user_id: str | None = None,
 
     - skill_dirs / desired_skills 未提供时从 catalog 自动取
       （普通用户视角取 effective 技能，管理员/模板视角取员工模板技能）。
-    - 只增不删：compile_agent 也能继续播种，避免先删除旧技能导致 read_file 失败；
-      后续再补齐“移除已取消技能”的精确回收逻辑。
+    - 精确回收取消挂载的技能文件，不影响同 namespace 下的记忆/SOP。
     """
     from deepagents.backends.utils import create_file_data
     if _store is None:
@@ -203,7 +210,15 @@ async def sync_skills_to_store(employee_id: str, user_id: str | None = None,
             desired_skills = list(effective_dirs.keys())
 
     namespace = (user_id or "default", employee_id)
-    existing = {i.key: i for i in await _store.asearch(namespace)}
+    existing = {}
+    offset = 0
+    while True:
+        batch = await _store.asearch(namespace, limit=100, offset=offset)
+        existing.update({i.key: i for i in batch})
+        if len(batch) < 100:
+            break
+        offset += len(batch)
+    desired_keys = set()
     for skill_name in desired_skills:
         sdir = skill_dirs.get(skill_name) or f"skills/{skill_name}"
         skill_dir = Path(sdir) if Path(sdir).is_absolute() else ROOT / sdir
@@ -212,10 +227,15 @@ async def sync_skills_to_store(employee_id: str, user_id: str | None = None,
             continue
         skill_md = md_path.read_text(encoding="utf-8")
         key = f"/{skill_name}/SKILL.md"
+        desired_keys.add(key)
         cur = existing.get(key)
         if cur is not None and _item_data_equals(cur, skill_md):
             continue
         await _store.aput(namespace, key, create_file_data(skill_md))
+
+    for key in existing:
+        if key.endswith("/SKILL.md") and key not in desired_keys:
+            await _store.adelete(namespace, key)
 
 
 async def refresh_skills_for_employees(employee_ids: list[str]):
@@ -330,11 +350,19 @@ async def get_agent(employee_id: str, user_id: str | None = None,
         await sync_skills_to_store(employee_id, user_id)
         # SOP 同样运行时同步：即使 agent 已缓存，也先把最新 SOP 刷新进 /sops/。
         await sync_sops_to_store(employee_id, user_id)
+        from app.skill_runtime import binding_signature
+        signature = binding_signature(employee_id, user_id)
+        if key in _skill_bindings and _skill_bindings[key] != signature:
+            _agents.pop(key, None)
+            old_client = _mcp_clients.pop(key, None)
+            if old_client is not None:
+                _retired_mcp_clients.append(old_client)
         if key not in _agents:
             agent, stage_meta, mcp_client = await compile_agent(
                 build_spec(cfg, model_override=model_override),
                 _checkpointer, _store, user_id=user_id)
             _agents[key] = (agent, stage_meta)
+            _skill_bindings[key] = signature
             _mcp_clients[key] = mcp_client
     return _agents[key]
 

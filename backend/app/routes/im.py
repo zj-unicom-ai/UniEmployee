@@ -262,6 +262,11 @@ async def send_channel_message(channel_id: str, conv_id: str, body: MessageIn,
     emp = meta["employee_id"] if meta else conv_emp_map.get(conv_id, "")
     if not emp:
         raise HTTPException(500, "会话缺少员工信息")
+    from app.skill_runtime import validate_pinned_skills
+    try:
+        pinned_skills = validate_pinned_skills(emp, user["id"], body.pinned_skills)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     text = body.message.strip()
     if not meta:
         conversations.create(conv_id, emp, channel_id=channel_id, title=text[:40],
@@ -270,7 +275,8 @@ async def send_channel_message(channel_id: str, conv_id: str, body: MessageIn,
         if meta.get("user_id") == "default":
             conversations.claim(conv_id, user["id"])
         conversations.touch(conv_id, title=text[:40], preview=text[:60], bump=1)
-    input_ = {"messages": [{"role": "user", "content": body.message}]}
+    input_ = {"messages": [{"role": "user", "content": body.message}],
+              "pinned_skills": pinned_skills}
     return StreamingResponse(
         _stream_run(conv_id, input_, user_id=user["id"], role=user.get("role", "user")),
         media_type="text/event-stream")
