@@ -82,8 +82,8 @@ def test_postgres_schema_initialization_and_legacy_automation_migration(monkeypa
     finally:
         con.close()
 
-    assert {"tenant_id"} <= auto_columns
-    assert {"tenant_id", "trigger_actor", "run_as_principal"} <= execution_columns
+    assert {"tenant_id"} <= set(auto_columns)
+    assert {"tenant_id", "trigger_actor", "run_as_principal"} <= set(execution_columns)
     assert migrated_auto["tenant_id"] == "tenant-pg-migrated"
     assert migrated_execution["tenant_id"] == "tenant-pg-migrated"
     assert migrated_execution["trigger_actor"] == "system:legacy"
