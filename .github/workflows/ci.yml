@@ -7,7 +7,7 @@ on:
 
 jobs:
   backend-test:
-    name: 后端测试
+    name: 后端单元测试（SQLite）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +23,60 @@ jobs:
           pip install -r backend/requirements.txt
           pip install -r backend/requirements-dev.txt
 
-      - name: 运行 pytest（联网/浏览器慢测试自动跳过）
+      - name: 运行隔离的 SQLite 单元与服务测试
         env:
           PYTHONPATH: backend
-        run: python -m pytest tests/ -v
+          DB_BACKEND: sqlite
+        run: >-
+          python -m pytest tests/ -v
+          -m "not pg_integration and not requires_live_server and not e2e and not requires_external_services"
+
+  postgres-integration:
+    name: PostgreSQL 集成测试
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHONPATH: backend
+      UE_RUN_POSTGRES_INTEGRATION: "1"
+      DB_BACKEND: postgres
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ci-only-postgres-password
+      POSTGRES_DB_PREFIX: codex_test_
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装后端与测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: 创建带保护前缀的临时集成数据库
+        run: >-
+          ./scripts/init_postgres.sh --host 127.0.0.1 --port 5432
+          --user postgres --password "$POSTGRES_PASSWORD" --prefix codex_test_
+
+      - name: 运行 PostgreSQL 集成测试（禁止访问其他测试目标）
+        run: python -m pytest tests/pg_integration/ -m pg_integration -v
 
   frontend-build:
     name: 前端构建

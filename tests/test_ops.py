@@ -26,7 +26,10 @@ def _port_open(port=8787):
         return False
 
 
-pytestmark = pytest.mark.skipif(not _port_open(), reason="服务未在 8787 运行")
+pytestmark = [
+    pytest.mark.requires_live_server,
+    pytest.mark.skipif(not _port_open(), reason="服务未在 8787 运行"),
+]
 
 
 def _req(path, method="GET"):

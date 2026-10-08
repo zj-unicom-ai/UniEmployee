@@ -256,7 +256,7 @@ UniEmployee/
 | `JWT_EXPIRE_HOURS` | `24` | token 有效期（小时） |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / 空 | 日志级别 / 文件路径 |
 | `DB_BACKEND` / `POSTGRES_*` | `postgres` | 数据库后端与连接参数（host/port/user/password/db 前缀） |
-| `APP_VERSION` | `0.21.4` | 打印在 /health 与日志；可用环境变量覆盖 |
+| `APP_VERSION` | `0.21.5` | 打印在 /health 与日志；可用环境变量覆盖 |
 | `PRODUCT_WIKI_DIR` | `product-wiki/` | 销售技能的产品知识库 markdown 目录 |
 | `RAGFLOW_BASE_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_IDS` | — | RAGFlow 知识库接入（可选） |
 | `SANDBOX_ENABLED` / `SANDBOX_DOMAIN` / `SANDBOX_IMAGE` | 未启用 / `localhost:8090` / `uniemployee/sandbox:py312-data` | OpenSandbox 开关、服务地址和沙箱镜像 |
@@ -278,14 +278,19 @@ UniEmployee/
 ## 测试
 
 ```bash
-# 后端单测（夹具自动替换为临时 SQLite 库，不碰真实数据）
-PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
+# SQLite 单测与进程内服务测试（自动使用临时库）
+PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v \
+  -m "not pg_integration and not requires_live_server and not e2e and not requires_external_services"
 
 # 运行单个测试文件
 PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
 ```
 
-慢测试（真实联网 / 浏览器）用 `@pytest.mark.slow` 标记，默认跳过。
+CI 将后端 SQLite 测试、隔离 PostgreSQL 集成测试和前端构建显示为三个独立结果。依赖 8787 的用例标记为 `requires_live_server`，Playwright 用例另标 `e2e`，真实联网用例标记 `requires_external_services`，均不混入默认 CI 单测。
+
+PostgreSQL 集成套件只允许在一次性本机/CI 实例中运行，数据库名前缀必须为 `codex_test_`；开启环境变量 `UE_RUN_POSTGRES_INTEGRATION=1` 后，根测试夹具会拒绝非 PostgreSQL 后端、远程主机或其他测试目标。套件覆盖自动化旧表迁移、并发幂等、租户过滤、Webhook 重放，以及 LangGraph Checkpoint/Store 往返；不调用真实模型。
+
+黄金评测数据通过 pytest fixture `golden_eval_cases` 从 `UE_GOLDEN_EVAL_PATH` 指向的 JSONL 读取，字段契约见 [golden eval fixture 说明](tests/fixtures/golden_eval/README.md)。没有业务负责人授权数据时 fixture 会跳过，不会生成或声称通过任何业务正确率结论。
 
 ## 渠道接入
 
