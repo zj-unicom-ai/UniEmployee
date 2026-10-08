@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.21.5 (2026-10-08)
+
+### 测试基线：PostgreSQL 集成 CI 与测试分层
+
+- CI 拆分为 SQLite 单元/服务测试、PostgreSQL 集成测试、前端构建三个独立 job；PG job 使用一次性 PostgreSQL 16 服务和 `codex_test_` 独立数据库
+- 普通测试继续强制临时 SQLite；显式 PG 模式增加后端、数据库名前缀、主机、端口与凭据护栏，并拒绝收集集成目录外的测试
+- 将依赖 8787、Playwright 和真实外部服务的用例明确分类，并从常规 CI 后端套件排除
+- 新增 PostgreSQL 旧表迁移、事务回滚、并发幂等、租户过滤、真实 HMAC Webhook 重放，以及 LangGraph Checkpoint/Store 往返测试；无真实模型调用
+- 增加 owner 授权黄金评测 JSONL 读取 fixture；无业务负责人标准答案时不运行或伪报业务正确率
+
+### 验证
+
+- SQLite 回归与测试分类检查：见 `docs/implementation/TEST_EVIDENCE.md`
+- PostgreSQL 集成测试在本机未执行；由 PR CI 一次性 PostgreSQL 服务验证，不能替代生产启动/备份恢复演练
+
 ## 0.21.4 (2026-10-08)
 
 ### 安全增强：生产启动预检与演示资产门禁

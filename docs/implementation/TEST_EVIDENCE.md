@@ -44,3 +44,18 @@
 | `git diff --check` | PASS | 无空白错误。 |
 
 未运行 PostgreSQL 启动/迁移/恢复演练：本机 Docker daemon 不可用，且未找到 `initdb`、`pg_ctl`、`psql`。未连接现有数据库或生产数据。
+
+## 0.21.5 · P0-TEST-01
+
+日期：2026-10-08（Asia/Shanghai）
+分支：`codex/v0.21.5-p0-test-01`（基于尚未合并的 PR #74；PR #74 → #73 → #72）
+基线：PR #74 head `6818e1c`（工作树干净）
+
+| 命令 | 结果 | 说明 |
+|---|---|---|
+| `PYTHONPATH=backend .venv/bin/python -m pytest -o addopts='' tests/ -m 'not pg_integration and not requires_live_server and not e2e and not requires_external_services' -q` | PASS：608 passed、1 skipped、42 deselected（18.62s） | SQLite 临时库；依赖 8787、Playwright 或外部服务的用例不混入常规结果；包含 P0-SEC-01/02 回归。 |
+| `PYTHONPATH=backend .venv/bin/python -m pytest -o addopts='' tests/test_pg_test_database_safety.py tests/test_golden_eval_fixture.py tests/test_automation_execution_routes.py tests/test_automation_identity.py -q` | PASS：31 passed | PG 目标护栏、黄金 JSONL 读取契约、HMAC/幂等和自动化身份回归。 |
+| `npm run build`（`frontend/`） | PASS | Vite 生产构建通过；有既有的大 chunk 警告。 |
+| CI workflow YAML 解析 / `git diff --check` | PASS | 三个 job：`backend-test`、`postgres-integration`、`frontend-build`。 |
+
+未在本机运行 PostgreSQL 集成测试：Docker daemon 不可用，且没有本机 PG 服务。没有访问或修改现有/生产数据库；真实 PG 结果待 PR CI 的一次性 PostgreSQL 16 service。黄金评测 loader 已有结构与授权引用校验，但仓库没有业务 owner 提供的标准答案，因此没有业务正确率结论。

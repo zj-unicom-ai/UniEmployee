@@ -37,5 +37,11 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: 标记慢测试（如真实联网/浏览器）"]
+markers = [
+    "slow: 标记慢测试（如真实联网/浏览器）",
+    "pg_integration: 需要隔离 PostgreSQL 服务的集成测试",
+    "requires_live_server: 依赖本机已启动的 8787 服务",
+    "e2e: 依赖 Playwright 浏览器的端到端测试",
+    "requires_external_services: 依赖真实外部网络或 SaaS 服务",
+]
 addopts = "-q"

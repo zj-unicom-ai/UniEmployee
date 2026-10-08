@@ -8,8 +8,11 @@ dotenv.load_dotenv()
 
 from app.tools.search import bocha_search
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("BOCHA_API_KEY"), reason="未配置 BOCHA_API_KEY")
+pytestmark = [
+    pytest.mark.requires_external_services,
+    pytest.mark.skipif(
+        not os.environ.get("BOCHA_API_KEY"), reason="未配置 BOCHA_API_KEY"),
+]
 
 
 def test_bocha_search_returns_results():
