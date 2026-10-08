@@ -60,6 +60,44 @@ curl http://localhost:8787/readyz
 
 多套环境共用一个实例时，在 `.env` 设 `POSTGRES_DB_PREFIX=dev_` 区分库名。应用启动时自动建表/迁移，无需手工执行 SQL。
 
+## 生产 Webhook 认证
+
+生产模式下，启用的事件自动化必须设置至少 32 字节的任务密钥。管理 API 只返回 `has_secret`，不会回显密钥；编辑时留空表示保留原密钥，填写新值会轮换密钥。部署前请在管理页更新旧任务密钥，并让调用方改用 HMAC 请求；生产环境不接受旧版请求体 `secret`。
+
+签名为 HMAC-SHA256 十六进制小写值。签名消息由以下字段按换行符连接后 UTF-8 编码：`v1`、大写 HTTP 方法、请求路径、Unix 秒级时间戳、`Idempotency-Key`、原始请求体的 SHA-256 十六进制摘要。时间戳默认允许前后偏差 300 秒，可用 `AUTOMATION_WEBHOOK_TOLERANCE_SECONDS` 调整（1–3600 秒）。
+
+```python
+import hashlib
+import hmac
+import time
+import requests
+
+secret = "替换为管理页中配置的至少 32 字节密钥"
+path = "/api/automations/events/order.refunded"
+body = b'{"payload":{"order_id":"A-1001"}}'
+timestamp = str(int(time.time()))
+idempotency_key = "order-refunded-A-1001-v1"  # 网络重试沿用同一个值
+body_digest = hashlib.sha256(body).hexdigest()
+message = "\n".join(("v1", "POST", path, timestamp,
+                      idempotency_key, body_digest)).encode("utf-8")
+signature = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+response = requests.post(
+    "https://example.com" + path,
+    data=body,
+    headers={
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+        "X-UniEmployee-Timestamp": timestamp,
+        "X-UniEmployee-Signature": signature,
+    },
+    timeout=30,
+)
+response.raise_for_status()
+```
+
+迁移顺序：先为每个生产事件任务设置新密钥并安全交付给对应调用方，再切换调用方签名实现，最后将 `APP_ENV=production` 部署。不要把密钥放进事件 payload、命令行参数或日志。重复请求必须复用原幂等键；更换幂等键会被视为一次新触发。
+
 ## 备份与恢复
 
 ```bash

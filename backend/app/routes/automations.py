@@ -2,16 +2,71 @@
 
 - 管理 API（/api/automations/*）仅 admin 可用
 - 事件入口 POST /api/automations/events/{event_key} 面向外部系统，
-  靠任务级 secret 校验（未配置 secret 则直接放行）
+  使用任务级 HMAC-SHA256 密钥验证；开发环境保留旧请求体 secret 兼容
 """
-from fastapi import APIRouter, Depends, Header, HTTPException
+import hashlib
+import hmac
+import logging
+import os
+import re
+import time
 
-from app import automations, auth, runtime
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+
+from app import automations, auth, demo_isolation, runtime
 from app.models import (
     AutomationCreate, AutomationUpdate, AutomationEventIn, AutomationRetryIn,
 )
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
+log = logging.getLogger("app.routes.automations")
+
+_WEBHOOK_SIGNATURE_VERSION = "v1"
+_WEBHOOK_SIGNATURE_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _webhook_tolerance_seconds() -> int:
+    raw = os.environ.get("AUTOMATION_WEBHOOK_TOLERANCE_SECONDS", "300")
+    try:
+        value = int(raw)
+    except ValueError:
+        log.error("AUTOMATION_WEBHOOK_TOLERANCE_SECONDS 无效；使用安全默认值 300")
+        return 300
+    if not 1 <= value <= 3600:
+        log.error("AUTOMATION_WEBHOOK_TOLERANCE_SECONDS 超出允许范围；使用安全默认值 300")
+        return 300
+    return value
+
+
+def _webhook_signing_message(method: str, path: str, timestamp: str,
+                             idempotency_key: str, raw_body: bytes) -> bytes:
+    """签名同时绑定路由、幂等键与原始请求体，避免换 key 重放或跨事件复用。"""
+    body_digest = hashlib.sha256(raw_body).hexdigest()
+    parts = (_WEBHOOK_SIGNATURE_VERSION, method.upper(), path, timestamp,
+             idempotency_key, body_digest)
+    return "\n".join(parts).encode("utf-8")
+
+
+def _valid_webhook_timestamp(timestamp: str, now: int | None = None) -> bool:
+    if not timestamp.isascii() or not timestamp.isdigit() or len(timestamp) > 12:
+        return False
+    try:
+        issued_at = int(timestamp)
+    except ValueError:
+        return False
+    current = int(time.time()) if now is None else now
+    return abs(current - issued_at) <= _webhook_tolerance_seconds()
+
+
+def _verify_webhook_signature(secret: str, signature: str, *, method: str,
+                              path: str, timestamp: str,
+                              idempotency_key: str, raw_body: bytes) -> bool:
+    if len(secret.encode("utf-8")) < 32 or not _WEBHOOK_SIGNATURE_RE.fullmatch(signature.strip()):
+        return False
+    message = _webhook_signing_message(method, path, timestamp,
+                                       idempotency_key, raw_body)
+    expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 def _require_admin(user: dict):
@@ -33,10 +88,14 @@ def _validate(body) -> None:
     else:
         if not (body.event_key or "").strip():
             raise HTTPException(400, "事件触发必须填写事件标识（event_key）")
+        if demo_isolation.is_production() and body.enabled:
+            if len((body.secret or "").encode("utf-8")) < 32:
+                raise HTTPException(400, "生产模式启用事件自动化时必须配置至少 32 字节的 Webhook 密钥")
 
 
 def _item(auto: dict) -> dict:
-    item = {**auto}
+    item = {key: value for key, value in auto.items() if key != "secret"}
+    item["has_secret"] = bool(auto.get("secret"))
     if auto.get("trigger_type") == "event" and auto.get("event_key"):
         item["event_url"] = f"/api/automations/events/{auto['event_key']}"
     return item
@@ -102,8 +161,10 @@ async def delete_automation(aid: str,
 
 
 @router.post("/events/{event_key}")
-async def event_trigger(event_key: str, body: AutomationEventIn,
-                        idempotency_key: str = Header(alias="Idempotency-Key")):
+async def event_trigger(event_key: str, request: Request, body: AutomationEventIn,
+                        idempotency_key: str = Header(alias="Idempotency-Key"),
+                        timestamp: str | None = Header(default=None, alias="X-UniEmployee-Timestamp"),
+                        signature: str | None = Header(default=None, alias="X-UniEmployee-Signature")):
     """外部事件入口：触发所有监听该事件的任务并返回执行结果。"""
     autos = automations.list_by_event(event_key)
     if not autos:
@@ -111,15 +172,42 @@ async def event_trigger(event_key: str, body: AutomationEventIn,
     key = idempotency_key.strip()
     if not key or len(key) > 200:
         raise HTTPException(400, "Idempotency-Key 长度须为 1-200 个字符")
+
+    production = demo_isolation.is_production()
+    has_timestamp = timestamp is not None
+    has_signature = signature is not None
+    signed_request = has_timestamp or has_signature
+    if signed_request and not (has_timestamp and has_signature):
+        raise HTTPException(401, "Webhook authentication failed")
+    if production and not signed_request:
+        raise HTTPException(401, "Webhook authentication failed")
+    if signed_request and not _valid_webhook_timestamp(timestamp or ""):
+        raise HTTPException(401, "Webhook request expired")
+
+    raw_body = await request.body()
     results = []
     for auto in autos:
-        if auto.get("secret") and auto["secret"] != (body.secret or ""):
+        secret = auto.get("secret") or ""
+        if signed_request:
+            if not _verify_webhook_signature(
+                    secret, signature or "", method=request.method,
+                    path=request.url.path, timestamp=timestamp or "",
+                    idempotency_key=key, raw_body=raw_body):
+                continue
+        elif secret:
+            # 仅为开发期旧集成保留请求体密钥兼容；生产流量不会进入此路径。
+            if production or not hmac.compare_digest(secret, body.secret or ""):
+                continue
+        elif production:
             continue
+        else:
+            # 兼容原有开发演示任务；不记录或输出任何密钥内容。
+            log.warning("开发模式下接受未配置 Webhook 密钥的事件任务 id=%s", auto["id"])
         r = await automations.execute(auto, payload=body.payload, trigger="event",
                                       trigger_key=key)
         results.append({"id": auto["id"], "name": auto["name"], **r})
     if not results:
-        raise HTTPException(403, "secret 校验失败")
+        raise HTTPException(403, "Webhook authentication failed")
     return {"event": event_key, "triggered": len(results),
             "idempotency_key": key, "results": results}
 

@@ -1,5 +1,9 @@
 """自动化执行账本 HTTP 验收：Webhook 幂等、管理员查询和人工重跑权限。"""
 
+import hashlib
+import hmac
+import time
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -17,6 +21,7 @@ def _client(user=None):
 
 
 def test_webhook_idempotency_header_prevents_duplicate_agent_run(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
     calls = 0
 
     async def fake_stream(*args, **kwargs):
@@ -41,6 +46,149 @@ def test_webhook_idempotency_header_prevents_duplicate_agent_run(monkeypatch):
     assert replay.json()["results"][0]["duplicate"] is True
     assert calls == 1
     assert len(automations.list_executions(auto["id"])) == 1
+
+
+def _signed_headers(body: bytes, secret: str, event_key: str, timestamp: str,
+                    idempotency_key: str) -> dict[str, str]:
+    path = f"/api/automations/events/{event_key}"
+    body_digest = hashlib.sha256(body).hexdigest()
+    message = "\n".join(("v1", "POST", path, timestamp,
+                          idempotency_key, body_digest)).encode()
+    signature = hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+    return {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+        "X-UniEmployee-Timestamp": timestamp,
+        "X-UniEmployee-Signature": signature,
+    }
+
+
+def test_webhook_hmac_authenticates_body_and_idempotency_key(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    calls = 0
+
+    async def fake_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        yield 'data: {"type":"token","content":"ok"}\n\n'
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    secret = "s" * 32
+    auto = automations.create("签名事件", "event", "xiaoshu", "处理 {{payload}}",
+                              event_key="order.signed", secret=secret)
+    client = _client()
+    raw_body = b'{"payload":{"order_id":"A-1"}}'
+    timestamp = str(int(time.time()))
+    headers = _signed_headers(raw_body, secret, "order.signed", timestamp, "evt-1")
+
+    first = client.post("/api/automations/events/order.signed", content=raw_body,
+                        headers=headers)
+    replay = client.post("/api/automations/events/order.signed", content=raw_body,
+                         headers=headers)
+    changed_key = {**headers, "Idempotency-Key": "evt-2"}
+    changed_key_replay = client.post("/api/automations/events/order.signed",
+                                     content=raw_body, headers=changed_key)
+    changed_body = b'{"payload":{"order_id":"A-2"}}'
+    changed_body_replay = client.post("/api/automations/events/order.signed",
+                                      content=changed_body, headers=headers)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["results"][0]["duplicate"] is True
+    assert changed_key_replay.status_code == 403
+    assert changed_body_replay.status_code == 403
+    assert calls == 1
+    assert len(automations.list_executions(auto["id"])) == 1
+
+
+def test_production_rejects_expired_legacy_weak_and_secretless_webhooks(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    calls = 0
+
+    async def fake_stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        yield 'data: {"type":"token","content":"ok"}\n\n'
+
+    monkeypatch.setattr(streaming, "_stream_run", fake_stream)
+    secret = "t" * 32
+    auto = automations.create("过期签名", "event", "xiaoshu", "处理事件",
+                              event_key="order.expired", secret=secret)
+    client = _client()
+    raw_body = b'{"payload":{"order_id":"A-1"}}'
+    expired = str(int(time.time()) - 301)
+    expired_headers = _signed_headers(raw_body, secret, "order.expired", expired, "evt-expired")
+    expired_response = client.post("/api/automations/events/order.expired",
+                                   content=raw_body, headers=expired_headers)
+    legacy_response = client.post(
+        "/api/automations/events/order.expired",
+        json={"secret": secret, "payload": {"order_id": "A-1"}},
+        headers={"Idempotency-Key": "evt-legacy"})
+
+    weak_secret = "too-short"
+    weak_auto = automations.create("弱密钥", "event", "xiaoshu", "处理事件",
+                                   event_key="order.weak", secret=weak_secret)
+    weak_body = b'{"payload":{"order_id":"A-3"}}'
+    weak_timestamp = str(int(time.time()))
+    weak_headers = _signed_headers(weak_body, weak_secret, "order.weak",
+                                   weak_timestamp, "evt-weak")
+    weak_response = client.post("/api/automations/events/order.weak",
+                                content=weak_body, headers=weak_headers)
+
+    secretless = automations.create("无密钥", "event", "xiaoshu", "处理事件",
+                                    event_key="order.no-secret", secret="")
+    unsigned_response = client.post(
+        "/api/automations/events/order.no-secret", json={"payload": {"order_id": "A-2"}},
+        headers={"Idempotency-Key": "evt-no-secret"})
+
+    assert expired_response.status_code == 401
+    assert legacy_response.status_code == 401
+    assert weak_response.status_code == 403
+    assert unsigned_response.status_code == 401
+    assert calls == 0
+    assert automations.list_executions(auto["id"]) == []
+    assert automations.list_executions(weak_auto["id"]) == []
+    assert automations.list_executions(secretless["id"]) == []
+
+
+def test_webhook_secret_is_not_returned_and_blank_update_preserves_it(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setattr("app.routes.automations.runtime.discover_employees",
+                        lambda: [{"id": "xiaoshu"}])
+    secret = "management-secret-32-characters-long"
+    auto = automations.create("密钥脱敏", "event", "xiaoshu", "处理事件",
+                              event_key="secret.redaction", secret=secret)
+    client = _client()
+
+    listed = client.get("/api/automations")
+    listed_item = next(item for item in listed.json()["items"] if item["id"] == auto["id"])
+    updated = client.put(f"/api/automations/{auto['id']}",
+                         json={"name": "密钥仍保留", "secret": None})
+
+    assert listed.status_code == 200
+    assert "secret" not in listed_item
+    assert listed_item["has_secret"] is True
+    assert updated.status_code == 200
+    assert "secret" not in updated.json()
+    assert updated.json()["has_secret"] is True
+    assert automations.get(auto["id"])["secret"] == secret
+
+
+def test_enabled_production_webhook_requires_strong_secret(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setattr("app.routes.automations.runtime.discover_employees",
+                        lambda: [{"id": "xiaoshu"}])
+    response = _client().post("/api/automations", json={
+        "name": "生产事件",
+        "trigger_type": "event",
+        "event_key": "production.event",
+        "employee_id": "xiaoshu",
+        "prompt": "处理事件",
+        "enabled": True,
+    })
+
+    assert response.status_code == 400
+    assert "secret" not in response.json()["detail"].lower()
 
 
 def test_execution_history_and_retry_require_admin(monkeypatch):

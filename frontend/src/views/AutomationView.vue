@@ -63,12 +63,14 @@
           <n-form-item label="事件标识" required>
             <n-input v-model:value="form.event_key" placeholder="如 order.refunded" />
           </n-form-item>
-          <n-form-item label="secret">
-            <n-input v-model:value="form.secret" placeholder="可选；配置后调用方需携带相同 secret" />
+          <n-form-item label="Webhook 密钥">
+            <n-input v-model:value="form.secret" type="password" show-password-on="click"
+                     :placeholder="editingId ? '留空保留现有密钥；填写新密钥可轮换' : '生产环境需填写至少 32 字节的随机密钥'" />
+            <div class="field-hint">密钥不会由服务端回显。生产调用使用 HMAC-SHA256 签名；开发环境暂兼容旧请求体 secret。</div>
           </n-form-item>
           <n-form-item v-if="form.event_key" label="调用地址">
             <code class="event-url">{{ eventUrlPreview }}</code>
-            <div class="field-hint">调用时必须携带稳定的 Idempotency-Key 请求头；同一事件的网络重试使用同一个值，可避免重复执行。</div>
+            <div class="field-hint">调用时必须携带 Idempotency-Key 和 HMAC 签名头；重试使用相同幂等键，避免重复执行。</div>
           </n-form-item>
         </template>
         <n-form-item label="执行员工" required>
@@ -160,7 +162,7 @@ const eventUrlPreview = computed(() =>
 
 function triggerText(row) {
   if (row.trigger_type === 'cron') return row.cron_expr
-  return `${row.event_key}`
+  return `${row.event_key} · ${row.has_secret ? '已配置密钥' : '未配置密钥'}`
 }
 
 async function load() {
@@ -193,7 +195,7 @@ function openEdit(row) {
   editingId.value = row.id
   form.value = {
     name: row.name, trigger_type: row.trigger_type, cron_expr: row.cron_expr,
-    event_key: row.event_key, secret: row.secret, employee_id: row.employee_id,
+    event_key: row.event_key, secret: '', employee_id: row.employee_id,
     prompt: row.prompt, run_as: row.run_as, channel_id: row.channel_id || null,
     enabled: row.enabled,
   }
@@ -217,6 +219,7 @@ async function save() {
   saving.value = true
   try {
     const body = { ...f, channel_id: f.channel_id || '' }
+    if (editingId.value && !body.secret) delete body.secret
     if (editingId.value) await api.put(`/automations/${editingId.value}`, body)
     else await api.post('/automations', body)
     message.success('已保存')
