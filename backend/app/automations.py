@@ -20,7 +20,9 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from app import conversations
+from app import catalog, conversations
+from app import db as dblayer
+from app.auth_context import ROLE_PERMISSIONS, from_user
 
 log = logging.getLogger("app.automations")
 
@@ -32,6 +34,7 @@ CREATE TABLE IF NOT EXISTS automations (
     cron_expr    TEXT DEFAULT '',
     event_key    TEXT DEFAULT '',
     secret       TEXT DEFAULT '',
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
     employee_id  TEXT NOT NULL,
     prompt       TEXT NOT NULL,
     run_as       TEXT DEFAULT 'default',
@@ -56,6 +59,9 @@ CREATE TABLE IF NOT EXISTS automation_executions (
     conversation_id TEXT DEFAULT '',
     error           TEXT DEFAULT '',
     retry_of        TEXT DEFAULT '',
+    tenant_id       TEXT NOT NULL DEFAULT 'default',
+    trigger_actor   TEXT DEFAULT 'system:legacy',
+    run_as_principal TEXT DEFAULT '',
     created_at      TEXT NOT NULL,
     started_at      TEXT DEFAULT '',
     heartbeat_at    TEXT DEFAULT '',
@@ -75,7 +81,49 @@ def _conn():
     时自动跟随），再补建 automations 表。"""
     con = conversations._conn()
     con.executescript(_DDL)
+    _migrate(con)
     return con
+
+
+def _migrate(con) -> None:
+    """老库增量补齐自动化租户与身份审计字段。"""
+    auto_cols = dblayer.table_columns(con, "automations")
+    auto_tenant_added = "tenant_id" not in auto_cols
+    if auto_tenant_added:
+        con.execute("ALTER TABLE automations ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
+    execution_cols = dblayer.table_columns(con, "automation_executions")
+    execution_tenant_added = "tenant_id" not in execution_cols
+    run_as_principal_added = "run_as_principal" not in execution_cols
+    if execution_tenant_added:
+        con.execute("ALTER TABLE automation_executions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
+    if "trigger_actor" not in execution_cols:
+        con.execute("ALTER TABLE automation_executions ADD COLUMN trigger_actor TEXT DEFAULT 'system:legacy'")
+    if "run_as_principal" not in execution_cols:
+        con.execute("ALTER TABLE automation_executions ADD COLUMN run_as_principal TEXT DEFAULT ''")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_automations_tenant_created "
+                "ON automations(tenant_id, created_at DESC)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_auto_exec_tenant "
+                "ON automation_executions(tenant_id)")
+
+    # 与现有会话/审批迁移保持一致：一期单企业部署时将历史 default 行归到配置租户。
+    enterprise_tenant = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
+    if auto_tenant_added or enterprise_tenant != "default":
+        con.execute(
+            "UPDATE automations SET tenant_id=? WHERE tenant_id IS NULL OR tenant_id='' OR tenant_id='default'",
+            (enterprise_tenant,))
+    if execution_tenant_added or enterprise_tenant != "default":
+        con.execute(
+            "UPDATE automation_executions SET tenant_id=(SELECT tenant_id FROM automations "
+            "WHERE automations.id=automation_executions.automation_id) "
+            "WHERE EXISTS (SELECT 1 FROM automations WHERE automations.id=automation_executions.automation_id) "
+            "AND (tenant_id IS NULL OR tenant_id='' OR tenant_id='default')")
+    if run_as_principal_added:
+        con.execute(
+            "UPDATE automation_executions SET run_as_principal=(SELECT run_as FROM automations "
+            "WHERE automations.id=automation_executions.automation_id) "
+            "WHERE (run_as_principal IS NULL OR run_as_principal='') "
+            "AND EXISTS (SELECT 1 FROM automations WHERE automations.id=automation_executions.automation_id)")
+    con.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +225,7 @@ def _row(r) -> dict:
 def create(name: str, trigger_type: str, employee_id: str, prompt: str,
            cron_expr: str = "", event_key: str = "", secret: str = "",
            run_as: str = "default", channel_id: str = "", enabled: bool = True,
-           created_by: str = "") -> dict:
+           created_by: str = "", tenant_id: str = "default") -> dict:
     aid = "auto_" + time.strftime("%Y%m%d%H%M%S") + str(time.time()).split(".")[1]
     now = time.strftime(TS_FULL)
     next_fire_at = None
@@ -187,19 +235,19 @@ def create(name: str, trigger_type: str, employee_id: str, prompt: str,
     with _conn() as con:
         con.execute(
             "INSERT INTO automations"
-            "(id, name, trigger_type, cron_expr, event_key, secret, employee_id, prompt,"
+            "(id, name, trigger_type, cron_expr, event_key, secret, tenant_id, employee_id, prompt,"
             " run_as, channel_id, enabled, next_fire_at, created_by, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (aid, name, trigger_type, cron_expr, event_key, secret, employee_id,
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (aid, name, trigger_type, cron_expr, event_key, secret, tenant_id or "default", employee_id,
              prompt, run_as or "default", channel_id, 1 if enabled else 0,
              next_fire_at, created_by, now, now))
         con.commit()
     return get(aid) or {}
 
 
-def update(aid: str, **fields) -> dict | None:
+def update(aid: str, *, tenant_id: str | None = None, **fields) -> dict | None:
     """局部更新；cron 字段变化时重算 next_fire_at。"""
-    auto = get(aid)
+    auto = get(aid, tenant_id=tenant_id)
     if not auto:
         return None
     merged = {**auto, **{k: v for k, v in fields.items() if v is not None}}
@@ -211,37 +259,56 @@ def update(aid: str, **fields) -> dict | None:
             next_fire_at = nxt.strftime(TS) if nxt else None
         else:
             next_fire_at = None
+    where = " WHERE id=?"
+    params: tuple = (
+        merged["name"], merged["trigger_type"], merged["cron_expr"],
+        merged["event_key"], merged["secret"], merged["employee_id"],
+        merged["prompt"], merged["run_as"] or "default", merged["channel_id"],
+        1 if merged["enabled"] else 0, next_fire_at, now, aid)
+    if tenant_id is not None:
+        where += " AND tenant_id=?"
+        params += (tenant_id,)
     with _conn() as con:
         con.execute(
             "UPDATE automations SET name=?, trigger_type=?, cron_expr=?, event_key=?,"
             " secret=?, employee_id=?, prompt=?, run_as=?, channel_id=?, enabled=?,"
-            " next_fire_at=?, updated_at=? WHERE id=?",
-            (merged["name"], merged["trigger_type"], merged["cron_expr"],
-             merged["event_key"], merged["secret"], merged["employee_id"],
-             merged["prompt"], merged["run_as"] or "default", merged["channel_id"],
-             1 if merged["enabled"] else 0, next_fire_at, now, aid))
+            " next_fire_at=?, updated_at=?" + where, params)
         con.commit()
-    return get(aid)
+    return get(aid, tenant_id=tenant_id)
 
 
-def delete(aid: str) -> bool:
+def delete(aid: str, tenant_id: str | None = None) -> bool:
     with _conn() as con:
-        cur = con.execute("DELETE FROM automations WHERE id=?", (aid,))
+        sql = "DELETE FROM automations WHERE id=?"
+        params: tuple = (aid,)
+        if tenant_id is not None:
+            sql += " AND tenant_id=?"
+            params += (tenant_id,)
+        cur = con.execute(sql, params)
         ok = cur.rowcount > 0
         con.commit()
     return ok
 
 
-def get(aid: str) -> dict | None:
+def get(aid: str, tenant_id: str | None = None) -> dict | None:
     with _conn() as con:
-        r = con.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()
+        sql = "SELECT * FROM automations WHERE id=?"
+        params: tuple = (aid,)
+        if tenant_id is not None:
+            sql += " AND tenant_id=?"
+            params += (tenant_id,)
+        r = con.execute(sql, params).fetchone()
     return _row(r) if r else None
 
 
-def list_all() -> list[dict]:
+def list_all(tenant_id: str | None = None) -> list[dict]:
     with _conn() as con:
-        rows = con.execute(
-            "SELECT * FROM automations ORDER BY created_at DESC, id DESC").fetchall()
+        sql = "SELECT * FROM automations"
+        params: tuple = ()
+        if tenant_id is not None:
+            sql += " WHERE tenant_id=?"
+            params = (tenant_id,)
+        rows = con.execute(sql + " ORDER BY created_at DESC, id DESC", params).fetchall()
     return [_row(r) for r in rows]
 
 
@@ -286,16 +353,20 @@ def mark_result(aid: str, status: str, error: str = "", conv_id: str = "") -> No
 
 
 def create_execution(aid: str, trigger: str, trigger_key: str,
-                     retry_of: str = "") -> tuple[dict, bool]:
+                     retry_of: str = "", *, tenant_id: str = "default",
+                     trigger_actor: str = "system:unknown",
+                     run_as_principal: str = "") -> tuple[dict, bool]:
     """创建执行记录；唯一键冲突表示重复投递，返回旧记录且不重复执行。"""
     execution_id = "aex_" + uuid.uuid4().hex
     now = time.strftime(TS_FULL)
     with _conn() as con:
         con.execute(
             "INSERT INTO automation_executions"
-            "(id, automation_id, trigger_type, trigger_key, status, retry_of, created_at) "
-            "VALUES (?,?,?,?,?,?,?) ON CONFLICT (automation_id, trigger_type, trigger_key) DO NOTHING",
-            (execution_id, aid, trigger, trigger_key, "queued", retry_of, now))
+            "(id, automation_id, trigger_type, trigger_key, status, retry_of, tenant_id,"
+            " trigger_actor, run_as_principal, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (automation_id, trigger_type, trigger_key) DO NOTHING",
+            (execution_id, aid, trigger, trigger_key, "queued", retry_of, tenant_id,
+             trigger_actor, run_as_principal, now))
         con.commit()
         row = con.execute(
             "SELECT * FROM automation_executions WHERE automation_id=? AND trigger_type=? AND trigger_key=?",
@@ -317,17 +388,31 @@ def update_execution(execution_id: str, status: str, *, conv_id: str = "",
         con.commit()
 
 
-def get_execution(execution_id: str) -> dict | None:
+def get_execution(execution_id: str, *, automation_id: str | None = None,
+                  tenant_id: str | None = None) -> dict | None:
     with _conn() as con:
-        row = con.execute("SELECT * FROM automation_executions WHERE id=?", (execution_id,)).fetchone()
+        sql = "SELECT * FROM automation_executions WHERE id=?"
+        params: tuple = (execution_id,)
+        if automation_id is not None:
+            sql += " AND automation_id=?"
+            params += (automation_id,)
+        if tenant_id is not None:
+            sql += " AND tenant_id=?"
+            params += (tenant_id,)
+        row = con.execute(sql, params).fetchone()
     return dict(row) if row else None
 
 
-def list_executions(aid: str, limit: int = 50) -> list[dict]:
+def list_executions(aid: str, limit: int = 50, *, tenant_id: str | None = None) -> list[dict]:
     with _conn() as con:
+        sql = "SELECT * FROM automation_executions WHERE automation_id=?"
+        params: tuple = (aid,)
+        if tenant_id is not None:
+            sql += " AND tenant_id=?"
+            params += (tenant_id,)
         rows = con.execute(
-            "SELECT * FROM automation_executions WHERE automation_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
-            (aid, max(1, min(int(limit), 200)))).fetchall()
+            sql + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            params + (max(1, min(int(limit), 200)),)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -362,6 +447,31 @@ async def _execution_heartbeat(execution_id: str) -> None:
     while True:
         await asyncio.sleep(20)
         update_execution(execution_id, "running")
+
+
+class _ExecutionIdentityError(ValueError):
+    """自动化的运行身份已失效，或不再拥有任务所需的最小权限。"""
+
+
+def _execution_identity(auto: dict) -> tuple[dict, dict]:
+    """重新验证运行主体并构造无管理员特权的运行期授权上下文。"""
+    user_id = auto.get("run_as") or "default"
+    user = catalog.get_user(user_id)
+    tenant_id = auto.get("tenant_id") or "default"
+    if (not user or user.get("status") != "active"
+            or (user.get("tenant_id") or "default") != tenant_id):
+        raise _ExecutionIdentityError("运行身份已失效或不属于任务租户")
+    if not catalog.get_assignment(user_id, auto["employee_id"]):
+        raise _ExecutionIdentityError("运行身份已失效或未获员工授权")
+    if not catalog.get_employee_config(auto["employee_id"]):
+        raise _ExecutionIdentityError("任务员工已停用或不存在")
+
+    context = from_user(user).as_runtime_config()
+    # 自动任务以明确的普通用户权限执行；创建者或 run_as 的 admin 角色不自动
+    # 穿透到 Agent/工具运行期，避免后台任务获得无限权限。
+    context["role"] = "user"
+    context["permissions"] = sorted(ROLE_PERMISSIONS["user"])
+    return user, context
 
 
 # ---------------------------------------------------------------------------
@@ -406,16 +516,17 @@ def backfill_seeds():
     不覆盖已有行：管理员开启/修改后重启不会被种子重置。默认 enabled=0，
     避免部署即开始消耗模型调用；启用与调度（含审批流）在自动化任务页完成。"""
     now = time.strftime(TS_FULL)
+    tenant_id = os.environ.get("ENTERPRISE_TENANT_ID", "default").strip() or "default"
     with _conn() as con:
         for s in AUTOMATION_SEEDS:
             con.execute(
                 "INSERT OR IGNORE INTO automations"
-                "(id, name, trigger_type, cron_expr, event_key, secret, employee_id,"
+                "(id, name, trigger_type, cron_expr, event_key, secret, tenant_id, employee_id,"
                 " prompt, run_as, channel_id, enabled, next_fire_at, created_by,"
                 " created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,0,NULL,'seed',?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,0,NULL,'seed',?,?)",
                 (s["id"], s["name"], s["trigger_type"], s["cron_expr"], s["event_key"],
-                 s["secret"], "market-intel", s["prompt"], s["run_as"], s["channel_id"],
+                 s["secret"], tenant_id, "market-intel", s["prompt"], s["run_as"], s["channel_id"],
                  now, now))
         con.commit()
 
@@ -454,27 +565,53 @@ async def _push(channel: dict, conv_id: str, reply: str) -> None:
 
 async def execute(auto: dict, payload=None, trigger: str = "cron",
                   trigger_key: str | None = None, retry_of: str = "",
-                  execution_id: str | None = None) -> dict:
+                  execution_id: str | None = None,
+                  trigger_actor: str = "system:unknown") -> dict:
     """执行一次自动任务，并用触发键保证重试请求幂等。"""
     from app.streaming import _stream_run  # 延迟导入避免环
 
+    current = get(auto["id"])
+    if not current:
+        raise ValueError("自动化任务不存在")
+    auto = current
+    tenant_id = auto.get("tenant_id") or "default"
     trigger_key = str(uuid.uuid4()) if trigger_key is None else str(trigger_key)
     if execution_id:
-        execution = get_execution(execution_id)
+        execution = get_execution(execution_id, automation_id=auto["id"], tenant_id=tenant_id)
         if (not execution or execution["automation_id"] != auto["id"]
                 or execution["trigger_type"] != trigger or execution["trigger_key"] != trigger_key
-                or execution["status"] != "queued"):
+                or execution["status"] != "queued"
+                or (execution.get("run_as_principal")
+                    and execution["run_as_principal"] != (auto.get("run_as") or "default"))):
             raise ValueError("预创建的自动化执行记录与本次触发不匹配")
         created = True
     else:
-        execution, created = create_execution(auto["id"], trigger, trigger_key, retry_of)
+        execution, created = create_execution(
+            auto["id"], trigger, trigger_key, retry_of, tenant_id=tenant_id,
+            trigger_actor=trigger_actor, run_as_principal=auto.get("run_as") or "default")
     if not created:
         return {"execution_id": execution["id"], "conversation_id": execution["conversation_id"],
                 "status": execution["status"], "error": execution["error"],
                 "duplicate": True, "approval_id": "", "reply": ""}
 
+    if trigger in {"cron", "event"} and not auto.get("enabled"):
+        error = "自动化任务已停用，拒绝触发"
+        mark_result(auto["id"], "error", error)
+        update_execution(execution["id"], "error", error=error, finished=True)
+        return {"execution_id": execution["id"], "conversation_id": "", "status": "error",
+                "error": error, "duplicate": False, "approval_id": "", "reply": ""}
+    try:
+        principal, auth_context = _execution_identity(auto)
+    except _ExecutionIdentityError as exc:
+        error = "自动任务运行身份不可用或未获授权"
+        log.warning("自动任务身份校验失败 id=%s reason=%s", auto["id"], exc)
+        mark_result(auto["id"], "error", error)
+        update_execution(execution["id"], "error", error=error, finished=True)
+        return {"execution_id": execution["id"], "conversation_id": "", "status": "error",
+                "error": error, "duplicate": False, "approval_id": "", "reply": ""}
+
     emp_id = auto["employee_id"]
-    user_id = auto.get("run_as") or "default"
+    user_id = principal["id"]
     prompt = render_prompt(auto["prompt"], payload)
     suffix = time.strftime("%Y%m%d%H%M%S") + str(time.time()).split(".")[1]
     conv_id = f"c_auto_{auto['id']}_{suffix}"
@@ -483,7 +620,7 @@ async def execute(auto: dict, payload=None, trigger: str = "cron",
     conversations.create(conv_id, emp_id, user_id=user_id,
                          channel_id=auto.get("channel_id") or None,
                          title=f"[自动] {auto['name']}"[:40],
-                         preview=prompt[:60], count=1)
+                         preview=prompt[:60], count=1, tenant_id=tenant_id)
     update_execution(execution["id"], "running", conv_id=conv_id)
     heartbeat = asyncio.create_task(_execution_heartbeat(execution["id"]))
     input_ = {"messages": [{"role": "user", "content": prompt}]}
@@ -491,7 +628,8 @@ async def execute(auto: dict, payload=None, trigger: str = "cron",
     status, error = "ok", ""
     approval_id = ""
     try:
-        async for raw in _stream_run(conv_id, input_, user_id=user_id, role="user"):
+        async for raw in _stream_run(conv_id, input_, user_id=user_id, role="user",
+                                     tenant_id=tenant_id, auth_context=auth_context):
             if not raw.startswith("data: "):
                 continue
             try:

@@ -64,7 +64,7 @@ curl http://localhost:8787/readyz
 
 生产模式下，启用的事件自动化必须设置至少 32 字节的任务密钥。管理 API 只返回 `has_secret`，不会回显密钥；编辑时留空表示保留原密钥，填写新值会轮换密钥。部署前请在管理页更新旧任务密钥，并让调用方改用 HMAC 请求；生产环境不接受旧版请求体 `secret`。
 
-签名为 HMAC-SHA256 十六进制小写值。签名消息由以下字段按换行符连接后 UTF-8 编码：`v1`、大写 HTTP 方法、请求路径、Unix 秒级时间戳、`Idempotency-Key`、原始请求体的 SHA-256 十六进制摘要。时间戳默认允许前后偏差 300 秒，可用 `AUTOMATION_WEBHOOK_TOLERANCE_SECONDS` 调整（1–3600 秒）。
+签名为 HMAC-SHA256 十六进制小写值。0.21.3 起使用 v2：签名消息由以下字段按换行符连接后 UTF-8 编码：`v2`、大写 HTTP 方法、请求路径、任务租户 ID、Unix 秒级时间戳、`Idempotency-Key`、原始请求体的 SHA-256 十六进制摘要。签名绑定租户，避免同事件标识或误复用密钥导致跨租户触发。时间戳默认允许前后偏差 300 秒，可用 `AUTOMATION_WEBHOOK_TOLERANCE_SECONDS` 调整（1–3600 秒）。0.21.3 生产环境拒绝旧版 v1 签名；升级时需同步更新调用方签名算法。
 
 ```python
 import hashlib
@@ -73,12 +73,13 @@ import time
 import requests
 
 secret = "替换为管理页中配置的至少 32 字节密钥"
+tenant_id = "default"  # 必须与任务运行身份所属租户一致
 path = "/api/automations/events/order.refunded"
 body = b'{"payload":{"order_id":"A-1001"}}'
 timestamp = str(int(time.time()))
 idempotency_key = "order-refunded-A-1001-v1"  # 网络重试沿用同一个值
 body_digest = hashlib.sha256(body).hexdigest()
-message = "\n".join(("v1", "POST", path, timestamp,
+message = "\n".join(("v2", "POST", path, tenant_id, timestamp,
                       idempotency_key, body_digest)).encode("utf-8")
 signature = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
@@ -97,6 +98,14 @@ response.raise_for_status()
 ```
 
 迁移顺序：先为每个生产事件任务设置新密钥并安全交付给对应调用方，再切换调用方签名实现，最后将 `APP_ENV=production` 部署。不要把密钥放进事件 payload、命令行参数或日志。重复请求必须复用原幂等键；更换幂等键会被视为一次新触发。
+
+## 自动化运行身份
+
+自动化任务按其保存的“运行身份”执行。创建或启用任务时，该身份必须是当前租户的有效用户，并已获授权使用所选数字员工；每次 Cron、Webhook、手动运行前都会重新检查用户状态和员工分配。用户被禁用、员工分配被撤销或租户不匹配时，本次执行会失败关闭，不创建会话或调用 Agent。
+
+Agent 收到的授权上下文来自服务端用户目录，不来自 webhook payload 或请求头。后台自动任务即使以管理员用户 ID 作为运行身份，也只按普通用户权限执行，不继承管理员的全局 `*` 权限。执行记录分别保存 `created_by`（配置创建者）、`trigger_actor`（触发来源/操作者）和 `run_as_principal`（实际运行主体）；审批决策人在审批记录的 `decided_by` 字段单独记录。
+
+升级后请检查已有启用任务的运行身份。无法解析为有效用户的旧 `default`、已删除/停用用户或没有目标员工分配的身份不会自动改派，触发时会留下失败记录，需管理员在自动化页面修正。执行身份、租户与审计字段由应用启动时幂等迁移；当前项目只有单企业租户标识，没有租户生命周期管理，不能据此视为已支持 SaaS 多租户。
 
 ## 备份与恢复
 
