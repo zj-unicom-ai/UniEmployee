@@ -69,6 +69,7 @@ https://github.com/user-attachments/assets/73de95eb-4b26-4ddb-9145-6e1e3c3ad2c2
 ### 环境要求
 
 - macOS / Linux / Windows，Python **3.12+**
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)（Python 环境与依赖管理）
 - Docker（起 PostgreSQL 数据库；已有 PG 实例可不装，见「数据存储」）
 - Node.js **18+**（前端开发模式需要）
 - 任意 OpenAI Chat Completions 兼容的模型接口与 API Key（如 DeepSeek、OpenAI）
@@ -94,19 +95,22 @@ JWT_SECRET=请替换为足够长的随机字符串   # 可用 openssl rand -hex 
 ### 2. 安装依赖
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.lock.txt   # 完全可复现
+# 在项目根目录创建 Python 3.12 虚拟环境，并严格同步锁定依赖
+uv venv --python 3.12
+uv pip sync backend/requirements.lock.txt backend/requirements-dev.txt
 ```
+
+`uv pip sync` 会让 `.venv` 与锁定的运行依赖及开发/测试依赖保持一致，比逐项 `pip install` 更容易复现。后续命令统一通过 `uv run` 使用该环境，无需手动激活虚拟环境。
 
 ### 3. 生成演示数据（可选）
 
 需要演示数据的员工依赖 `workspace/data/` 或 `workspace/datasets/` 下的模拟数据集。本地体验可按场景生成：
 
 ```bash
-python3 scripts/generate_biz_data.py             # 经营分析：workspace/data/
-python3 scripts/generate_insurance_demo_data.py  # 保险分析：workspace/data/
-python3 scripts/generate_netops_data.py          # 算网运营：workspace/datasets/
-python3 scripts/generate_xiaoxiao_data.py       # 客户经理续约扫描：workspace/datasets/
+uv run python scripts/generate_biz_data.py             # 经营分析：workspace/data/
+uv run python scripts/generate_insurance_demo_data.py  # 保险分析：workspace/data/
+uv run python scripts/generate_netops_data.py          # 算网运营：workspace/datasets/
+uv run python scripts/generate_xiaoxiao_data.py        # 客户经理续约扫描：workspace/datasets/
 ```
 
 `net-ops` 的共享数据集在沙箱内以只读方式挂载到 `/datasets/`；使用 Playwright MCP 前还需执行 `npx playwright install --with-deps chromium`。
@@ -119,14 +123,14 @@ docker compose up -d db
 # 已有 PG 实例可改用幂等建库脚本：./scripts/init_postgres.sh
 
 # 启动服务（单进程即可全功能，内置前端静态文件）
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --reload --port 8787
+PYTHONPATH=backend uv run uvicorn app.main:app --reload --port 8787
 ```
 
 前后端分离开发模式（后端热重载 + 前端 HMR）：
 
 ```bash
 # 终端 1：后端
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --reload --port 8787
+PYTHONPATH=backend uv run uvicorn app.main:app --reload --port 8787
 
 # 终端 2：前端
 cd frontend && npm install && npm run dev
@@ -279,10 +283,10 @@ UniEmployee/
 
 ```bash
 # 后端单测（夹具自动替换为临时 SQLite 库，不碰真实数据）
-PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
+PYTHONPATH=backend uv run python -m pytest tests/ -v
 
 # 运行单个测试文件
-PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
+PYTHONPATH=backend uv run python -m pytest tests/test_catalog.py -v
 ```
 
 慢测试（真实联网 / 浏览器）用 `@pytest.mark.slow` 标记，默认跳过。

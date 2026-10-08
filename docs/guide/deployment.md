@@ -4,21 +4,21 @@
 
 ## 形态一：裸机（开发/体验）
 
-前置：Python 3.12+、Node.js 18+、Docker（起库用）。
+前置：Python 3.12+、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 18+、Docker（起库用）。
 
 ```bash
 # 1. 配置
 cp .env.example .env        # 至少填 MODEL_NAME / OPENAI_BASE_URL / OPENAI_API_KEY / JWT_SECRET
 
 # 2. 依赖
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.lock.txt
+uv venv --python 3.12
+uv pip sync backend/requirements.lock.txt backend/requirements-dev.txt
 
 # 3. 起 PostgreSQL（首次启动自动建 7 个业务库，表结构由应用启动时自动创建）
 docker compose up -d db
 
 # 4. 启动服务（--reload 开发热加载；改后端代码会顺带清 agent 编译缓存）
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --port 8787 --reload
+PYTHONPATH=backend uv run uvicorn app.main:app --port 8787 --reload
 
 # 前端开发才需要（生产由 FastAPI 静态托管 frontend/dist）
 cd frontend && npx vite
@@ -73,7 +73,7 @@ BACKUP_PG_CONTAINER=uniemployee-pg ./scripts/backup.sh  # 宿主机没有 pg_dum
 
 恢复：停止应用写入，解包到空目录；确认 `manifest.txt` 的库前缀及一致性标记，先将 `pg/*.dump` 分别用 `pg_restore -U <user> -d <目标库> --clean` 恢复到对应业务库，再恢复 `workspace/`，最后重启应用并核对会话、Trace、上传文件和生成产物。不要在未确认目标库和文件路径前对现有环境执行覆盖恢复。
 
-隔离演练：`PYTHONPATH=backend .venv/bin/python scripts/verify_backup_restore.py --pg-container <隔离PG容器> --pg-port <映射端口> --env-file <隔离凭据文件>`。脚本只创建临时前缀的 14 个库，验证 7 库及 workspace 的备份恢复，完成后删除这些临时库；不对现有业务库执行恢复。
+隔离演练：`PYTHONPATH=backend uv run python scripts/verify_backup_restore.py --pg-container <隔离PG容器> --pg-port <映射端口> --env-file <隔离凭据文件>`。脚本只创建临时前缀的 14 个库，验证 7 库及 workspace 的备份恢复，完成后删除这些临时库；不对现有业务库执行恢复。
 
 ## 升级
 

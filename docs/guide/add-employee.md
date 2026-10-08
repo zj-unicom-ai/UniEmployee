@@ -116,7 +116,7 @@ CONNECTOR_ASSIGN = {"crm": ["xiaoxiao", "hrbp"], "newsnow": ["xiaoshu", "market-
 在 `tests/test_catalog.py` 仿 `test_backfill_employees_if_missing_adds_market_intel` 加用例：断言新员工名称/技能/工具/连接器指派，并模拟老库删除后 backfill 补回、幂等重跑。然后：
 
 ```bash
-PYTHONPATH=backend .venv/bin/python -m pytest tests/ -q   # 项目根目录跑
+PYTHONPATH=backend uv run python -m pytest tests/ -q   # 项目根目录跑
 ```
 
 重启服务（`--reload` 下改后端代码也会清缓存），对话页下拉即出现新员工。

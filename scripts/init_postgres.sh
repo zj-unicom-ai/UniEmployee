@@ -12,7 +12,7 @@
 #   ./scripts/init_postgres.sh --host 10.0.0.5 --port 5432 --user me --password xx
 #
 # 之后在 .env 里设置 DB_BACKEND=postgres 并启动服务即可：
-#   PYTHONPATH=backend .venv/bin/uvicorn app.main:app --port 8787
+#   PYTHONPATH=backend uv run uvicorn app.main:app --port 8787
 # 表结构由应用启动时自动创建，无需手工执行 DDL。
 set -euo pipefail
 

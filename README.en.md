@@ -37,6 +37,7 @@ https://github.com/user-attachments/assets/73de95eb-4b26-4ddb-9145-6e1e3c3ad2c2
 ### Requirements
 
 - macOS / Linux / Windows, Python **3.12+**
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) for Python environments and dependency management
 - Docker (for the PostgreSQL database; if you already run PG, see [Data Storage](#data-storage))
 - Node.js **18+** (for frontend dev mode)
 - Any OpenAI Chat Completions-compatible model endpoint and API key (e.g. DeepSeek, OpenAI)
@@ -62,19 +63,22 @@ JWT_SECRET=replace-with-a-long-random-string   # e.g. openssl rand -hex 32
 ### 2. Install dependencies
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.lock.txt   # fully reproducible
+# Create a Python 3.12 environment at the repository root and sync the exact lock
+uv venv --python 3.12
+uv pip sync backend/requirements.lock.txt backend/requirements-dev.txt
 ```
+
+`uv pip sync` makes `.venv` match the locked runtime dependencies plus the development and test dependencies. The commands below use `uv run`, so activating the virtual environment manually is unnecessary.
 
 ### 3. Generate demo data (optional)
 
 Generate optional demo datasets for the employee scenarios you want to try:
 
 ```bash
-python3 scripts/generate_biz_data.py             # business analysis: workspace/data/
-python3 scripts/generate_insurance_demo_data.py  # insurance analysis: workspace/data/
-python3 scripts/generate_netops_data.py          # network ops: workspace/datasets/
-python3 scripts/generate_xiaoxiao_data.py       # renewal scan: workspace/datasets/
+uv run python scripts/generate_biz_data.py             # business analysis: workspace/data/
+uv run python scripts/generate_insurance_demo_data.py  # insurance analysis: workspace/data/
+uv run python scripts/generate_netops_data.py          # network ops: workspace/datasets/
+uv run python scripts/generate_xiaoxiao_data.py        # renewal scan: workspace/datasets/
 ```
 
 The shared network-ops datasets are mounted read-only at `/datasets/` in sandbox mode. Install Chromium before using Playwright MCP: `npx playwright install --with-deps chromium`.
@@ -88,14 +92,14 @@ docker compose up -d db
 # Already running a PG instance? Use the idempotent script: ./scripts/init_postgres.sh
 
 # Start the service (a single process gives you everything, frontend static files included)
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --reload --port 8787
+PYTHONPATH=backend uv run uvicorn app.main:app --reload --port 8787
 ```
 
 Decoupled dev mode (backend hot-reload + frontend HMR):
 
 ```bash
 # Terminal 1: backend
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --reload --port 8787
+PYTHONPATH=backend uv run uvicorn app.main:app --reload --port 8787
 
 # Terminal 2: frontend
 cd frontend && npm install && npm run dev
@@ -247,10 +251,10 @@ Quick local start: `docker compose up -d db` (7 databases are created automatica
 
 ```bash
 # Backend unit tests (fixtures swap in temporary SQLite DBs — no real data touched)
-PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
+PYTHONPATH=backend uv run python -m pytest tests/ -v
 
 # Run a single test file
-PYTHONPATH=backend .venv/bin/python -m pytest tests/test_catalog.py -v
+PYTHONPATH=backend uv run python -m pytest tests/test_catalog.py -v
 ```
 
 Slow tests (real network / browser) are marked with `@pytest.mark.slow` and skipped by default.

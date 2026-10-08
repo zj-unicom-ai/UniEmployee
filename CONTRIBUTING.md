@@ -4,12 +4,12 @@
 
 ## 开发环境
 
-- Python 3.12+，Node.js 18+
+- Python 3.12+、[uv](https://docs.astral.sh/uv/getting-started/installation/)、Node.js 18+
 - 复制 `.env.example` 为 `.env` 并填入模型配置（见 [README](README.md#快速开始)）
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.lock.txt
+uv venv --python 3.12
+uv pip sync backend/requirements.lock.txt backend/requirements-dev.txt
 
 # 前端依赖（仅前端开发需要）
 cd frontend && npm install
@@ -22,7 +22,7 @@ cd frontend && npm install
 - 测试在项目根目录运行，依赖 `PYTHONPATH=backend`：
 
 ```bash
-PYTHONPATH=backend .venv/bin/python -m pytest tests/ -v
+PYTHONPATH=backend uv run python -m pytest tests/ -v
 ```
 
 - 慢测试（联网/浏览器）用 `@pytest.mark.slow` 标记，默认跳过。

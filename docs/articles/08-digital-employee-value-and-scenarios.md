@@ -100,9 +100,9 @@ UniEmployee 内置**人机协同审批闭环**：高风险动作触发流程中�
 ```bash
 git clone https://github.com/zj-unicom-ai/UniEmployee.git
 cd UniEmployee && cp .env.example .env   # 填入模型 API Key
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.lock.txt
-PYTHONPATH=backend .venv/bin/uvicorn app.main:app --port 8787
+uv venv --python 3.12
+uv pip sync backend/requirements.lock.txt backend/requirements-dev.txt
+PYTHONPATH=backend uv run uvicorn app.main:app --port 8787
 ```
 
 打开 `http://localhost:8787`，默认管理员登录后，5 个数字员工已经“到岗”。
