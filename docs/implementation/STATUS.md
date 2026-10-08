@@ -10,7 +10,8 @@
 - 前置 Pull Request：[#72](https://github.com/zj-unicom-ai/UniEmployee/pull/72)
 - 前置 P0-SEC-02 实现提交：`87d19e9fe4aa836e2048cb24fa4be6e2a60e7071`
 - 前置 Pull Request：[#73](https://github.com/zj-unicom-ai/UniEmployee/pull/73)（栈式依赖 PR #72）
-- 本轮 P0-ENV-01 提交与 PR：完成后补记
+- 本轮 P0-ENV-01 实现提交：`98b6f798972a773ca7be3da3043e0bc01fad074f`
+- 本轮 Pull Request：[#74](https://github.com/zj-unicom-ai/UniEmployee/pull/74)（栈式依赖 PR #73 → #72）
 - 初始工作树干净；未连接生产数据库、CRM 或 RAGFlow。
 
 ## 任务状态
