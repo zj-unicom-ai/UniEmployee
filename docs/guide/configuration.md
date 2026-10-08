@@ -90,6 +90,9 @@ PostgreSQL 模式下应用会自动创建/迁移 7 个业务库：`catalog`（�
 |---|---|---|
 | `AUTOMATIONS_DISABLED` | 空 | 置 `1` 跳过进程内调度器（cron 任务不再触发；事件入口仍可用）。调试或禁用定时能力时使用 |
 | `AUTOMATION_EXECUTION_RETENTION_DAYS` | `90` | 自动化执行历史保留天数；过期的终态记录在应用启动时清理，至少为 1 天 |
+| `AUTOMATION_WEBHOOK_TOLERANCE_SECONDS` | `300` | Webhook HMAC 时间戳允许的最大前后偏差，范围 1–3600 秒；生产请求必须携带签名 |
+
+事件自动化的生产密钥在管理页按任务设置，至少 32 字节。生产请求使用 `X-UniEmployee-Timestamp`、`X-UniEmployee-Signature` 和 `Idempotency-Key`；签名覆盖 HTTP 方法、请求路径、时间戳、幂等键和原始请求体摘要。开发环境仅为旧集成保留请求体 `secret` 兼容。
 
 ## 沙箱（OpenSandbox，可选）
 
