@@ -14,20 +14,20 @@ import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-import dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app import auth, catalog, conversations, demo_isolation, ontology, runtime, scheduler, traces
 from app import db as dblayer
-from app.paths import db_path, DB_FILES, PROJECT_ROOT
 from app.logging_setup import setup_logging, request_id_var, get_logger
+from app.startup_preflight import assert_production_webhook_credentials, run_startup_preflight
 from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.21.3")
+APP_VERSION = os.environ.get("APP_VERSION", "0.21.4")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -37,7 +37,7 @@ _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 @asynccontextmanager
 async def lifespan(app):
-    dotenv.load_dotenv(PROJECT_ROOT / ".env")
+    run_startup_preflight()
     setup_logging()
     if dblayer.is_pg():
         log.info("启动 UniEmployee v%s | 数据库=PostgreSQL（%s:%s）", APP_VERSION,
@@ -47,6 +47,11 @@ async def lifespan(app):
         log.info("启动 UniEmployee v%s | 数据库=SQLite（%s）", APP_VERSION,
                  db_path("catalog.db").parent)
     catalog.init()
+    ontology.init()
+    # 在任何种子、资源回填或 workspace 迁移之前先盘点旧演示资产；只报告/拒绝，
+    # 绝不自动删除或迁移已有数据。
+    demo_isolation.assert_production_data_isolation()
+    assert_production_webhook_credentials()
     catalog.seed_if_empty()
     catalog.backfill_connectors()
     catalog.backfill_ragflow_knowledge_bases()
@@ -75,12 +80,10 @@ async def lifespan(app):
     catalog.flag_default_admin_password()
     catalog.seed_assignments_if_empty()
     catalog.seed_default_model_if_empty()
-    ontology.init()
     ontology.seed_schema_if_empty()
     ontology.backfill_schema_types()
     if not demo_isolation.seed_ontology_demo_if_enabled():
         log.info("演示本体数据播种已关闭")
-    demo_isolation.assert_production_data_isolation()
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )

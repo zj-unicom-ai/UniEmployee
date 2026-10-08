@@ -69,6 +69,56 @@ def test_production_rejects_generated_demo_csv(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(RuntimeError, match="演示 CSV"):
         demo_isolation.assert_production_workspace_isolation()
+    assert (datasets / "crm_contracts.csv").is_file()
 
     monkeypatch.setenv("APP_ENV", "development")
     demo_isolation.assert_production_workspace_isolation()
+
+
+def test_production_asset_report_aggregates_sources_without_deleting(monkeypatch, tmp_path):
+    from app import paths
+
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("RAGFLOW_API_KEY", "")
+    monkeypatch.setenv("RAGFLOW_DATASET_IDS", "")
+    data = tmp_path / "data"
+    datasets = tmp_path / "datasets"
+    data.mkdir()
+    datasets.mkdir()
+    demo_csv = datasets / "crm_contracts.csv"
+    demo_csv.write_text("synthetic", encoding="utf-8")
+    nested_demo_csv = data / "user-1" / "uploads" / "netops_kpi.csv"
+    nested_demo_csv.parent.mkdir(parents=True)
+    nested_demo_csv.write_text("synthetic", encoding="utf-8")
+    monkeypatch.setattr(paths, "WORKSPACE_DATA", data)
+    monkeypatch.setattr(paths, "WORKSPACE_DATASETS", datasets)
+
+    catalog.seed_if_empty()
+    catalog.backfill_connectors()
+    ontology.init()
+    demo_isolation.seed_ontology_demo_if_enabled()
+
+    monkeypatch.setenv("APP_ENV", "production")
+    report = demo_isolation.inspect_production_assets()
+
+    assert any("crm" in finding for finding in report["findings"])
+    assert any("本体" in finding for finding in report["findings"])
+    assert any(str(demo_csv) in finding for finding in report["findings"])
+    assert any(str(nested_demo_csv) in finding for finding in report["findings"])
+    entity_count_before = len(ontology.list_entities("default"))
+    with pytest.raises(RuntimeError, match="未自动删除"):
+        demo_isolation.assert_production_data_isolation()
+    assert len(ontology.list_entities("default")) == entity_count_before
+    assert demo_csv.is_file() and nested_demo_csv.is_file()
+
+
+def test_ragflow_dataset_sources_are_reported_for_manual_review(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("RAGFLOW_API_KEY", "do-not-log-this-key")
+    monkeypatch.setenv("RAGFLOW_DATASET_IDS", "dataset-1,dataset-2")
+    ontology.init()
+
+    report = demo_isolation.inspect_production_assets()
+
+    assert any("RAGFlow" in item for item in report["manual_review"])
+    assert "do-not-log-this-key" not in str(report)

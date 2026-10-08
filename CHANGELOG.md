@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.21.4 (2026-10-08)
+
+### 安全增强：生产启动预检与演示资产门禁
+
+- `.env` 在解析数据库目录和认证模块级配置前加载，启动预检先于数据库初始化、数据播种与资源回填
+- 生产环境拒绝弱 JWT 密钥、SQLite / 默认 PostgreSQL 密码、非 Secure Cookie、未启用或未认证的宿主机回退沙箱，以及未限定数据集的 RAGFlow 密钥
+- 检查 workspace 与日志目录可写性；启用中的事件自动化必须配置至少 32 字节 Webhook 密钥
+- 汇总旧库 CRM 演示指派、本体 seed 数据和 workspace 模拟 CSV；检测到后停止启动并要求人工核对，不自动删除或迁移
+- 对外 HTTPS、OIDC 本地登录策略、RAGFlow 数据来源及备份/恢复演练明确提示人工确认
+
+### 升级说明
+
+- `APP_ENV=production` 部署须配置 PostgreSQL 非默认密码、至少 32 字节随机 `JWT_SECRET`、`AUTH_COOKIE_SECURE=1`、`SANDBOX_ENABLED=1` 与 `SANDBOX_API_KEY`；配置 RAGFlow API key 时还须提供显式 `RAGFLOW_DATASET_IDS`。
+- 若启用了事件自动化，任务密钥不足 32 字节将阻止生产启动；请先在管理页轮换密钥。
+- 旧演示资产会生成明确报错，应用不代替管理员迁移或删除数据。
+
+### 验证
+
+- 启动预检、演示资产隔离、自动化凭据定向回归：60 项通过
+- 后端全量测试：592 passed、40 skipped；前端 Vite 构建通过
+- 未运行 PostgreSQL 启动/迁移/恢复演练：当前环境 Docker daemon 不可用，且未安装 `initdb` / `pg_ctl` / `psql`
+
 ## 0.21.3 (2026-10-08)
 
 ### 安全增强：自动化执行身份与租户隔离

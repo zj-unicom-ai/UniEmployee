@@ -9,24 +9,16 @@ import os
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import bcrypt
-import dotenv
 import httpx
 import jwt
 from fastapi import Cookie, Depends, Header, HTTPException
 
+# paths 在模块导入时先加载项目 .env，保证下方模块级认证常量使用同一份配置。
+from app.paths import PROJECT_ROOT as _PROJECT_ROOT
 from app import catalog
 
-# 关键：SECRET 在模块导入时读取，而 main.py 的 load_dotenv 在 lifespan 才执行，
-# 若不在此处先加载 .env，JWT 将永远用默认弱密钥签名（可被伪造 token）。
-# 注意：真实 .env 位于项目根（backend 的上一级），
-# 此处必须向上三级（auth.py → app → backend → 项目根）才能正确加载。
-_env_cand = Path(__file__).resolve().parent.parent.parent / ".env"
-if not _env_cand.exists():
-    _env_cand = Path(__file__).resolve().parent.parent / ".env"  # 兼容旧布局
-dotenv.load_dotenv(_env_cand)
 SECRET = os.environ.get("JWT_SECRET", "change-me-in-prod")
 if SECRET == "change-me-in-prod":
     print("[security] 警告：JWT_SECRET 未配置，正在使用默认弱密钥！请在 .env 设置 JWT_SECRET")
