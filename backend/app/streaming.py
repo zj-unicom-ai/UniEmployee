@@ -68,6 +68,8 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     """把运行时异常映射为稳定的 error_code，避免把内部异常文本直接暴露给前端。"""
     name = type(exc).__name__
     text = str(exc).lower()
+    if "sandbox" in name.lower() or "sandbox" in text:
+        return "sandbox_unavailable", "沙箱执行环境启动失败或不可达，请稍后重试"
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in text:
         return "timeout", "模型响应超时，请稍后重试"
     if "ratelimit" in name.lower() or "rate.li" in text or "429" in text:
@@ -499,9 +501,17 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     yield sse({"type": "trace_started", "trace_run_id": trace_run_id})
     tracer = traces.TraceHandler(trace_run_id)
     pinned_skills = input_.get("pinned_skills", []) if isinstance(input_, dict) else []
+    messages = input_.get("messages", []) if isinstance(input_, dict) else []
+    user_text = "\n".join(str(item.get("content", "")) for item in messages
+                          if isinstance(item, dict)).casefold()
+    security_request = any(term in user_text for term in (
+        "安全实操", "网络安全", "数据安全", "ai安全", "ai 安全", "人工智能安全",
+        "ctf", "攻防", "渗透测试", "攻击日志", "异常登录", "数据脱敏", "比赛题",
+    ))
     security_run = (emp_id == "net-ops" and
                     (security_policy.enabled(emp_id) or
-                     isinstance(pinned_skills, list) and security_policy.SKILL_NAME in pinned_skills))
+                     isinstance(pinned_skills, list) and security_policy.SKILL_NAME in pinned_skills or
+                     security_request))
     security_recorder = (SecurityRecorder(tenant_id, user_id, conv_id, trace_run_id, input_)
                          if security_run else None)
     security_status = "error"

@@ -72,6 +72,12 @@ def test_full_model_and_tool_records_survive_export():
         assert events[3]["tool_call_id"] == "tc1"
         assert events[4]["result"] == long_result
         assert json.loads(archive.read("manifest.json"))["incomplete_runs"] == []
+        timing = json.loads(archive.read("timing.json"))
+        assert timing["summary"]["runs"] == 1 and timing["summary"]["completed_runs"] == 1
+        assert timing["runs"][0]["model_calls"] == 1 and timing["runs"][0]["tool_calls"] == 1
+        assert timing["runs"][0]["by_tool"]["run_security_python"]["count"] == 1
+        assert timing["runs"][0]["wall_seconds"] >= 0
+        assert timing["unclosed_tool_calls"] == []
         assert "do-not-record" not in archive.read(f"records/{handler.path.name}").decode()
 
 
@@ -121,10 +127,19 @@ def test_python_requires_sandbox_and_preserves_full_results(monkeypatch):
 
 def test_answers_are_versioned_and_require_context(monkeypatch):
     args = {"question_id": "Q1", "answer": "flag{example}", "evidence": ["events.jsonl:3"]}
-    first = tools.save_security_answer.invoke(args)
-    second = tools.save_security_answer.invoke({**args, "answer": "corrected"})
+    first = tools.save_security_answer.invoke(args).splitlines()[0]
+    second = tools.save_security_answer.invoke({**args, "answer": "corrected"}).splitlines()[0]
     assert first != second
-    assert json.loads((tools.WORKSPACE_DATA / first.removeprefix("/data/")).read_text()) == args
+    saved = json.loads((tools.WORKSPACE_DATA / first.removeprefix("/data/")).read_text())
+    assert {k: saved[k] for k in args} == args
+    assert saved["report_saved"] is False
+    with pytest.raises(ValueError, match="证据不能为空"):
+        tools.save_security_answer.invoke({**args, "evidence": ["  "]})
+    report = tools.save_security_answer.invoke({**args, "report": "## 结论\nflag{example}"}).splitlines()
+    assert len(report) == 2 and report[1].endswith(".md")
+    doc = (tools.WORKSPACE_DATA / report[1].removeprefix("/data/")).read_text(encoding="utf-8")
+    assert "flag{example}" in doc
+    assert json.loads((tools.WORKSPACE_DATA / report[0].removeprefix("/data/")).read_text())["report_saved"]
     monkeypatch.setattr(tools, "get_config", lambda: {})
     with pytest.raises(ValueError, match="上下文"):
         tools.save_security_answer.invoke(args)
@@ -231,8 +246,7 @@ def test_model_tool_answer_stream_and_export_chain(monkeypatch):
             return agent, stages
         monkeypatch.setattr(runtime, "get_agent", get_agent)
         return [json.loads(event[6:]) async for event in streaming._stream_run(
-            "c1", {"messages": [{"role": "user", "content": "Q1，统计失败登录次数"}],
-                   "pinned_skills": [policy.SKILL_NAME]},
+            "c1", {"messages": [{"role": "user", "content": "Q1，安全实操题，统计失败登录次数"}]},
             user_id="u1", role="admin")]
 
     events = asyncio.run(run())

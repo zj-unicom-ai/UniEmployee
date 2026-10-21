@@ -1,8 +1,10 @@
-# UniEmployee 沙箱镜像：基于 python:3.12-slim 预装数据分析栈。
+# UniEmployee 沙箱镜像：基于 python:3.12-slim 预装数据分析栈 + 安全实操依赖。
 #
 # 用途：OpenSandbox 沙箱里跑 net-ops / biz-analyzer 等员工的 execute/run_python，
 # 预装 pandas / duckdb / matplotlib / openpyxl / python-docx / numpy，
-# 与 LocalShellBackend 宿主环境能力对齐（数据分析报告 + 表格问答所需依赖）。
+# 与 LocalShellBackend 宿主环境能力对齐（数据分析报告 + 表格问答所需依赖）；
+# pycryptodome 供安全实操题（AES/DES/3DES/RSA-Padding 等对称与公钥密码学）离线使用，
+# 赛事沙箱拒绝出网，不能赛时在线安装。
 #
 # 构建与打标签：
 #   docker build -t uniemployee/sandbox:py312-data sandbox/image
@@ -22,7 +24,8 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
         openpyxl==3.1.5 \
         python-docx==1.1.2 \
         pyarrow==17.0.0 \
-        seaborn==0.13.2
+        seaborn==0.13.2 \
+        pycryptodome==3.21.0
 
 # 工作目录设为 /data（与沙箱挂载点对齐：hostPath workspace/data subPath=<uid>）
 # 容器内文件按用户隔离落盘；execute 默认 cwd 即 /data
@@ -31,5 +34,5 @@ WORKDIR /data
 
 # 仅声明 sandbox 元数据（不影响 entrypoint）
 LABEL org.opencontainers.image.title="uniemployee-sandbox"
-LABEL org.opencontainers.image.description="UniEmployee 数据分析沙箱镜像（pandas/duckdb/matplotlib）"
+LABEL org.opencontainers.image.description="UniEmployee 数据分析沙箱镜像（pandas/duckdb/matplotlib + pycryptodome 安全实操）"
 LABEL org.opencontainers.image.source="https://github.com/zj-unicom-ai/UniEmployee"

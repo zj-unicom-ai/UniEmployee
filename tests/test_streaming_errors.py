@@ -80,6 +80,17 @@ def test_timeout_error_maps_to_timeout():
     assert errs and errs[-1]["error_code"] == "timeout"
 
 
+def test_sandbox_ready_timeout_not_reported_as_model_timeout():
+    class SandboxReadyTimeoutException(Exception):
+        pass
+
+    events, _ = asyncio.run(collect_error(SandboxReadyTimeoutException(
+        "Sandbox health check timed out after 60.0s")))
+    errs = [e for e in events if e["type"] == "error"]
+    assert errs and errs[-1]["error_code"] == "sandbox_unavailable"
+    assert "模型响应超时" not in errs[-1]["message"]
+
+
 def test_connection_refused_maps_to_upstream_unavailable():
     events, _ = asyncio.run(collect_error(RuntimeError("URLError: <urlopen error [Errno 61] Connection refused>")))
     errs = [e for e in events if e["type"] == "error"]
