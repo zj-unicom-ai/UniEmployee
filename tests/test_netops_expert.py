@@ -84,7 +84,7 @@ def test_netops_yaml_upgraded():
     assert spec.backend == "sandbox"
     assert spec.role == "算网运营专家"
     assert spec.skills == ["fault-impact-analysis", "ops-metrics-analysis",
-                           "resource-capacity-analysis", "sop-execution"]
+                           "resource-capacity-analysis", "sop-execution", "security-practical"]
     assert "kb_search" in spec.tools and "create_ticket" in spec.tools
     # persona 引用三个数据集（沙箱内 /datasets/ 路径）与能力路由
     for kw in ("/datasets/netops_alerts.csv", "/datasets/netops_kpi.csv",

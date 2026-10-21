@@ -3,7 +3,8 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from langgraph.types import Command
 
 from app import attachments, auth, runtime, approvals, conversations, catalog, traces, agent_runs
@@ -171,6 +172,28 @@ async def upload_attachment(conv_id: str, file: UploadFile = File(...),
     if emp:
         _ensure_employee_access(context, emp)
     return await attachments.save_attachment(conv_id, uid, file)
+
+
+@router.get("/conversations/{conv_id}/security-export")
+async def export_security_records(conv_id: str, context=Depends(auth.get_auth_context)):
+    """下载小网当前题目完整记录；必须等待本轮结束，且只允许会话属主。"""
+    meta = conversations.get(conv_id)
+    if not meta or meta["employee_id"] != "net-ops":
+        raise HTTPException(404, "小网实操会话不存在")
+    _ensure_conversation_access(context, meta)
+    _ensure_employee_access(context, "net-ops")
+    if agent_runs.active_for_conversation(conv_id):
+        raise HTTPException(409, "请等待本轮结束后导出完整记录")
+    from app.security_tasks.export import export_conversation
+    try:
+        target = await asyncio.to_thread(
+            export_conversation, meta, catalog.get_effective_config(context.user_id, "net-ops") or {},
+            conversations.list_files(conv_id))
+    except (ValueError, OSError) as exc:
+        logger.warning("安全实操记录导出失败 conv=%s: %s", conv_id, exc)
+        raise HTTPException(422, "记录不可导出：请检查完整记录、文件范围和大小") from exc
+    return FileResponse(target, filename=f"security-{conv_id}.zip", media_type="application/zip",
+                        background=BackgroundTask(target.unlink, missing_ok=True))
 
 
 @router.post("/conversations/{conv_id}/messages")

@@ -337,6 +337,7 @@ class SandboxManager:
                 mount_path="/datasets",
                 read_only=True,
             ))
+        from app.security_tasks.policy import sandbox_options
         return SandboxSync.create(
             self.image,
             timeout=timedelta(minutes=self.ttl_minutes),
@@ -346,6 +347,7 @@ class SandboxManager:
                       "memory": _env("SANDBOX_MEMORY", "2Gi")},
             metadata={"app": "uniemployee", "thread": thread_id, "uid": uid},
             connection_config=_connection_config(),
+            **sandbox_options(thread_id),
         )
 
     def _connect(self, sandbox_id: str):

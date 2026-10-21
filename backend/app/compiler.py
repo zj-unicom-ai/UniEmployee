@@ -36,6 +36,8 @@ from app.agent.analyst.fileqa.tools import ANALYST_FILE_TOOLS
 from app.paths import PROJECT_ROOT, WORKSPACE_DATA
 from app.sandbox_mgr import RoutingSandboxBackend, enabled as sandbox_enabled
 from app.demo_isolation import ensure_connector_allowed, is_production
+from app.security_tasks import policy as security_policy
+from app.security_tasks.tools import TOOLS as SECURITY_TOOLS
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV_BIN = str(ROOT / ".venv" / "bin")
@@ -46,6 +48,7 @@ VENV_BIN = str(ROOT / ".venv" / "bin")
 # run_python：在数据目录直接跑 pandas/matplotlib，绕开 execute 在 virtual_mode 下
 # /data/ 路径不映射的坑（模型用 pd.read_csv("/data/x.csv") 会失败）。
 ALL_LOCAL_TOOLS = {
+    **{tool.name: tool for tool in SECURITY_TOOLS},
     "create_ticket": create_ticket,
     "bocha_search": bocha_search,
     "get_my_id": get_my_id,
@@ -624,6 +627,7 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
     """返回 (agent, stage_meta, mcp_client)。
     mcp_client 由调用方按员工缓存保活；本函数不再持有模块级全局。
     user_id 由调用方（get_agent）传入并在编译期闭包进记忆命名空间。"""
+    spec = security_policy.apply(spec)
     namespace = skills_namespace(user_id, spec.id)
 
     # --- 播种技能到 Store（注意：key 不带路由前缀，
@@ -685,7 +689,8 @@ async def compile_agent(spec: EmployeeSpec, checkpointer, store, user_id: str | 
                          if budget_cfg["max_calls_per_run"] or budget_cfg["max_concurrent_per_run"]
                          else [])
     agent = create_deep_agent(
-        model=_init_model(spec.model),
+        model=(security_policy.official_model() if security_policy.enabled(spec.id)
+               else _init_model(spec.model)),
         tools=tools,
         system_prompt=system_prompt,
         skills=["/skills/"],

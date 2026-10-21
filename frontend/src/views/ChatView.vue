@@ -80,6 +80,10 @@
         <span class="emp-meta">{{ empMeta }}</span>
         <n-button quaternary class="execution-button" :aria-expanded="executionOpen" @click="toggleDrawer('execution')">执行详情</n-button>
         <n-button size="small" class="trace-button" @click="openTrace">完整 Trace</n-button>
+        <n-button v-if="currentEmp === 'net-ops'" size="small" :loading="exportingSecurity"
+                  :disabled="!persistedConvId || stream.sending.value" @click="exportSecurityRecords">
+          导出实操记录
+        </n-button>
         <n-button
           quaternary
           circle
@@ -167,6 +171,28 @@ defineOptions({ name: 'ChatView' })
 const router = useRouter()
 const route = useRoute()
 const message = useMessage()
+const exportingSecurity = ref(false)
+
+async function exportSecurityRecords() {
+  exportingSecurity.value = true
+  try {
+    const { data } = await api.get(`/conversations/${persistedConvId.value}/security-export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `security-${persistedConvId.value}.zip`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (error) {
+    let detail = error.response?.data?.detail
+    if (error.response?.data instanceof Blob) {
+      try { detail = JSON.parse(await error.response.data.text()).detail } catch {}
+    }
+    message.error(detail || '实操记录导出失败，请稍后重试')
+  } finally {
+    exportingSecurity.value = false
+  }
+}
 
 /* ---------- 基础状态 ---------- */
 const employees = ref([])
