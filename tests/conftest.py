@@ -56,5 +56,9 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(conversations, "DB", tmp_path / "conversations.db")
     monkeypatch.setattr(approvals, "DB", tmp_path / "approvals.db")
     monkeypatch.setattr(ontology, "DB", tmp_path / "ontology.db")
+    monkeypatch.setattr("app.security_tasks.records.DATA_DIR", tmp_path / "private")
+    monkeypatch.setattr("app.security_tasks.export.DATA_DIR", tmp_path / "private")
+    monkeypatch.setattr("app.security_tasks.export.WORKSPACE_DATA", tmp_path / "workspace")
+    monkeypatch.setattr("app.security_tasks.tools.WORKSPACE_DATA", tmp_path / "workspace")
     catalog.init()  # 建目录库表（conversations._conn 会自动建会话表）
     yield

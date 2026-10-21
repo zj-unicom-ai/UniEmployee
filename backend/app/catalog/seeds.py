@@ -213,10 +213,10 @@ EMPLOYEE_SEEDS = {
         kbs=[], sops=[], cons=[]),
     "net-ops": dict(
         skills=["fault-impact-analysis", "ops-metrics-analysis",
-                "resource-capacity-analysis", "sop-execution"],
+                "resource-capacity-analysis", "sop-execution", "security-practical"],
         tools=(_tools_with_ontology(
             ["kb_search", "create_ticket", "get_current_time"])
-            + [ONTOLOGY_FAULT_IMPACT_TOOL]),
+            + [ONTOLOGY_FAULT_IMPACT_TOOL, "run_security_python", "save_security_answer"]),
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
     "market-intel": dict(
@@ -297,6 +297,8 @@ def seed_if_empty():
         ("sql_db_quality_check", "数据质量检查",
          "检查分析 SQL 或目标表的空结果、样本量、缺失和重复风险", "local", None),
     ]
+    from app.security_tasks.catalog import SECURITY_TOOL_ROWS
+    tools += SECURITY_TOOL_ROWS
     for t in tools:
         cur.execute(
             "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
@@ -613,6 +615,8 @@ def backfill_netops_upgrade():
       3. persona/role 同步：仅当库中 persona 仍是旧版特征句（未被管理员改过）
          才更新为新版 yaml 内容；管理员改过则保留并打印提示。
     """
+    from app.security_tasks.catalog import upgrade as upgrade_security
+    upgrade_security()
     con = _conn()
     cur = con.cursor()
 

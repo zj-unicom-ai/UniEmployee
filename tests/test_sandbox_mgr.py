@@ -139,6 +139,15 @@ def test_enabled_flag(monkeypatch):
     assert sandbox_mgr.enabled() is True
 
 
+def test_use_server_proxy_default_on(monkeypatch):
+    monkeypatch.delenv("SANDBOX_USE_SERVER_PROXY", raising=False)
+    assert sandbox_mgr.use_server_proxy() is True
+    assert sandbox_mgr._connection_config().use_server_proxy is True
+    monkeypatch.setenv("SANDBOX_USE_SERVER_PROXY", "0")
+    assert sandbox_mgr.use_server_proxy() is False
+    assert sandbox_mgr._connection_config().use_server_proxy is False
+
+
 # ---- 生命周期 ----
 
 def test_acquire_creates_and_caches_per_thread(enabled_env, monkeypatch):

@@ -59,6 +59,7 @@ https://github.com/user-attachments/assets/73de95eb-4b26-4ddb-9145-6e1e3c3ad2c2
 | 新增一个数字员工 | [docs/guide/add-employee.md](docs/guide/add-employee.md) |
 | 编写技能规程（SKILL.md） | [docs/guide/skill-authoring.md](docs/guide/skill-authoring.md) |
 | 开发自定义工具 | [docs/guide/custom-tools.md](docs/guide/custom-tools.md) |
+| 小网安全实操与记录导出 | [docs/guide/netops-security-practical.md](docs/guide/netops-security-practical.md) |
 | 参与贡献 / 发布流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 平台原理深度解读（8 篇系列） | [docs/articles](docs/articles/README.md) |
 | 当前版本与变更记录 | [CHANGELOG.md](CHANGELOG.md) |

@@ -121,6 +121,17 @@ def _clear_sessions() -> None:
         con.close()
 
 
+def use_server_proxy() -> bool:
+    """是否经 server 代理访问沙箱 execd（SANDBOX_USE_SERVER_PROXY，默认开启）。
+
+    server 在 docker 里、app 在宿主机（或跨网络）时，server 返回的直连
+    endpoint（如 host.docker.internal:xxxxx）在客户端不可解析，健康检查会
+    持续失败并在 60s 后抛 SandboxReadyTimeoutException。走 server 代理后
+    endpoint 变成 SANDBOX_DOMAIN 下的 /v1/sandboxes/{id}/proxy/...，始终可达。
+    """
+    return _env("SANDBOX_USE_SERVER_PROXY", "1").lower() in ("1", "true", "yes")
+
+
 def _connection_config():
     """构造 OpenSandbox 连接配置（延迟导入 opensandbox）。"""
     from opensandbox.config.connection_sync import ConnectionConfigSync
@@ -128,6 +139,7 @@ def _connection_config():
         domain=_env("SANDBOX_DOMAIN", "localhost:8090"),
         protocol=_env("SANDBOX_PROTOCOL", "http"),
         api_key=_env("SANDBOX_API_KEY") or None,
+        use_server_proxy=use_server_proxy(),
     )
 
 
@@ -337,6 +349,7 @@ class SandboxManager:
                 mount_path="/datasets",
                 read_only=True,
             ))
+        from app.security_tasks.policy import sandbox_options
         return SandboxSync.create(
             self.image,
             timeout=timedelta(minutes=self.ttl_minutes),
@@ -346,6 +359,7 @@ class SandboxManager:
                       "memory": _env("SANDBOX_MEMORY", "2Gi")},
             metadata={"app": "uniemployee", "thread": thread_id, "uid": uid},
             connection_config=_connection_config(),
+            **sandbox_options(thread_id),
         )
 
     def _connect(self, sandbox_id: str):

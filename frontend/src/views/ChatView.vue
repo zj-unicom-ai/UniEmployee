@@ -80,6 +80,10 @@
         <span class="emp-meta">{{ empMeta }}</span>
         <n-button quaternary class="execution-button" :aria-expanded="executionOpen" @click="toggleDrawer('execution')">执行详情</n-button>
         <n-button size="small" class="trace-button" @click="openTrace">完整 Trace</n-button>
+        <n-button v-if="currentEmp === 'net-ops'" size="small" :loading="exportingSecurity"
+                  :disabled="!persistedConvId || stream.sending.value" @click="exportSecurityRecords">
+          导出实操记录
+        </n-button>
         <n-button
           quaternary
           circle
@@ -130,13 +134,6 @@
         </div>
       </div>
 
-      <div v-if="skillOptions.length" class="skill-picker">
-        <span>本次使用技能</span>
-        <n-select v-model:value="selectedSkills" :options="skillOptions" multiple clearable
-                  :max-tag-count="2" :max="8" :disabled="stream.sending.value || uploading"
-                  placeholder="自动判断，也可主动选择" size="small" style="max-width: 480px; flex: 1"
-                  aria-label="选择本次使用的业务技能" />
-      </div>
       <InputBar
         ref="inputBarRef"
         :disabled="stream.sending.value"
@@ -167,6 +164,28 @@ defineOptions({ name: 'ChatView' })
 const router = useRouter()
 const route = useRoute()
 const message = useMessage()
+const exportingSecurity = ref(false)
+
+async function exportSecurityRecords() {
+  exportingSecurity.value = true
+  try {
+    const { data } = await api.get(`/conversations/${persistedConvId.value}/security-export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `security-${persistedConvId.value}.zip`
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (error) {
+    let detail = error.response?.data?.detail
+    if (error.response?.data instanceof Blob) {
+      try { detail = JSON.parse(await error.response.data.text()).detail } catch {}
+    }
+    message.error(detail || '实操记录导出失败，请稍后重试')
+  } finally {
+    exportingSecurity.value = false
+  }
+}
 
 /* ---------- 基础状态 ---------- */
 const employees = ref([])
@@ -232,23 +251,6 @@ const empOptions = computed(() =>
     .filter(e => !isCustomEmployee(e))
     .map(e => ({ label: e.role || e.name, value: e.id }))
 )
-const selectedSkills = ref([])
-const skillOptions = ref([])
-let skillRequestSeq = 0
-watch([currentEmp, convId], async ([employeeId]) => {
-  const requestSeq = ++skillRequestSeq
-  selectedSkills.value = []
-  skillOptions.value = []
-  if (!employeeId) return
-  try {
-    const { data } = await api.get(`/employees/${employeeId}/skills`)
-    if (requestSeq === skillRequestSeq && currentEmp.value === employeeId) {
-      skillOptions.value = data.map(s => ({ label: s.title || s.name, value: s.name }))
-    }
-  } catch {
-    if (requestSeq === skillRequestSeq && currentEmp.value === employeeId) message.warning('技能列表加载失败，可继续自动判断技能')
-  }
-})
 const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
 const quickPrompts = computed(() => {
   const configured = Array.isArray(currentEmployee.value?.quick_prompts)
@@ -311,11 +313,8 @@ async function onSend(text, files = [], onAccepted = () => {}) {
     if (!attachments.length) return
   }
   await stream.sendTo(`/api/conversations/${targetConvId}/messages`, text, attachments, null, currentModel.value, {
-    pinnedSkills: [...selectedSkills.value],
-    pinnedSkillLabels: selectedSkills.value.map(name => skillOptions.value.find(s => s.value === name)?.label || name),
     onAccepted: () => {
       onAccepted()
-      selectedSkills.value = []
       markConversationPersisted(targetConvId)
     },
   })

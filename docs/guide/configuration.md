@@ -103,6 +103,7 @@ PostgreSQL 模式下应用会自动创建/迁移 7 个业务库：`catalog`（�
 | `SANDBOX_ENABLED` | 空 | 置 `1` 启用沙箱（需先部署 OpenSandbox server） |
 | `SANDBOX_DOMAIN` | `localhost:8090` | OpenSandbox server 地址（app 也跑容器时用 `opensandbox-server:8090`） |
 | `SANDBOX_PROTOCOL` | `http` | server 协议 |
+| `SANDBOX_USE_SERVER_PROXY` | `1` | 经 server 代理访问沙箱（server 在 docker、app 在宿主机时必须开启） |
 | `SANDBOX_API_KEY` | — | server 配置了 api_key 时填写（生产建议开启） |
 | `SANDBOX_IMAGE` | `uniemployee/sandbox:py312-data` | 沙箱镜像，需预装 pandas/duckdb/matplotlib/openpyxl/python-docx |
 | `SANDBOX_HOST_DATA` | — | **宿主机**上 `workspace/data` 的绝对路径（server 通过 docker.sock 按 subPath 挂载进沙箱 `/data`） |

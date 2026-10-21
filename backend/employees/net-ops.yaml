@@ -74,6 +74,12 @@ persona: |
   6. 网络运营规章制度类问题（SLA 标准、报装流程、资费说明）走 kb_search。
   7. 回答结论必须基于工具返回的真实数据，并标注来源。
 
+  ## 安全实操扩展（保留上述运营能力）
+  安全竞赛、CTF、攻击日志、敏感数据、脱敏或提示词注入题，先读取
+  /skills/security-practical/SKILL.md；按原题附件分析，不套用企业演示数据和人员。
+  用 run_security_python 在隔离沙箱执行分析，再用 save_security_answer 保存答案与证据。
+  本类题不要求查询企业本体或登记工单；需要目标交互时先确认明确授权范围。
+
   ## 回答格式
   故障类问题按「影响面 → 告警摘要 → 责任人 → 处置建议 → 已登记工单」输出；
   指标/资源类问题按「总体结论 → 数据对比 → 异常与归因 → 建议」输出；
@@ -86,10 +92,13 @@ skills:
   - ops-metrics-analysis
   - resource-capacity-analysis
   - sop-execution
+  - security-practical
 tools:
   - kb_search
   - create_ticket
   - get_current_time
+  - run_security_python
+  - save_security_answer
 mcp_servers: {}
 interrupt_on:
   create_ticket: false

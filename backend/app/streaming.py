@@ -20,6 +20,8 @@ from app import db as dblayer
 from app import model_admission
 from app import subagent_budget
 from app.compiler import _init_model
+from app.security_tasks.records import SecurityRecorder
+from app.security_tasks import policy as security_policy
 from app.paths import WORKSPACE_DATA
 # 数据分析专家 SQL 工具桥接：把 conv_id 注入工具执行上下文，
 # 并在 sql_db_query 完成时取出结构化结果，翻译成 chart/sql SSE 事件。
@@ -66,6 +68,8 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     """把运行时异常映射为稳定的 error_code，避免把内部异常文本直接暴露给前端。"""
     name = type(exc).__name__
     text = str(exc).lower()
+    if "sandbox" in name.lower() or "sandbox" in text:
+        return "sandbox_unavailable", "沙箱执行环境启动失败或不可达，请稍后重试"
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in text:
         return "timeout", "模型响应超时，请稍后重试"
     if "ratelimit" in name.lower() or "rate.li" in text or "429" in text:
@@ -496,6 +500,21 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                                     input_preview=input_preview, kind=kind)
     yield sse({"type": "trace_started", "trace_run_id": trace_run_id})
     tracer = traces.TraceHandler(trace_run_id)
+    pinned_skills = input_.get("pinned_skills", []) if isinstance(input_, dict) else []
+    messages = input_.get("messages", []) if isinstance(input_, dict) else []
+    user_text = "\n".join(str(item.get("content", "")) for item in messages
+                          if isinstance(item, dict)).casefold()
+    security_request = any(term in user_text for term in (
+        "安全实操", "网络安全", "数据安全", "ai安全", "ai 安全", "人工智能安全",
+        "ctf", "攻防", "渗透测试", "攻击日志", "异常登录", "数据脱敏", "比赛题",
+    ))
+    security_run = (emp_id == "net-ops" and
+                    (security_policy.enabled(emp_id) or
+                     isinstance(pinned_skills, list) and security_policy.SKILL_NAME in pinned_skills or
+                     security_request))
+    security_recorder = (SecurityRecorder(tenant_id, user_id, conv_id, trace_run_id, input_)
+                         if security_run else None)
+    security_status = "error"
     admission_lease = None
     subagent_budget_run = None
     pending_subagents: dict[str, str] = {}  # tool_call_id -> subagent name
@@ -504,7 +523,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
     config = {"configurable": {"thread_id": conv_id, "user_id": user_id, "employee_id": emp_id,
                                  "auth_context": auth_context or {"user_id": user_id, "tenant_id": tenant_id,
                                                                    "role": role}},
-              "callbacks": [tracer]}
+              "callbacks": [tracer] + ([security_recorder] if security_recorder else [])}
     # 当前用户轮次（1-based）= checkpoint 中已有 HumanMessage 数 + 1。
     # 产物文件按轮次落库（conversation_files.turn_no），历史恢复时挂回生成它的那条回答；
     # 审批恢复路径 checkpoint 已含本轮 HumanMessage，U+1 仍指向同一轮。
@@ -592,6 +611,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                                "tool": tool_name, "args": tool_args})
                     tracer.flush_pending()
                     traces.finish_run(trace_run_id, status="interrupted")
+                    security_status = "interrupted"
                     return
                 if not isinstance(update, dict):
                     continue
@@ -628,7 +648,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 同步落库 conversation_files：file 事件是即时推送，
                         # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python",
-                                    "publish_briefing", "generate_solution_doc"):
+                                    "publish_briefing", "generate_solution_doc",
+                                    "run_security_python", "save_security_answer"):
                             for f in file_watcher.diff():
                                 f = await asyncio.to_thread(
                                     snapshot_artifact, WORKSPACE_DATA, user_id,
@@ -662,6 +683,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                        "artifact_type": "inline_report"})
         tracer.flush_pending()
         traces.finish_run(trace_run_id, status="done")
+        security_status = "done"
         # 输出敏感词检测：记录日志供审计（不打断已完成回复）
         if guard.get_setting("sensitive_enabled", "1") == "1" and bot_text:
             hit = guard.check_text(bot_text)
@@ -677,7 +699,8 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                     "run_id": trace_run_id, "employee_id": emp_id,
                     "conversation_id": conv_id})
         meta = conversations.get(conv_id)
-        if meta and (meta.get("message_count") or 0) <= 1 and bot_text.strip():
+        if (meta and (meta.get("message_count") or 0) <= 1 and bot_text.strip()
+                and not security_policy.enabled(emp_id)):
             user_text = ""
             try:
                 msgs = input_.get("messages") if isinstance(input_, dict) else None
@@ -687,6 +710,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                 pass
             asyncio.create_task(_gen_title(conv_id, user_text, bot_text))
     except asyncio.CancelledError:
+        security_status = "cancelled"
         tracer.flush_pending()
         # 客户端刷新/切页/中止请求时，服务端会取消 SSE 生成器。
         # 已经流给浏览器的 token 可能尚未进入 checkpoint；先尽力补写，
@@ -731,3 +755,5 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
             analyst_clear_connector_id()
             analyst_clear_user_ctx()
             fileqa_clear_user_id()
+        if security_recorder:
+            security_recorder.write("run_finished", status=security_status, answer=bot_text)
