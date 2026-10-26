@@ -185,7 +185,7 @@ def _migrate_employee_kind(con):
     # 定制型员工 kind 由代码决定（内置独立模块），每次迁移强制对齐，
     # 避免管理员误改或历史迁移 bug 导致分类错乱
     con.execute(
-        "UPDATE employees SET kind='custom' WHERE id IN ('xiaoshu') "
+        "UPDATE employees SET kind='custom' WHERE id IN ('xiaoshu', 'market-intel') "
         "AND deleted_at IS NULL")
     con.commit()
 

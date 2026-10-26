@@ -28,6 +28,7 @@ from app.tools.data_tools import get_my_id
 from app.tools.search import bocha_search
 from app.tools.time_tools import get_current_time
 from app.tools.publish_tools import publish_briefing
+from app.tools.market_research import save_market_observation, save_market_judgement
 from app.tools.wiki_tools import query_product_wiki, list_product_catalog
 from app.workflows.refund import make_start_refund
 # 数据分析员工 SQL 工具集（从 Aix-DB 适配搬迁）
@@ -55,6 +56,8 @@ ALL_LOCAL_TOOLS = {
     "get_current_time": get_current_time,
     # 市场简报发布（需人工审批，interrupt_on 由 tools.needs_approval 自动派生）
     "publish_briefing": publish_briefing,
+    "save_market_observation": save_market_observation,
+    "save_market_judgement": save_market_judgement,
     # 兼容旧员工配置；实现已改为 RAGFlow 检索，不再读取本地 product-wiki。
     "query_product_wiki": query_product_wiki,
     "list_product_catalog": list_product_catalog,
@@ -393,6 +396,7 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             ensure_connector_allowed(name)
             cfg = dict(cfg)
             transport = (cfg.get("transport") or "stdio").lower()
+            cfg["transport"] = transport
             if transport == "stdio":
                 if name == "crm_lab":
                     # MCP 子进程的 env 不继承应用进程的全部变量；仅传入此
@@ -429,7 +433,11 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
                 server_tools.extend((server_name, t) for t in mcp_tools)
             else:
                 for server_name in servers:
-                    mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                    try:
+                        mcp_tools = await mcp_client.get_tools(server_name=server_name)
+                    except Exception as exc:
+                        print(f"[mcp] 连接器 {server_name} 初始化失败，已跳过：{type(exc).__name__}: {exc}")
+                        continue
                     server_tools.extend((server_name, t) for t in mcp_tools)
             tools += [
                 _guard_tool(

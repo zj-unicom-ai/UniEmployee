@@ -77,6 +77,13 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     if ("context_length" in text or "context length" in text or
             "context window" in text or "token limit" in text or "too many tokens" in text):
         return "context_length", "上下文过长，请缩减后重试"
+    if ("remoteprotocolerror" in name.lower() or
+            "peer closed connection" in text or
+            "incomplete chunked read" in text or
+            "incomplete message body" in text):
+        return ("upstream_unavailable",
+                "模型服务连接中断（响应未完整返回），研究未完成，请稍后重试；"
+                "如持续发生，请管理员检查模型服务或网络代理")
     if ("authentication" in text or "api key" in text or "unauthorized" in text or
             "401" in text or "403" in text or "permission denied" in text or "access denied" in text):
         return "auth", "模型或工具鉴权失败，请联系管理员"

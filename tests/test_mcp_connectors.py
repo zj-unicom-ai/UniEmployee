@@ -170,3 +170,24 @@ def test_mcp_tools_use_unified_capability_policy(monkeypatch):
         bound_spec, user_id="u_user"))
     granted = next(t for t in tools if t.name == "order_query")
     assert "无权限" not in (getattr(granted, "description", "") or "")
+
+
+def test_missing_stdio_transport_is_filled_and_one_broken_connector_keeps_healthy_tools(monkeypatch):
+    monkeypatch.delenv('MCP_DISABLED', raising=False)
+    @tool
+    def healthy_lookup() -> str:
+        """测试连接器工具。"""
+        return 'ok'
+    seen={}
+    class Client:
+        def __init__(self, servers): seen.update(servers)
+        async def get_tools(self, server_name=None):
+            if server_name=='crm': raise RuntimeError('connector unavailable')
+            return [healthy_lookup]
+    monkeypatch.setattr(compiler,'MultiServerMCPClient',Client)
+    spec=EmployeeSpec(id='mcp-isolation',name='测试',role='测试',model='dummy',persona='测试',
+        mcp_servers={'crm':{'command':'python','args':[]},'newsnow':{'command':'npx','args':[]}})
+    tools,_=asyncio.run(compiler._assemble_tools(spec,checkpointer=None))
+    assert seen['crm']['transport']=='stdio'
+    assert seen['newsnow']['transport']=='stdio'
+    assert 'healthy_lookup' in [t.name for t in tools]

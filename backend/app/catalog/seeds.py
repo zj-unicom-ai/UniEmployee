@@ -1,5 +1,6 @@
 """种子数据：首次启动将现有员工/技能/工具等原样写入 catalog.db。"""
 
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,9 @@ from .users import create_user, get_user_by_username, set_must_change_password, 
 from .employees import list_employees_meta
 from app.spec import load_spec
 from app.demo_isolation import DEMO_CONNECTOR_IDS, is_production
+
+_LEGACY_MARKET_INTEL_PERSONA_SHA256 = (
+    "f06dff30035c9cea710392c4d54026e6fa86b851decfa8ba012b75ad5f1a40e7")
 
 
 def _skill_desc(skill_dir: Path) -> str:
@@ -220,9 +224,10 @@ EMPLOYEE_SEEDS = {
         kbs=[], sops=["sop_netops_emergency", "sop_netops_cutover",
                       "sop_netops_escalation"], cons=[]),
     "market-intel": dict(
-        skills=["market-daily-brief", "competitor-deep-dive", "market-alert-triage"],
-        tools=_tools_with_ontology(["kb_search", "bocha_search", "get_current_time",
-                                    "publish_briefing"]),
+        skills=["industry-deep-research", "market-daily-brief",
+                "competitor-deep-dive", "market-alert-triage"],
+        tools=_tools_with_ontology(["bocha_search", "get_current_time",
+                                    "publish_briefing", "save_market_observation"]),
         kbs=[], sops=[], cons=["newsnow", "playwright"]),
     "unicom-presale": dict(
         skills=["unicom-presale-faq"],
@@ -258,6 +263,10 @@ def seed_if_empty():
         ("publish_briefing", "发布市场简报",
          "把生成的市场简报看板提交发布（需人工审批，批准后归档为 HTML 文件并外发）", "local",
          json.dumps(["approve", "reject"])),
+        ("save_market_observation", "保存行业观察",
+         "写入小察研究工作台；每条资讯必须先确定主题并指定唯一细分领域 category_id", "local", None),
+        ("save_market_judgement", "保存趋势研判",
+         "按主题或唯一细分领域保存带版本、来源和证据范围的行业趋势研判", "local", None),
         ("get_my_id", "获取用户ID", "返回当前登录用户的 ID", "local", None),
         ("get_current_time", "获取当前时间", "获取当前真实日期时间（东八区）", "local", None),
         ("generate_solution_doc", "生成方案文档",
@@ -461,6 +470,74 @@ def backfill_market_intel_v2():
          "local", json.dumps(["approve", "reject"])))
     if cur.execute("SELECT 1 FROM employees WHERE id='market-intel' AND deleted_at IS NULL").fetchone():
         cur.execute("INSERT OR IGNORE INTO employee_tools VALUES('market-intel','publish_briefing')")
+    con.commit()
+    con.close()
+
+
+def backfill_market_intel_research():
+    """升级 market-intel 的行业研究能力与存量默认人设，不覆盖管理员自定义人设。"""
+    con = _conn()
+    cur = con.cursor()
+    yaml_path = ROOT / "employees" / "market-intel.yaml"
+    skill_dir = ROOT / "skills" / "industry-deep-research"
+    if not yaml_path.is_file() or not (skill_dir / "SKILL.md").is_file():
+        con.close()
+        return
+
+    spec = load_spec(str(yaml_path))
+    cur.execute(
+        "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+        "VALUES(?,?,?,?,?)",
+        ("save_market_observation", "保存行业观察",
+         "写入小察研究工作台；每条资讯必须先确定主题并指定唯一细分领域 category_id", "local", None))
+    cur.execute(
+        "UPDATE tools SET description=? WHERE id='save_market_observation' "
+        "AND description='把核实后的研究摘要、正文与引用来源写入小察研究工作台'",
+        ("写入小察研究工作台；每条资讯必须先确定主题并指定唯一细分领域 category_id",))
+    cur.execute(
+        "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+        "VALUES(?,?,?,?,?)",
+        ("save_market_judgement", "保存趋势研判",
+         "按主题或唯一细分领域保存带版本、来源和证据范围的行业趋势研判", "local", None))
+    employee = cur.execute(
+        "SELECT role, persona FROM employees "
+        "WHERE id='market-intel' AND deleted_at IS NULL").fetchone()
+    if employee:
+        # 仅自动迁移未被管理员编辑过的旧默认人设。自定义人设保留，避免
+        # 把目录库中已人工调整的员工配置重置为 YAML 种子。
+        old_persona = str(employee["persona"] or "")
+        updates = []
+        values = []
+        if hashlib.sha256(old_persona.encode("utf-8")).hexdigest() == (
+                _LEGACY_MARKET_INTEL_PERSONA_SHA256):
+            updates.append("persona=?")
+            values.append(spec.persona)
+        if employee["role"] == "市场情报分析师":
+            updates.append("role=?")
+            values.append(spec.role)
+        if updates:
+            updates.append("updated_at=?")
+            values.extend([time.strftime("%Y-%m-%d %H:%M:%S"), "market-intel"])
+            cur.execute(
+                f"UPDATE employees SET {', '.join(updates)} WHERE id=?", values)
+
+        cur.execute(
+            "INSERT OR IGNORE INTO skills(id,name,description,dir) VALUES(?,?,?,?)",
+            ("industry-deep-research", "industry-deep-research",
+             _skill_desc(skill_dir), "skills/industry-deep-research"))
+        cur.execute(
+            "INSERT OR IGNORE INTO employee_skills VALUES('market-intel', "
+            "'industry-deep-research')")
+        cur.execute(
+            "INSERT OR IGNORE INTO employee_tools VALUES('market-intel', "
+            "'save_market_observation')")
+        cur.execute(
+            "INSERT OR IGNORE INTO employee_tools VALUES('market-intel', "
+            "'save_market_judgement')")
+        # Existing catalog resources and per-user overrides are runtime truth.
+        # New installations omit the legacy KB tool in YAML, but this migration
+        # only adds the research capability and never erases an administrator's
+        # knowledge-base or assignment configuration.
     con.commit()
     con.close()
 
