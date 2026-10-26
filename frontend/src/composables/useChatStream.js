@@ -3,7 +3,7 @@ import { nextTick, ref } from 'vue'
 import { marked } from 'marked'
 
 const BAD_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM'])
-const SAFE_PROTOCOLS = ['http:', 'https:', 'mailto:', 'tel:']
+const SAFE_PROTOCOLS = ['http', 'https', 'mailto', 'tel']
 const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction', 'action', 'poster', 'background'])
 
 function isSafeUrl(v) {
@@ -213,6 +213,15 @@ export function useChatStream({ stageStates, stageDetail, messages, scrollToBott
     } else if (ev.type === 'error') {
       // 运行级错误：气泡内直接显示错误卡（不再藏进折叠 trace），流水线置错
       msg.error = ev.message || '任务执行出错，请稍后重试'
+      // 工具节点异常时，部分 LangGraph 运行会在 ToolMessage 到达 SSE 适配层前
+      // 直接结束本轮。此时工具 trace 只有 start；用运行级错误收尾，避免 UI
+      // 永远显示“工具调用中”。
+      for (const item of msg.trace || []) {
+        if (item.type === 'tool' && item.status === 'start') {
+          item.status = 'error'
+          item.preview = msg.error
+        }
+      }
       msg.status = 'error'
       msg._streamTerminal = true
       setStage('report', 'error', msg.error)

@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.22.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.23.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -65,6 +65,7 @@ async def lifespan(app):
     catalog.backfill_sandbox_backend()
     catalog.backfill_ticket_approval()
     catalog.backfill_market_intel_v2()
+    catalog.backfill_market_intel_research()
     # workspace 目录迁移钩子（uploads/<uid> → <uid>/uploads，netops CSV → datasets/）
     # 必须在 sandbox backend 真实启用前完成，否则沙箱内 subPath=<uid> 看不到旧 uploads。
     catalog.backfill_workspace_paths()
@@ -87,6 +88,10 @@ async def lifespan(app):
     conversations.ensure_default_channel(
         [e["id"] for e in runtime.discover_employees()]
     )
+    from app import market_research
+    market_research.init_tables()
+    from app import market_intake
+    market_intake.recover()
     # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
     from app import automations as _automations
     _automations.backfill_seeds()
@@ -132,9 +137,16 @@ async def lifespan(app):
         runtime.set_store(store)
         await runtime.warmup_all()
         await recover_conversations()
+        market_research_mcp_app = getattr(
+            app.state, "market_research_mcp_http_app", None)
+        if market_research_mcp_app is not None:
+            await stack.enter_async_context(
+                market_research_mcp_app.lifespan(market_research_mcp_app))
+        market_intake.start()
         scheduler.start()
         log.info("启动完成，开始接收请求")
         yield
+        await market_intake.shutdown()
         await scheduler.stop()
         await agent_runs.shutdown()
         await runtime.shutdown_mcp()
@@ -245,6 +257,24 @@ async def health():
 # 挂载 API 路由
 app.include_router(app_router)
 
+# 小察研究工作台的入站 MCP，供外部定时采集智能体写入结构化观察。
+from app.mcp_servers.market_research import mount_market_research_mcp
+
+_market_research_mcp_enabled = mount_market_research_mcp(
+    app,
+    token=os.environ.get("MARKET_RESEARCH_MCP_TOKEN", ""),
+    tenant_id=(os.environ.get("MARKET_RESEARCH_MCP_TENANT_ID", "").strip()
+               or auth.enterprise_tenant_id()),
+)
+if not _market_research_mcp_enabled:
+    @app.api_route("/mcp/market-intel/mcp", methods=["GET", "POST", "DELETE"])
+    async def market_research_mcp_not_configured():
+        return JSONResponse(
+            status_code=503,
+            content={"error": "mcp_not_configured",
+                     "message": "请配置至少 32 字节的 MARKET_RESEARCH_MCP_TOKEN 后重启服务"},
+        )
+
 
 # ---- 前端静态文件 ----
 _FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
@@ -255,7 +285,10 @@ app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets"), check
 
 @app.get("/")
 async def index():
-    return FileResponse(_FRONTEND_DIST / "index.html")
+    return FileResponse(
+        _FRONTEND_DIST / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/report-viewer.html")
@@ -274,4 +307,7 @@ async def report_viewer():
 async def spa_fallback(path: str):
     if path.startswith(("assets/",)):
         return FileResponse(path)
-    return FileResponse(_FRONTEND_DIST / "index.html")
+    return FileResponse(
+        _FRONTEND_DIST / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )

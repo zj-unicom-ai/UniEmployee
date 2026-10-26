@@ -159,6 +159,7 @@ const pageTitleMap = {
   'model-manager': '系统设置 · 模型管理',
   'audit-logs': '系统设置 · 审计日志',
   analyst: '数据分析 · 对话问数',
+  'market-intel': '小察 · 行业研究工作台',
   'analyst-datasources': '数据分析 · 库表配置',
   'analyst-terminologies': '数据分析 · 术语配置',
   'analyst-sql-examples': '数据分析 · SQL 示例',
@@ -168,6 +169,7 @@ const currentPageTitle = computed(() => pageTitleMap[route.name] || 'UniEmployee
 const activeKey = computed(() => {
   const n = route.name
   if (n === 'change-password' || n === 'profile') return undefined
+  if (n === 'market-intel') return undefined
   // 安全护栏两个 tab 都高亮侧边栏「系统设置 → 安全护栏」子项
   if (n === 'guard-words' || n === 'guard-tools') return 'guard-words'
   return n

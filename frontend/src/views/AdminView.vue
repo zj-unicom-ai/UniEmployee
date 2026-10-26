@@ -1,6 +1,5 @@
 <!-- 员工管理：分两类展示
-     - 定制型数字员工（custom）：独立模块化开发，有专属工作台（如数据分析专家，
-       卡片点击跳 /app/analyst 工作台）
+     - 定制型数字员工（custom）：独立模块化开发，有专属工作台
      - 编排型数字员工（composed）：通过资源编排（技能/工具/知识库/SOP/连接器）
        页面化配置，卡片点击进详情页配置 -->
 <template>
@@ -117,6 +116,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api from '../api.js'
+import { routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'AdminView' })
 
@@ -139,11 +139,6 @@ const customEmployees = computed(() =>
   employees.value.filter(e => (e.kind || 'composed') === 'custom'))
 const composedEmployees = computed(() =>
   employees.value.filter(e => (e.kind || 'composed') === 'composed'))
-
-// 定制型员工 → 专属工作台路由映射（独立模块化开发，每个员工有专属工作台）
-const CUSTOM_WORKSPACE = {
-  xiaoshu: { name: 'analyst' },  // 数据分析专家 → /app/analyst
-}
 
 function openNew() {
   Object.assign(form, { name: '', role: '', model: '', backend: 'state', persona: '' })
@@ -175,9 +170,9 @@ function goQuickPrompts(id) {
 }
 
 function goCustomWorkspace(e) {
-  const ws = CUSTOM_WORKSPACE[e.id]
-  if (ws) {
-    router.push({ name: ws.name })
+  const routeName = routeNameForEmployee(e.id)
+  if (routeName !== 'chat') {
+    router.push({ name: routeName })
   } else {
     // 未配置专属工作台路由的定制型员工，退回到详情页
     router.push(`/app/admin/employee/${e.id}`)

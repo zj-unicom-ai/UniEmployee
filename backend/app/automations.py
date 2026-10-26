@@ -478,6 +478,23 @@ def _execution_identity(auto: dict) -> tuple[dict, dict]:
 # 市场情报员工 V2 值守种子任务（幂等，默认停用——管理员在自动化任务页开启）
 # ---------------------------------------------------------------------------
 
+_MARKET_DAILY_BRIEF_PROMPT = (
+    "【自动化值守】现在是 {{now}}。请按 market-daily-brief 技能规程"
+    "生成今日市场简报看板：完整执行采集→筛选→成文流程，"
+    "不要向用户提问（无人值守，直接按默认监测范围执行），"
+    "将可复用的重要发现按具身智能、AI 前沿观察或政策分析归类；"
+    "每条资讯在写入前都必须判断且只选择一个所属细分领域 category_id，"
+    "具体 ID 遵循行业深度研究技能里的分类表，无法核实分类时不要入库；"
+    "分别调用 save_market_observation 写入小察工作台，附上来源链接与发布日期；"
+    "完成后调用 publish_briefing 提交发布审批。"
+)
+_LEGACY_MARKET_DAILY_BRIEF_PROMPT = (
+    "【自动化值守】现在是 {{now}}。请按 market-daily-brief 技能规程"
+    "生成今日市场简报看板：完整执行采集→筛选→成文流程，"
+    "不要向用户提问（无人值守，直接按默认监测范围执行），"
+    "完成后调用 publish_briefing 提交发布审批。"
+)
+
 AUTOMATION_SEEDS = [
     {
         "id": "auto_seed_market_daily_brief",
@@ -486,11 +503,8 @@ AUTOMATION_SEEDS = [
         "cron_expr": "30 8 * * 1-5",
         "event_key": "",
         "secret": "",
-        # 无人值守提示词：直接按默认监测范围执行，收尾必须走发布审批
-        "prompt": ("【自动化值守】现在是 {{now}}。请按 market-daily-brief 技能规程"
-                   "生成今日市场简报看板：完整执行采集→筛选→成文流程，"
-                   "不要向用户提问（无人值守，直接按默认监测范围执行），"
-                   "完成后调用 publish_briefing 提交发布审批。"),
+        # 无人值守提示词：先沉淀主题观察，再提交简报发布审批
+        "prompt": _MARKET_DAILY_BRIEF_PROMPT,
         "run_as": "u_admin",
         "channel_id": "",
     },
@@ -528,6 +542,13 @@ def backfill_seeds():
                 (s["id"], s["name"], s["trigger_type"], s["cron_expr"], s["event_key"],
                  s["secret"], tenant_id, "market-intel", s["prompt"], s["run_as"], s["channel_id"],
                  now, now))
+            if s["id"] == "auto_seed_market_daily_brief":
+                # 仅升级未被管理员编辑过的旧默认指令；保留管理员自定义任务内容。
+                con.execute(
+                    "UPDATE automations SET prompt=?,updated_at=? "
+                    "WHERE id=? AND tenant_id=? AND prompt=?",
+                    (s["prompt"], now, s["id"], tenant_id,
+                     _LEGACY_MARKET_DAILY_BRIEF_PROMPT))
         con.commit()
 
 

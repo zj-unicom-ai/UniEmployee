@@ -163,6 +163,10 @@ def test_backfill_employees_if_missing_adds_market_intel():
     catalog.seed_if_empty()  # 新库播种已含 market-intel
     cfg = catalog.get_employee_config("market-intel")
     assert cfg["name"] == "小察"
+    assert cfg["kind"] == "custom"
+    assert cfg["role"] == "行业深度研究员"
+    assert "industry-deep-research" in cfg["skills"]
+    assert "save_market_observation" in cfg["tools"]
     assert "market-daily-brief" in cfg["skills"]
 
     # 模拟老库（无 market-intel）：硬删相关行后 backfill 应补回
@@ -180,8 +184,8 @@ def test_backfill_employees_if_missing_adds_market_intel():
     catalog.backfill_connectors()
     cfg = catalog.get_employee_config("market-intel")
     assert cfg is not None and cfg["name"] == "小察"
-    assert set(cfg["skills"]) >= {"market-daily-brief", "competitor-deep-dive",
-                                  "market-alert-triage"}
+    assert set(cfg["skills"]) >= {"industry-deep-research", "market-daily-brief",
+                                  "competitor-deep-dive", "market-alert-triage"}
     assert "bocha_search" in cfg["tools"]
     assert "ontology_find_entities" in cfg["tools"]
     assert "ontology_expand" in cfg["tools"]
@@ -191,6 +195,42 @@ def test_backfill_employees_if_missing_adds_market_intel():
     # 幂等：再跑一次不重复
     catalog.backfill_employees_if_missing()
     catalog.backfill_connectors()
+
+
+def test_market_intel_research_backfill_keeps_admin_persona_and_migrates_kind():
+    """补齐研究能力时保留管理员人设、知识库和用户资源覆盖。"""
+    catalog.init()
+    catalog.seed_if_empty()
+    con = sqlite3.connect(str(catalog.db.DB))
+    con.execute(
+        "UPDATE employees SET kind='composed', role=?, persona=? WHERE id='market-intel'",
+        ("行业研究顾问", "管理员维护的人设\n如有需要使用 kb_search 查询历史档案。"))
+    con.execute("INSERT INTO employee_kbs VALUES('market-intel', 'admin-configured-kb')")
+    custom_overrides = json.dumps({"add": {"kbs": ["user-configured-kb"]}}, ensure_ascii=False)
+    con.execute(
+        "INSERT INTO user_employee_assignments(user_id, employee_id, overrides) VALUES(?,?,?)",
+        ("u_market_test", "market-intel", custom_overrides))
+    con.commit()
+    con.close()
+
+    catalog.init()
+    catalog.backfill_market_intel_research()
+    cfg = catalog.get_employee_config("market-intel")
+    assert cfg["kind"] == "custom"
+    assert cfg["role"] == "行业研究顾问"
+    assert "管理员维护的人设" in cfg["persona"]
+    assert "kb_search" in cfg["persona"]
+    assert "industry-deep-research" in cfg["skills"]
+    assert "save_market_observation" in cfg["tools"]
+    con = sqlite3.connect(str(catalog.db.DB))
+    assert con.execute(
+        "SELECT 1 FROM employee_kbs WHERE employee_id='market-intel' AND kb_id='admin-configured-kb'"
+    ).fetchone()
+    saved_overrides = con.execute(
+        "SELECT overrides FROM user_employee_assignments WHERE user_id='u_market_test' AND employee_id='market-intel'"
+    ).fetchone()[0]
+    con.close()
+    assert json.loads(saved_overrides) == {"add": {"kbs": ["user-configured-kb"]}}
 
 
 def test_backfill_ontology_tools_adds_path_and_scenario_tools():

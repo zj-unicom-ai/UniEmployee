@@ -262,6 +262,7 @@ def test_backfill_seeds_market_intel_tasks():
     assert daily["enabled"] is False
     assert daily["next_fire_at"] is None          # 停用不排期
     assert "publish_briefing" in daily["prompt"]  # 收尾必须走发布审批
+    assert "save_market_observation" in daily["prompt"]
     assert "{{now}}" in daily["prompt"]
 
     alert = rows.get("auto_seed_market_alert_event")
@@ -274,3 +275,22 @@ def test_backfill_seeds_market_intel_tasks():
     automations.update("auto_seed_market_daily_brief", name="管理员改过的名字")
     automations.backfill_seeds()
     assert automations.get("auto_seed_market_daily_brief")["name"] == "管理员改过的名字"
+
+
+def test_market_daily_seed_migrates_only_legacy_prompt():
+    automations.backfill_seeds()
+    legacy_prompt = automations._LEGACY_MARKET_DAILY_BRIEF_PROMPT
+    con = automations._conn()
+    con.execute("UPDATE automations SET prompt=? WHERE id=?",
+                (legacy_prompt, "auto_seed_market_daily_brief"))
+    con.commit()
+    con.close()
+
+    automations.backfill_seeds()
+    migrated = automations.get("auto_seed_market_daily_brief")
+    assert "save_market_observation" in migrated["prompt"]
+
+    custom_prompt = "管理员维护的专题采集内容"
+    automations.update("auto_seed_market_daily_brief", prompt=custom_prompt)
+    automations.backfill_seeds()
+    assert automations.get("auto_seed_market_daily_brief")["prompt"] == custom_prompt

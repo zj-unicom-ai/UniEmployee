@@ -3,6 +3,7 @@
 // 新增定制型员工时，在此追加一条即可。
 export const CUSTOM_EMPLOYEE_ROUTES = {
   xiaoshu: 'analyst',
+  'market-intel': 'market-intel',
 }
 
 // 根据会话的 employee_id 决定该跳到哪个前端路由
