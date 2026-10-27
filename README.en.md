@@ -302,3 +302,5 @@ We can help end-to-end — from discovery, solution design, system integration, 
 ## License
 
 [MIT](LICENSE) © ZJ-Unicom-AI
+
+Special thanks to <a href="https://www.uni-router.net/"><img src="assets/logo.png" alt="Uni Router Token Service Platform" height="28"></a> [Uni Router Token Service Platform](https://www.uni-router.net/) for providing token support for this open-source project.
