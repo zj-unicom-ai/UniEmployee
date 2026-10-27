@@ -344,3 +344,5 @@ UniEmployee 虽然开源，但真实企业落地往往涉及与业务系统的�
 ## 许可证
 
 [MIT](LICENSE) © ZJ-Unicom-AI 
+
+特别鸣谢 <a href="https://www.uni-router.net/"><img src="assets/logo.png" alt="联通词元服务平台" height="28"></a> [联通词元服务平台](https://www.uni-router.net/) 为本开源项目提供 token 支持。
