@@ -203,8 +203,9 @@ EMPLOYEE_SEEDS = {
             + [ONTOLOGY_CUSTOMER_360_TOOL]),
         kbs=[]),
     "hrbp": dict(
-        skills=["hr-assistant"],
-        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search"], write=True),
+        skills=["hr-assistant", "china-unicom-ppt"],
+        tools=_tools_with_ontology(["kb_search", "create_ticket", "bocha_search",
+                                    "generate_china_unicom_ppt"], write=True),
         kbs=[]),
     "biz-analyzer": dict(
         skills=["business-overview", "root-cause-analysis",
@@ -271,6 +272,8 @@ def seed_if_empty():
         ("get_current_time", "获取当前时间", "获取当前真实日期时间（东八区）", "local", None),
         ("generate_solution_doc", "生成方案文档",
          "根据客户信息和推荐产品生成 Word 解决方案文档", "local", None),
+        ("generate_china_unicom_ppt", "生成中国联通 PPT",
+         "根据主题和要点生成可编辑的中国联通风格 PowerPoint 并支持在线预览", "local", None),
         ("query_product_wiki", "查询产品知识库",
          "查询自研产品/解决方案/成功案例", "local", None),
         ("list_product_catalog", "查看产品目录",
@@ -612,6 +615,35 @@ def backfill_xiaoshu_skills():
     # 目录扫描已在 backfill_employees_if_missing 兜底，确保 skills 表有这些行
     for s in ("sql-root-cause-analysis", "frontend-design", "report-generation"):
         cur.execute("INSERT OR IGNORE INTO employee_skills VALUES('xiaoshu', ?)", (s,))
+    con.commit()
+    con.close()
+
+
+def backfill_hrbp_skills():
+    """幂等补齐综合人力专员 HRBP 的联通 PPT 技能与生成工具。"""
+    con = _conn()
+    cur = con.cursor()
+    if not cur.execute(
+        "SELECT 1 FROM employees WHERE id='hrbp' AND deleted_at IS NULL"
+    ).fetchone():
+        con.close()
+        return
+    cur.execute(
+        "INSERT OR IGNORE INTO tools(id,name,description,source,needs_approval) "
+        "VALUES(?,?,?,?,?)",
+        ("generate_china_unicom_ppt", "生成中国联通 PPT",
+         "根据主题和要点生成可编辑的中国联通风格 PowerPoint 并支持在线预览",
+         "local", None))
+    cur.execute("INSERT OR IGNORE INTO employee_tools VALUES(?,?)",
+                ("hrbp", "generate_china_unicom_ppt"))
+    skill_dir = ROOT / "skills" / "china-unicom-ppt"
+    if (skill_dir / "SKILL.md").is_file():
+        cur.execute(
+            "INSERT OR IGNORE INTO skills(id,name,description,dir) VALUES(?,?,?,?)",
+            ("china-unicom-ppt", "china-unicom-ppt", _skill_desc(skill_dir),
+             "skills/china-unicom-ppt"))
+        cur.execute(
+            "INSERT OR IGNORE INTO employee_skills VALUES('hrbp', 'china-unicom-ppt')")
     con.commit()
     con.close()
 

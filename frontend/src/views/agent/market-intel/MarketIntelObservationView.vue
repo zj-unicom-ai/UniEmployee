@@ -89,6 +89,11 @@
               <span class="note-mark">i</span>
               <p>来源链接会在新窗口打开。请结合正文中的事实说明与验证边界阅读。</p>
             </div>
+            <div v-if="observation.research_metadata?.source_provenance" class="quality-note">
+              <strong>原文归属已校验</strong>
+              <span>引述已与原文匹配；独立交叉验证尚未完成。</span>
+              <small>文档版本 {{ observation.research_metadata.source_provenance.document_version_id }}</small>
+            </div>
           </aside>
         </div>
       </template>
@@ -695,6 +700,9 @@ watch(() => route.params.id, loadObservation, { immediate: true })
   border-top: 1px solid #f1f5f9;
   color: #64748b;
 }
+.quality-note { display:flex; flex-direction:column; gap:5px; margin-top:12px; padding:11px 12px; border:1px solid #dce9df; border-radius:6px; color:#64806b; background:#f3f8f4; font-size:11px; line-height:1.5; }
+.quality-note strong { color:#4f765b; font-size:12px; }
+.quality-note small { overflow-wrap:anywhere; color:#8a9d8e; font:10px 'DM Mono',monospace; }
 
 .note-mark {
   display: grid;

@@ -9,6 +9,7 @@ from app import audit, auth, conversations
 from app import paths as app_paths
 from app.artifact_storage import snapshot_artifact
 from app.docx_preview import render_docx_html
+from app.pptx_preview import render_pptx_html
 
 router = APIRouter(prefix="/api")
 
@@ -151,19 +152,23 @@ async def download_artifact(artifact_id: int,
 @router.get("/workspace/artifacts/{artifact_id}/preview")
 async def preview_artifact(artifact_id: int,
                            user: dict = Depends(auth.get_current_user)):
-    """Render a DOCX after the same tenant/department ACL check as downloads."""
+    """Render supported office documents after the same ACL check as downloads."""
     artifact = conversations.get_accessible_artifact(
         artifact_id, user["id"], user.get("tenant_id", "default"),
         user.get("org_id"), user.get("role", "user"),
     )
     if not artifact:
         raise HTTPException(404, "产物不存在")
-    if Path(artifact["name"]).suffix.lower() != ".docx":
-        raise HTTPException(415, "仅支持预览 DOCX 文档")
     artifact = await _ensure_private_snapshot(artifact)
     target = _resolve_file(_normalize_rel(artifact["path"]))
     try:
-        rendered = await asyncio.to_thread(render_docx_html, target)
+        suffix = Path(artifact["name"]).suffix.lower()
+        if suffix == ".docx":
+            rendered = await asyncio.to_thread(render_docx_html, target)
+        elif suffix == ".pptx":
+            rendered = await asyncio.to_thread(render_pptx_html, target)
+        else:
+            raise HTTPException(415, "仅支持预览 DOCX 和 PPTX 文档")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return HTMLResponse(rendered, headers={"Content-Disposition": "inline"})
@@ -211,10 +216,13 @@ async def preview_workspace_file(
         first = rel.parts[0] if rel.parts else ""
         if user.get("role") != "admin" and len(rel.parts) > 1 and first != user.get("id"):
             raise HTTPException(403, "无权访问其他用户的产物目录")
-    if target.suffix.lower() != ".docx":
-        raise HTTPException(415, "仅支持预览 DOCX 文档")
     try:
-        rendered = await asyncio.to_thread(render_docx_html, target)
+        if target.suffix.lower() == ".docx":
+            rendered = await asyncio.to_thread(render_docx_html, target)
+        elif target.suffix.lower() == ".pptx":
+            rendered = await asyncio.to_thread(render_pptx_html, target)
+        else:
+            raise HTTPException(415, "仅支持预览 DOCX 和 PPTX 文档")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return HTMLResponse(rendered, headers={"Content-Disposition": "inline"})

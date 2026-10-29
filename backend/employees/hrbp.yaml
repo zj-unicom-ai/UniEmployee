@@ -28,10 +28,12 @@ persona: |
 
 skills:
   - hr-assistant
+  - china-unicom-ppt
 tools:
   - kb_search
   - create_ticket
   - bocha_search
+  - generate_china_unicom_ppt
 mcp_servers:
   crm:
     transport: stdio

@@ -27,6 +27,7 @@ _DDL = """
 CREATE TABLE IF NOT EXISTS market_intake_jobs (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL,
  topic_id TEXT NOT NULL, category_id TEXT NOT NULL DEFAULT '', url TEXT NOT NULL,
+ source_id TEXT NOT NULL DEFAULT '', source_name TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL, stage TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
  observation_id TEXT NOT NULL DEFAULT '', category_report_id TEXT NOT NULL DEFAULT '',
  topic_report_id TEXT NOT NULL DEFAULT '', document_json TEXT NOT NULL DEFAULT '{}',
@@ -39,6 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_market_intake_tenant ON market_intake_jobs(tenant
 def init_tables():
     with research._conn() as con:
         con.executescript(_DDL)
+        if "source_id" not in research.dblayer.table_columns(con, "market_intake_jobs"):
+            con.execute("ALTER TABLE market_intake_jobs ADD COLUMN source_id TEXT NOT NULL DEFAULT ''")
+        if "source_name" not in research.dblayer.table_columns(con, "market_intake_jobs"):
+            con.execute("ALTER TABLE market_intake_jobs ADD COLUMN source_name TEXT NOT NULL DEFAULT ''")
 
 
 def public_url(url: str) -> str:
@@ -90,6 +95,38 @@ class PageText(HTMLParser):
                 self.title.append(data.strip())
 
 
+def _connect_public_ips(host: str, port: int, ips: list[str], timeout, source_address=None):
+    """连接到经过公网校验的解析地址，并在 CDN 地址不可达时短超时回退。"""
+    seen = set(ips)
+    candidates = sorted(seen)
+    errors = []
+    connect_timeout = 5.0 if timeout is None else min(float(timeout), 5.0)
+    for refresh in range(2):
+        for ip in candidates:
+            try:
+                sock = socket.create_connection((ip, port), connect_timeout, source_address)
+                if timeout is not None:
+                    sock.settimeout(timeout)
+                return sock
+            except OSError as exc:
+                errors.append(exc)
+        if refresh:
+            break
+        # CDN DNS answers can rotate; retry once with fresh answers after all
+        # initial public addresses fail, while rejecting any private resolution.
+        refreshed = {entry[4][0] for entry in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+        if not refreshed or any(not ipaddress.ip_address(ip).is_global or ipaddress.ip_address(ip).is_multicast
+                                for ip in refreshed):
+            raise ValueError('链接解析到了本机或内网地址，已停止抓取')
+        candidates = sorted(refreshed - seen)
+        seen.update(refreshed)
+        if not candidates:
+            break
+    if errors:
+        raise errors[-1]
+    raise OSError('链接的公网地址暂时不可达')
+
+
 def fetch_document(url: str) -> dict:
     """逐跳校验并固定公网 IP；保持原始 Host/TLS SNI，避免 DNS 重绑定。"""
     for _ in range(6):
@@ -102,8 +139,8 @@ def fetch_document(url: str) -> dict:
             raise ValueError('链接解析到了本机或内网地址，已停止抓取')
         connection_type = http.client.HTTPSConnection if parts.scheme == 'https' else http.client.HTTPConnection
         conn = connection_type(parts.hostname, port, timeout=20)
-        ip = sorted(ips)[0]
-        conn._create_connection = lambda address, timeout=None, source_address=None: socket.create_connection((ip, port), timeout, source_address)
+        conn._create_connection = lambda address, timeout=None, source_address=None: _connect_public_ips(
+            parts.hostname, port, sorted(ips), timeout, source_address)
         try:
             conn.request('GET', (parts.path or '/') + ('?' + parts.query if parts.query else ''),
                          headers={'User-Agent': 'UniEmployee-Research/1.0', 'Accept': 'text/html,text/plain', 'Accept-Encoding': 'identity'})
@@ -233,7 +270,8 @@ def update(job_id: str, **fields):
         con.execute('UPDATE market_intake_jobs SET ' + ','.join(key + '=?' for key in fields) + ' WHERE id=?', [*fields.values(), job_id])
 
 
-def create_job(*, tenant_id: str, user_id: str, url: str, topic_id: str, category_id: str = '', internal: bool = False) -> dict:
+def create_job(*, tenant_id: str, user_id: str, url: str, topic_id: str, category_id: str = '',
+               internal: bool = False, source_id: str = '', source_name: str = '') -> dict:
     url = public_url(url)
     research._validate_category(topic_id, category_id)
     if topic_id not in research.TOPIC_BY_ID:
@@ -247,8 +285,8 @@ def create_job(*, tenant_id: str, user_id: str, url: str, topic_id: str, categor
         if active:
             return dict(active)
         job_id, now = 'mri_' + uuid.uuid4().hex, research._now()
-        con.execute('INSERT INTO market_intake_jobs(id,tenant_id,user_id,topic_id,category_id,url,status,stage,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                    (job_id, tenant_id, user_id, topic_id, category_id, url, 'queued', 'queued', now, now))
+        con.execute('INSERT INTO market_intake_jobs(id,tenant_id,user_id,topic_id,category_id,url,source_id,source_name,status,stage,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (job_id, tenant_id, user_id, topic_id, category_id, url, source_id, source_name[:200], 'queued', 'queued', now, now))
     return get_job(tenant_id, job_id)
 
 
@@ -343,6 +381,12 @@ async def process(job: dict):
                 if existing:
                     if existing.get('deleted_at'):
                         raise ValueError('该链接在回收站，请先恢复记录后重试')
+                    try:
+                        from app import market_sources
+                        market_sources.mark_observation_attributed(job['tenant_id'], job['url'], existing['id'],
+                            source_name=job.get('source_name', ''), published_at=existing.get('published_at', ''))
+                    except Exception:
+                        log.exception('更新重复来源归因失败 id=%s', job['id'])
                     update(job['id'], observation_id=existing['id'], category_id=existing['category_id'])
                     job = get_job(job['tenant_id'], job['id'])
             if not job['observation_id']:
@@ -375,12 +419,19 @@ async def process(job: dict):
                     '### 分析判断\n' + result.analysis, '### 不确定性\n' + result.uncertainty, '### 后续跟踪\n' + result.signals, '### 证据边界\n本记录依据单一网页原文提取，原文引述不等于独立交叉验证；阶段与价值属于分析标注。'])
                 saved = research.save_source_observation(tenant_id=job['tenant_id'], topic_id=job['topic_id'], category_id=result.category_id,
                     title=result.title, summary=result.summary, content_markdown=markdown, published_at=result.published_at,
-                    sources=[{'title': document['title'] or result.title, 'url': document['url'], 'organization': result.organization, 'published_at': result.published_at}],
-                    source_name='链接采集', created_by=job['user_id'], created_by_name='链接研究流水线',
+                    sources=[{'title': document['title'] or result.title, 'url': document['url'], 'organization': result.organization or job.get('source_name', ''), 'published_at': result.published_at}],
+                    source_name=job.get('source_name') or '链接采集', created_by=job['user_id'], created_by_name='链接研究流水线',
                     research_metadata={key: extracted[key] for key in ('stage', 'tier', 'priority', 'openness', 'evidenceType')})
                 item = saved['item']
                 if item.get('deleted_at'):
                     raise ValueError('该链接的观察已在回收站；请先恢复记录，再重试')
+                try:
+                    from app import market_sources
+                    market_sources.mark_observation_attributed(job['tenant_id'], job['url'], item['id'],
+                        source_name=job.get('source_name', ''), published_at=result.published_at,
+                        document_snapshot=document)
+                except Exception:
+                    log.exception('更新市场资料质量状态失败 id=%s', job['id'])
                 update(job['id'], observation_id=item['id'], category_id=item['category_id'])
                 job = get_job(job['tenant_id'], job['id'])
             item = research.get_observation(tenant_id=job['tenant_id'], observation_id=job['observation_id'])

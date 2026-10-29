@@ -1,0 +1,7 @@
+interface:
+  display_name: "中国联通 PPT 风格"
+  short_description: "按联通集团模板制作企业介绍、项目方案和工作汇报"
+  icon_large: "./assets/logo.png"
+  default_prompt: "使用 $china-unicom-ppt 按联通集团白底红黑风格制作一份 PPT，复用官方 Logo 和版式，保持文字、图表和表格可编辑。"
+policy:
+  allow_implicit_invocation: true
