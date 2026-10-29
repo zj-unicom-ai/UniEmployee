@@ -656,6 +656,7 @@ async def _stream_run(conv_id: str, input_, user_id: str = "default", role: str 
                         # 历史会话恢复走详情接口的 files 字段。
                         if name in ("write_file", "execute", "edit_file", "run_python",
                                     "publish_briefing", "generate_solution_doc",
+                                    "generate_china_unicom_ppt",
                                     "run_security_python", "save_security_answer"):
                             for f in file_watcher.diff():
                                 f = await asyncio.to_thread(

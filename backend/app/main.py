@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.23.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.24.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -61,6 +61,7 @@ async def lifespan(app):
     catalog.backfill_employees_if_missing()
     catalog.backfill_analyst_sql_tools()
     catalog.backfill_xiaoshu_skills()
+    catalog.backfill_hrbp_skills()
     catalog.backfill_netops_upgrade()
     catalog.backfill_sandbox_backend()
     catalog.backfill_ticket_approval()
@@ -90,6 +91,11 @@ async def lifespan(app):
     )
     from app import market_research
     market_research.init_tables()
+    from app import market_sources
+    market_sources.init_tables()
+    recovered_source_runs = market_sources.recover()
+    if recovered_source_runs:
+        log.warning("已将中断的市场信源采集恢复入队：%d 条", recovered_source_runs)
     from app import market_intake
     market_intake.recover()
     # 市场情报员工值守任务模板（默认停用，管理员在自动化任务页开启）
@@ -143,9 +149,11 @@ async def lifespan(app):
             await stack.enter_async_context(
                 market_research_mcp_app.lifespan(market_research_mcp_app))
         market_intake.start()
+        market_sources.start()
         scheduler.start()
         log.info("启动完成，开始接收请求")
         yield
+        await market_sources.shutdown()
         await market_intake.shutdown()
         await scheduler.stop()
         await agent_runs.shutdown()

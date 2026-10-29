@@ -11,12 +11,23 @@
         </div>
         <div class="mast-actions">
           <div class="updated-stamp"><span class="pulse-dot"></span> 数据持续沉淀中</div>
+          <select v-if="auth.isAdmin && !isTopicDashboard" v-model="collectionTopicId" aria-label="采集主题">
+            <option value="">选择采集主题</option>
+            <option v-for="topic in topics" :key="topic.id" :value="topic.id">{{ topic.name }}</option>
+          </select>
+          <button v-if="auth.isAdmin" class="collection-start-button" type="button" :disabled="collectionBusy || (!isTopicDashboard && !collectionTopicId)" @click="startCollection">{{ collectionBusy ? '正在启动…' : '只抓取原文' }}</button>
+          <button v-if="auth.isAdmin" class="collection-progress-button" type="button" @click="router.push({ name: 'market-intel-collection' })">采集进度</button>
+          <button v-if="auth.isAdmin" class="collection-progress-button source-documents-button" type="button" @click="router.push({ name: 'market-intel-unverified', query: isTopicDashboard ? { topic: selectedTopic } : {} })">
+            资料核验
+            <span v-if="activeSourceDocCount" class="source-documents-count">{{ formatCount(activeSourceDocCount) }} 篇待补核验</span>
+          </button>
           <button class="icon-button" type="button" aria-label="工作台配置与回收站" title="配置与回收站" :aria-expanded="openConfigMenu" @click="openConfigMenu = !openConfigMenu">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.4 15 .1.1a1.7 1.7 0 1 1-2.4 2.4l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a1.7 1.7 0 1 1-3.4 0v-.2a1.7 1.7 0 0 0-2.9-1.2l-.1.1a1.7 1.7 0 1 1-2.4-2.4l.1-.1a1.7 1.7 0 0 0-1.2-2.9H4a1.7 1.7 0 1 1 0-3.4h.2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a1.7 1.7 0 1 1 2.4-2.4l.1.1a1.7 1.7 0 0 0 2.9-1.2V2a1.7 1.7 0 1 1 3.4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a1.7 1.7 0 1 1 2.4 2.4l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.2a1.7 1.7 0 1 1 0 3.4h-.2a1.7 1.7 0 0 0-1.2 2.9Z"/></svg>
             <span>配置</span>
           </button>
           <div v-if="openConfigMenu" class="config-menu">
             <template v-if="auth.isAdmin">
+              <button type="button" @click="router.push({ name: 'market-intel-sources', query: isTopicDashboard ? { topic: selectedTopic } : {} }); openConfigMenu = false">数据源配置 <span>RSS、网页与接口来源，采集频率及运行状态</span></button>
               <button type="button" @click="goConfig('employee-skills')">技能配置 <span>研究流程与主题规程</span></button>
               <button type="button" @click="goConfig('employee-connectors')">连接器配置 <span>信息来源与采集工具</span></button>
               <button type="button" @click="router.push({ name: 'automation' }); openConfigMenu = false">采集任务 <span>定时与事件触发</span></button>
@@ -26,6 +37,8 @@
           </div>
         </div>
       </header>
+
+      <div v-if="collectionError" class="notice error-notice" role="alert">{{ collectionError }} <button type="button" @click="collectionError = ''">关闭</button></div>
 
       <MarketIntelLinkIntake :topic-id="selectedTopic" :categories="currentTopic?.categories || []" @changed="loadWorkbench" />
 
@@ -64,7 +77,10 @@
             <span class="topic-number">0{{ index + 1 }}</span>
             <span class="topic-symbol" aria-hidden="true">{{ topicSymbol(topic.id) }}</span>
             <span class="topic-copy"><span class="topic-eyebrow">{{ topic.eyebrow }}</span><strong>{{ topic.name }}</strong><small>{{ topic.description }}</small></span>
-            <span class="topic-count"><b>{{ topic.observation_count || 0 }}</b><small>条依据</small></span>
+            <span class="topic-count">
+              <b>{{ topic.observation_count || 0 }}</b><small>条依据</small>
+              <small v-if="sourceDocTopicCounts[topic.id]?.raw_documents" class="topic-source-count">{{ formatCount(sourceDocTopicCounts[topic.id].raw_documents) }} 篇来源资料</small>
+            </span>
             <span class="topic-arrow" aria-hidden="true">↗</span>
           </button>
         </div>
@@ -264,6 +280,11 @@ const loading = ref(true)
 const error = ref('')
 const openConfigMenu = ref(false)
 const createOpen = ref(false)
+const collectionBusy = ref(false)
+const collectionTopicId = ref('')
+const collectionError = ref('')
+const sourceDocSummary = ref({})
+const sourceDocTopicCounts = ref({})
 
 const isTopicDashboard = computed(() => route.name === 'market-intel-topic')
 const currentTopic = computed(() => topics.value.find(topic => topic.id === selectedTopic.value))
@@ -290,6 +311,12 @@ const strongestCategory = computed(() => [...(judgementOverview.value?.categorie
   .filter(category => Number(category.evidence_count || 0) > 0)
   .sort((a, b) => Number(b.evidence_count || 0) - Number(a.evidence_count || 0))[0] || null)
 const totalObservations = computed(() => topics.value.reduce((sum, topic) => sum + Number(topic.observation_count || 0), 0))
+const activeSourceDocCount = computed(() => {
+  const summary = isTopicDashboard.value
+    ? sourceDocTopicCounts.value[selectedTopic.value]
+    : sourceDocSummary.value
+  return Number(summary?.unverified || 0) + Number(summary?.needs_review || 0)
+})
 const coveredTopics = computed(() => topics.value.filter(topic => Number(topic.observation_count || 0) > 0).length)
 const unclassifiedTotal = computed(() => topics.value.reduce((sum, topic) => sum + Number(topic.unclassified_count || 0), 0))
 const enabledTaskCount = computed(() => tasks.value.filter(task => Number(task.enabled) === 1 || task.enabled === true).length)
@@ -345,6 +372,19 @@ function formatDateTime(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+function formatCount(value) { return Number(value || 0).toLocaleString('zh-CN') }
+
+async function loadSourceDocSummary() {
+  if (!auth.isAdmin) return
+  try {
+    const { data } = await api.get('/market-research/source-documents/summary')
+    sourceDocSummary.value = data.overall || {}
+    sourceDocTopicCounts.value = data.topics || {}
+  } catch {
+    sourceDocSummary.value = {}
+    sourceDocTopicCounts.value = {}
+  }
 }
 
 async function loadWorkbench() {
@@ -476,6 +516,23 @@ function goConfig(name) {
   router.push({ name, params: { id: 'market-intel' } })
   openConfigMenu.value = false
 }
+async function startCollection() {
+  if (collectionBusy.value) return
+  collectionBusy.value = true
+  collectionError.value = ''
+  try {
+    const requestId = globalThis.crypto?.randomUUID?.() || `mcb-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const { data } = await api.post('/market-research/collection-batches', {
+      request_id: requestId,
+      topic_id: isTopicDashboard.value ? selectedTopic.value : collectionTopicId.value,
+      mode: 'fetch_only',
+      max_items: 500,
+    })
+    await router.push({ name: 'market-intel-collection-detail', params: { batchId: data.id } })
+  } catch (err) {
+    collectionError.value = err.response?.data?.detail || '启动采集批次失败。'
+  } finally { collectionBusy.value = false }
+}
 function openCreate() {
   createOpen.value = true
 }
@@ -503,6 +560,7 @@ function onEscape(event) {
 
 onMounted(() => {
   loadWorkbench()
+  loadSourceDocSummary()
   window.addEventListener('keydown', onEscape)
 })
 watch(() => route.params.topicId, (topicId, previousTopicId) => {
@@ -512,6 +570,7 @@ watch(() => route.params.topicId, (topicId, previousTopicId) => {
   reviewMode.value = false
   selectedCategoryId.value = ''
   loadWorkbench()
+  loadSourceDocSummary()
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 </script>
@@ -625,6 +684,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
   font: 12px 'DM Sans', 'Noto Sans SC', sans-serif;
   letter-spacing: .02em;
 }
+.collection-start-button,.collection-progress-button
+{
+  padding: 8px 11px;
+  border: 1px solid #bd9b72;
+  border-radius: 6px;
+  color: #805d36;
+  background: #fffaf3;
+  cursor: pointer;
+  font: 600 12px 'Noto Sans SC',sans-serif;
+  white-space: nowrap;
+}
+.collection-progress-button { border-color:#e2e8f0; color:#65788a; background:#fff; }
+.source-documents-button { display:inline-flex; align-items:center; gap:7px; }
+.source-documents-count { padding:2px 6px; border-radius:999px; color:#755a36; background:#f7f0e5; font-size:10px; font-weight:500; }
+.collection-start-button:disabled { opacity:.6; cursor:wait; }
 .pulse-dot,.live-tick
 {
   display: inline-block;
@@ -1039,6 +1113,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
   color: #94a3b8;
   font-size: 12px;
 }
+.topic-count .topic-source-count { margin-top:4px; color:#956b3d; font-size:10px; white-space:nowrap; }
 .topic-arrow
 {
   position: absolute;

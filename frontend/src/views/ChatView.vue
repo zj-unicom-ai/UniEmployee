@@ -62,6 +62,7 @@
           <span>新对话</span>
         </n-button>
         <n-select
+          v-if="!props.employeeId"
           :value="currentEmp"
           :options="empOptions"
           size="small"
@@ -77,7 +78,8 @@
           class="model-select"
           @update:value="(v) => currentModel = v"
         />
-        <span class="emp-meta">{{ empMeta }}</span>
+        <span v-if="isMarketIntelWorkspace" class="emp-meta market-intel-meta">行业深研 · 来源可追溯</span>
+        <span v-else class="emp-meta">{{ empMeta }}</span>
         <n-button quaternary class="execution-button" :aria-expanded="executionOpen" @click="toggleDrawer('execution')">执行详情</n-button>
         <n-button size="small" class="trace-button" @click="openTrace">完整 Trace</n-button>
         <n-button v-if="currentEmp === 'net-ops'" size="small" :loading="exportingSecurity"
@@ -102,7 +104,59 @@
 
       <div class="msgs" ref="msgsRef">
         <div class="message-lane">
-        <section v-if="!messages.length" class="chat-welcome" aria-label="新对话快捷问题">
+        <section v-if="!messages.length && isMarketIntelWorkspace && routeReady && !currentEmployee" class="market-research-unavailable" aria-live="polite">
+          <h1>当前账号未分配小察</h1>
+          <p>请联系管理员在用户管理中分配行业研究员工后再开始对话。</p>
+        </section>
+
+        <section v-else-if="!messages.length && isMarketIntelWorkspace" class="market-research-welcome" aria-label="行业研究入口">
+          <div class="research-heading">
+            <div class="research-identity">
+              <span class="research-mark" aria-hidden="true">察</span>
+              <span>小察 · 行业深度研究</span>
+            </div>
+            <h1>把行业变化，放回产业链里看</h1>
+            <p>围绕智能硬件及关联产业，从市场、价值链、技术与政策中建立证据，再形成判断。</p>
+          </div>
+
+          <div class="research-framework" aria-label="默认研究视角">
+            <span>市场需求</span><i></i><span>产业链</span><i></i><span>竞争格局</span><i></i><span>技术与政策</span>
+          </div>
+
+          <div class="research-entry-grid">
+            <div class="research-prompts">
+              <div class="research-section-title">从一个研究问题开始</div>
+              <button
+                v-for="(item, index) in marketResearchPrompts"
+                :key="`${index}-${item.title}`"
+                type="button"
+                class="research-prompt"
+                :disabled="stream.sending.value || uploading"
+                @click="askQuickPrompt(item.prompt)"
+              >
+                <span class="research-prompt-index">{{ String(index + 1).padStart(2, '0') }}</span>
+                <span class="research-prompt-copy">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.detail }}</span>
+                </span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+              </button>
+            </div>
+
+            <aside class="research-method" aria-label="研究方法">
+              <div class="method-title">研究如何展开</div>
+              <ol>
+                <li><span>界定</span><p>明确行业口径、区域、时间和要回答的决策问题</p></li>
+                <li><span>取证</span><p>优先检索公告、政策、标准、财报和行业原始资料</p></li>
+                <li><span>核验</span><p>标注来源与日期，解释口径差异和证据缺口</p></li>
+                <li><span>判断</span><p>把事实、推断和情景分开，给出影响与观察信号</p></li>
+              </ol>
+            </aside>
+          </div>
+          <p class="research-footnote">默认关注智能硬件及上下游；也可以直接指定行业、地区和研究周期。</p>
+        </section>
+
+        <section v-else-if="!messages.length" class="chat-welcome" aria-label="新对话快捷问题">
           <div class="welcome-avatar">{{ (currentEmployee?.name || 'AI').slice(0, 1) }}</div>
           <h1>你好，我是{{ currentEmployee?.name || '数字员工' }}</h1>
           <p class="welcome-role">{{ currentEmployee?.role || '你的数字员工助手' }}</p>
@@ -161,10 +215,48 @@ import InputBar from '../components/chat/InputBar.vue'
 import { isCustomEmployee, routeNameForEmployee } from '../utils/employeeRoutes.js'
 
 defineOptions({ name: 'ChatView' })
+const props = defineProps({
+  employeeId: { type: String, default: '' },
+})
 const router = useRouter()
 const route = useRoute()
 const message = useMessage()
 const exportingSecurity = ref(false)
+const isMarketIntelWorkspace = computed(() => props.employeeId === 'market-intel')
+const marketResearchPrompts = computed(() => {
+  const configured = Array.isArray(currentEmployee.value?.quick_prompts)
+    ? currentEmployee.value.quick_prompts.filter(x => typeof x === 'string' && x.trim()).slice(0, 3)
+    : []
+  if (configured.length) {
+    return configured.map((prompt, index) => ({
+      title: `自定义研究问题 ${index + 1}`,
+      detail: '使用团队配置的快捷问法',
+      prompt,
+    }))
+  }
+  return [
+    {
+      title: '画出行业全景',
+      detail: '口径、规模、增长驱动与关键变量',
+      prompt: '请对中国智能硬件行业做一次深入研究。先界定行业口径与上下游范围，再分析市场规模与增速、主要赛道、需求驱动和关键不确定性。核心事实请标注来源链接、发布日期、统计口径和单位。',
+    },
+    {
+      title: '拆解产业链',
+      detail: '关键环节、价值分布、依赖与瓶颈',
+      prompt: '请以智能硬件为主题拆解上游核心部件、中游方案与制造、下游渠道和应用场景，识别各环节的价值分布、议价能力、依赖关系和瓶颈，并为关键判断提供来源链接与日期。',
+    },
+    {
+      title: '追踪技术路线',
+      detail: '成熟度、成本约束与商业化信号',
+      prompt: '请研究智能硬件中的端侧 AI 与 AIoT 技术演进和商业化进展，比较主要路线的成熟度、成本约束、代表企业布局及未来 12–24 个月的验证信号。区分已证实事实、分析判断和情景假设。',
+    },
+    {
+      title: '评估机会与风险',
+      detail: '从市场、政策、技术和竞争综合判断',
+      prompt: '请围绕智能硬件及关联产业，评估未来 1–3 年的行业机会与风险。从市场需求、产业链、技术、政策和竞争格局分析，说明证据、判断限制和建议跟踪的指标。',
+    },
+  ]
+})
 
 async function exportSecurityRecords() {
   exportingSecurity.value = true
@@ -246,11 +338,9 @@ const modelOptions = computed(() =>
 
 // 编排型对话页只展示 kind==='composed' 的员工；定制型员工有专属对话页，
 // 不应在本页可被选择（否则会丢失定制上下文如数据源/SQL 工具注入）。
-const empOptions = computed(() =>
-  employees.value
-    .filter(e => !isCustomEmployee(e))
-    .map(e => ({ label: e.role || e.name, value: e.id }))
-)
+const empOptions = computed(() => employees.value
+  .filter(e => props.employeeId ? e.id === props.employeeId : !isCustomEmployee(e))
+  .map(e => ({ label: e.role || e.name, value: e.id })))
 const currentEmployee = computed(() => employees.value.find(e => e.id === currentEmp.value) || null)
 const quickPrompts = computed(() => {
   const configured = Array.isArray(currentEmployee.value?.quick_prompts)
@@ -273,14 +363,14 @@ function scrollToBottom() {
 const stream = useChatStream({ stageStates, stageDetail, messages, scrollToBottom })
 
 async function setChatUrl(query, replace = false) {
-  const target = { name: 'chat', query }
+  const target = { name: route.name || 'chat', query }
   if (router.resolve(target).fullPath !== route.fullPath) {
     await router[replace ? 'replace' : 'push'](target)
   }
 }
 
 function markConversationPersisted(cid) {
-  if (convId.value !== cid || route.name !== 'chat') return
+  if (convId.value !== cid || route.name !== (props.employeeId ? routeNameForEmployee(props.employeeId) : 'chat')) return
   persistedConvId.value = cid
   // 新会话在第一条消息被服务端接收后才落库，此时地址才可以用于刷新恢复。
   void setChatUrl({ conv: cid }, true)
@@ -442,7 +532,7 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
     if (data.error) { message.error(data.error); return false }
     // 会话属于定制型员工时，重定向到该员工的专属对话路由，避免丢失定制上下文
     const targetRoute = routeNameForEmployee(data.employee_id)
-    if (targetRoute !== 'chat') {
+    if (targetRoute !== route.name) {
       await router.replace({ name: targetRoute, query: { conv: cid } })
       return true
     }
@@ -510,6 +600,7 @@ async function openConversation(cid, { syncUrl = true, replaceUrl = false } = {}
 
 /* ---------- 员工切换 ---------- */
 async function selectEmployee(empId, { syncUrl = true, replaceUrl = false } = {}) {
+  if (props.employeeId && empId !== props.employeeId) return false
   if (stream.sending.value) {
     message.warning('请先停止当前生成，再切换员工')
     return false
@@ -586,10 +677,12 @@ onMounted(async () => {
       const opened = await openConversation(qconv, { syncUrl: false })
       // 会话存在且属编排型才加载该员工历史；否则回退选第一个员工
       if (!opened && empOptions.value.length) await selectEmployee(empOptions.value[0].value, { replaceUrl: true })
-    } else if (data.length) {
-      // ?emp= 指定要打开的编排型员工（首页员工卡片入口）；无效或定制型时回退第一个
-      const target = route.query.emp && data.find(e => e.id === route.query.emp && !isCustomEmployee(e))
-      await selectEmployee(target ? target.id : (empOptions.value[0]?.value || data[0].id), { replaceUrl: true })
+    } else if (empOptions.value.length) {
+      // 专属工作台固定使用路由绑定员工；通用对话页支持 ?emp= 选择编排型员工。
+      const target = props.employeeId
+        ? empOptions.value.find(e => e.value === props.employeeId)
+        : empOptions.value.find(e => e.value === route.query.emp)
+      await selectEmployee(target?.value || empOptions.value[0].value, { replaceUrl: true })
     }
   } catch (e) {
     empMeta.value = '员工列表加载失败：' + e.message
@@ -609,8 +702,8 @@ watch(() => [route.query.conv, route.query.emp], async ([cid, emp]) => {
     }
     return
   }
-  const targetEmp = typeof emp === 'string' && empOptions.value.some(e => e.value === emp)
-    ? emp : (empOptions.value[0]?.value || null)
+  const targetEmp = props.employeeId || (typeof emp === 'string' && empOptions.value.some(e => e.value === emp)
+    ? emp : (empOptions.value[0]?.value || null))
   if (targetEmp && (persistedConvId.value || currentEmp.value !== targetEmp)) {
     const requestedRoute = route.fullPath
     const created = await selectEmployee(targetEmp, { syncUrl: false })
@@ -654,6 +747,42 @@ onBeforeUnmount(() => {
 .msgs { flex: 1; overflow-y: auto; padding: 28px clamp(24px, 4vw, 72px) 18px; min-height: 0; }
 .message-lane { width: min(100%, 1080px); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
 .chat-layout.full-width-mode .message-lane { width: 100%; max-width: none; }
+.market-intel-meta { color: #147b78; font-weight: 600; }
+.market-research-unavailable { width: min(100%, 620px); margin: auto; padding: 48px 20px; text-align: center; }
+.market-research-unavailable h1 { margin: 0 0 9px; color: #203a46; font-size: 20px; }
+.market-research-unavailable p { margin: 0; color: #687d85; font-size: 13px; line-height: 1.7; }
+.market-research-welcome {
+  width: min(100%, 980px);
+  margin: auto;
+  padding: clamp(24px, 4vh, 48px) 0;
+  color: #172b3a;
+}
+.research-heading { max-width: 760px; }
+.research-identity { display: flex; align-items: center; gap: 10px; color: #147b78; font-size: 13px; font-weight: 650; }
+.research-mark { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #a7ceca; border-radius: 50%; color: #116e70; font-size: 15px; }
+.research-heading h1 { margin: 17px 0 9px; color: #172b3a; font-size: clamp(27px, 3.3vw, 38px); line-height: 1.2; font-weight: 650; letter-spacing: -.035em; }
+.research-heading p { max-width: 680px; margin: 0; color: #5c6f7a; font-size: 14px; line-height: 1.8; }
+.research-framework { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 27px 0 30px; color: #526a74; font-size: 12px; }
+.research-framework i { width: 25px; height: 1px; background: #b8cac8; }
+.research-entry-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(250px, .8fr); gap: clamp(22px, 4vw, 48px); align-items: start; }
+.research-section-title, .method-title { margin: 0 0 11px; color: #263e4a; font-size: 14px; font-weight: 650; }
+.research-prompts { min-width: 0; }
+.research-prompt { display: flex; width: 100%; min-height: 68px; align-items: center; gap: 15px; padding: 12px 6px; border: 0; border-top: 1px solid #e0e8e5; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.research-prompt:last-child { border-bottom: 1px solid #e0e8e5; }
+.research-prompt:hover { background: #f1f7f5; }
+.research-prompt:focus-visible { outline: 2px solid #147b78; outline-offset: 2px; }
+.research-prompt:disabled { cursor: wait; opacity: .55; }
+.research-prompt-index { width: 25px; flex: 0 0 25px; color: #b97829; font-size: 12px; font-variant-numeric: tabular-nums; }
+.research-prompt-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
+.research-prompt-copy strong { color: #1e3744; font-size: 14px; font-weight: 620; }
+.research-prompt-copy span { color: #71828a; font-size: 12px; line-height: 1.5; }
+.research-prompt svg { width: 17px; height: 17px; flex: 0 0 17px; fill: none; stroke: #147b78; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.research-method { padding: 18px 18px 17px; border-left: 3px solid #2f918b; background: #f1f6f4; }
+.research-method ol { display: grid; gap: 13px; margin: 0; padding: 0; list-style: none; }
+.research-method li { display: grid; grid-template-columns: 43px 1fr; gap: 10px; align-items: start; }
+.research-method li > span { padding-top: 1px; color: #147b78; font-size: 12px; font-weight: 650; }
+.research-method li p { margin: 0; color: #5c6f7a; font-size: 12px; line-height: 1.65; }
+.research-footnote { margin: 19px 0 0; color: #809097; font-size: 11px; line-height: 1.6; }
 .chat-welcome { width: min(100%, 540px); margin: auto; padding: 18px 0 10vh; text-align: center; transform: translateY(-3vh); }
 .welcome-avatar { display: grid; width: 58px; height: 58px; margin: 0 auto 16px; place-items: center; border-radius: 19px 19px 19px 6px; background: linear-gradient(145deg, #eef2ff, #dbeafe); color: #3157c8; font-size: 24px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(49, 87, 200, .08); }
 .chat-welcome h1 { margin: 0; color: #172033; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
@@ -688,5 +817,10 @@ onBeforeUnmount(() => {
   .message-lane { gap: 8px; }
   .chat-welcome { width: min(100%, 480px); padding: 12px 4px 8vh; }
   .chat-welcome h1 { font-size: 19px; }
+  .market-research-welcome { padding: 16px 0 24px; }
+  .research-entry-grid { grid-template-columns: 1fr; gap: 22px; }
+  .research-framework { gap: 8px; margin: 20px 0 24px; }
+  .research-framework i { width: 13px; }
+  .research-method { padding: 15px; }
 }
 </style>

@@ -18,6 +18,7 @@ fastmcp==3.4.4
 httpx==0.28.1
 tzdata==2025.2
 python-docx==1.2.0
+python-pptx==1.0.2
 # 数据分析员工（analyst）依赖
 SQLAlchemy==2.0.41
 jieba==0.42.1

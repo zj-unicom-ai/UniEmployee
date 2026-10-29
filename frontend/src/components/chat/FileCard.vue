@@ -1,4 +1,4 @@
-<!-- 会话产物文件卡片：HTML、DOCX 与 Markdown 默认展开预览，其他文本按需预览 -->
+<!-- 会话产物文件卡片：HTML、DOCX、PPTX 与 Markdown 默认展开预览，其他文本按需预览 -->
 <template>
   <div class="file-card">
     <div class="file-row">
@@ -12,6 +12,9 @@
       </n-button>
       <n-button v-if="isDocx" size="tiny" @click="toggleDocxPreview">
         {{ showDocxPreview ? '收起文档' : '预览文档' }}
+      </n-button>
+      <n-button v-if="isPptx" size="tiny" type="primary" @click="togglePptxPreview">
+        {{ showPptxPreview ? '收起 PPT' : '在线预览 PPT' }}
       </n-button>
       <n-button v-if="isHtml" size="tiny" type="primary" @click="toggleHtmlPreview">
         {{ showHtmlPreview ? '收起看板' : '打开看板' }}
@@ -50,6 +53,14 @@
       </div>
       <DocumentPreview v-else-if="docxHtml" :html="docxHtml" :title="file.name" />
     </div>
+    <div v-if="isPptx && showPptxPreview" class="docx-preview">
+      <div v-if="loadingPptx" class="html-preview-state">正在生成 PPT 预览…</div>
+      <div v-else-if="pptxError" class="html-preview-state html-preview-error">
+        {{ pptxError }}
+        <n-button size="tiny" @click="loadPptxPreview">重试</n-button>
+      </div>
+      <DocumentPreview v-else-if="pptxHtml" :html="pptxHtml" :title="file.name" />
+    </div>
   </div>
 </template>
 
@@ -79,6 +90,10 @@ const showDocxPreview = ref(false)
 const loadingDocx = ref(false)
 const docxError = ref('')
 const docxHtml = ref('')
+const showPptxPreview = ref(false)
+const loadingPptx = ref(false)
+const pptxError = ref('')
+const pptxHtml = ref('')
 const imageUrl = ref('')
 const imageError = ref('')
 const loadingImage = ref(false)
@@ -88,9 +103,11 @@ let previewController = null
 const ext = computed(() => (props.file.name || '').split('.').pop().toLowerCase())
 const isHtml = computed(() => ext.value === 'html' || ext.value === 'htm')
 const isDocx = computed(() => ext.value === 'docx')
+const isPptx = computed(() => ext.value === 'pptx')
 const isImage = computed(() => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'].includes(ext.value))
 const icon = computed(() => {
   if (isHtml.value) return '📊'
+  if (isPptx.value) return '📊'
   if (ext.value === 'docx' || ext.value === 'doc') return '📄'
   if (ext.value === 'csv' || ext.value === 'xlsx') return '📊'
   if (['md', 'txt', 'log'].includes(ext.value)) return '📝'
@@ -232,6 +249,33 @@ async function loadDocxPreview() {
   }
 }
 
+async function loadPptxPreview() {
+  previewController?.abort()
+  const controller = new AbortController()
+  previewController = controller
+  const seq = ++requestSeq.value
+  loadingPptx.value = true
+  pptxError.value = ''
+  try {
+    const endpoint = fileEndpoint(true)
+    const res = await api.get(endpoint.url, {
+      params: endpoint.params,
+      responseType: 'text',
+      timeout: 60000,
+      signal: controller.signal,
+    })
+    if (seq !== requestSeq.value) return
+    pptxHtml.value = typeof res.data === 'string' ? res.data : ''
+    if (!pptxHtml.value.trim()) pptxError.value = 'PPT 预览内容为空'
+  } catch (e) {
+    if (seq === requestSeq.value && e.code !== 'ERR_CANCELED') {
+      pptxError.value = 'PPT 预览失败：' + errorMessage(e, '请稍后重试')
+    }
+  } finally {
+    if (seq === requestSeq.value) loadingPptx.value = false
+  }
+}
+
 function clearImageUrl() {
   if (imageUrl.value) URL.revokeObjectURL(imageUrl.value)
   imageUrl.value = ''
@@ -283,6 +327,11 @@ function toggleDocxPreview() {
   if (showDocxPreview.value && !docxHtml.value) loadDocxPreview()
 }
 
+function togglePptxPreview() {
+  showPptxPreview.value = !showPptxPreview.value
+  if (showPptxPreview.value && !pptxHtml.value) loadPptxPreview()
+}
+
 watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|'), () => {
   previewController?.abort()
   requestSeq.value += 1
@@ -297,14 +346,22 @@ watch(() => [props.file.artifact_id, props.file.path, props.file.name].join('|')
   docxHtml.value = ''
   docxError.value = ''
   loadingDocx.value = false
+  pptxHtml.value = ''
+  pptxError.value = ''
+  loadingPptx.value = false
   clearImageUrl()
   imageError.value = ''
   loadingImage.value = false
   showHtmlPreview.value = isHtml.value
   showDocxPreview.value = isDocx.value
+  showPptxPreview.value = false
   if (ext.value === 'md') loadTextPreview()
   else if (isHtml.value) loadHtmlPreview()
   else if (isDocx.value) loadDocxPreview()
+  else if (isPptx.value) {
+    showPptxPreview.value = true
+    loadPptxPreview()
+  }
   else if (isImage.value) loadImagePreview()
 }, { immediate: true })
 

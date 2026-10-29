@@ -29,6 +29,7 @@ from app.tools.search import bocha_search
 from app.tools.time_tools import get_current_time
 from app.tools.publish_tools import publish_briefing
 from app.tools.market_research import save_market_observation, save_market_judgement
+from app.tools.ppt_tools import generate_china_unicom_ppt
 from app.tools.wiki_tools import query_product_wiki, list_product_catalog
 from app.workflows.refund import make_start_refund
 # 数据分析员工 SQL 工具集（从 Aix-DB 适配搬迁）
@@ -58,6 +59,7 @@ ALL_LOCAL_TOOLS = {
     "publish_briefing": publish_briefing,
     "save_market_observation": save_market_observation,
     "save_market_judgement": save_market_judgement,
+    "generate_china_unicom_ppt": generate_china_unicom_ppt,
     # 兼容旧员工配置；实现已改为 RAGFlow 检索，不再读取本地 product-wiki。
     "query_product_wiki": query_product_wiki,
     "list_product_catalog": list_product_catalog,

@@ -63,6 +63,26 @@ const routes = [
         component: () => import('../views/agent/market-intel/MarketIntelWorkbench.vue'),
       },
       {
+        path: 'market-intel/sources',
+        name: 'market-intel-sources',
+        component: () => import('../views/agent/market-intel/MarketIntelSources.vue'),
+      },
+      {
+        path: 'market-intel/unverified',
+        name: 'market-intel-unverified',
+        component: () => import('../views/agent/market-intel/MarketIntelUnverifiedDocs.vue'),
+      },
+      {
+        path: 'market-intel/collection',
+        name: 'market-intel-collection',
+        component: () => import('../views/agent/market-intel/MarketIntelCollectionRuns.vue'),
+      },
+      {
+        path: 'market-intel/collection/:batchId',
+        name: 'market-intel-collection-detail',
+        component: () => import('../views/agent/market-intel/MarketIntelCollectionRuns.vue'),
+      },
+      {
         path: 'market-intel/topics/:topicId',
         name: 'market-intel-topic',
         component: () => import('../views/agent/market-intel/MarketIntelWorkbench.vue'),

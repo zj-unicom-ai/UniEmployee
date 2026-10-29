@@ -1,0 +1,1870 @@
+{
+  "schema_version": "market-source-import-proposal-v1",
+  "status": "design_artifact_not_runtime_seed",
+  "snapshot_date": "2026-10-28",
+  "timezone": "Asia/Shanghai",
+  "origin": {
+    "kind": "repository_config",
+    "project": "local-news-project",
+    "path": "industry/sources.json",
+    "git_head": "589f79eff09470b31ba8a7f1d9eb62d36ff2be6c",
+    "file_sha256": "41cdb857679ee570fe146808fad58fe0352caf703e1a88cb96807bfe2ddaed11",
+    "runtime_database_verified": false,
+    "note": "运行库只读核对因认证失败未完成；本清单为工作区配置快照，不声称为运行库实况或本日连通性核验结果。"
+  },
+  "summary": {
+    "total": 44,
+    "rss": 44,
+    "desired_enabled": 37,
+    "desired_disabled": 7
+  },
+  "import_policy": {
+    "tenant_id": "resolved_from_authenticated_context",
+    "dry_run_required": true,
+    "activate_on_import": false,
+    "preserve_existing_admin_edits": true,
+    "copy_cursors": false,
+    "copy_articles": false,
+    "copy_credentials": false,
+    "topic_routing_is_proposed": true
+  },
+  "sources": [
+    {
+      "id": "rss-openai-news",
+      "name": "OpenAI News",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://openai.com/news/rss.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-openai-news",
+        "owner_entity_id": "openai",
+        "config": {
+          "feedUrl": "https://openai.com/news/rss.xml",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-google-deepmind",
+      "name": "Google DeepMind",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://deepmind.google/blog/rss.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "前沿模型",
+        "世界模型",
+        "AI for Science"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier",
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-google-deepmind",
+        "owner_entity_id": "google",
+        "config": {
+          "feedUrl": "https://deepmind.google/blog/rss.xml",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-google-research",
+      "name": "Google Research",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://research.google/blog/rss/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-google-research",
+        "owner_entity_id": "google",
+        "config": {
+          "feedUrl": "https://research.google/blog/rss/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-hugging-face",
+      "name": "Hugging Face Blog",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://huggingface.co/blog/feed.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "开源",
+        "论文与通用",
+        "开源生态"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-hugging-face",
+        "owner_entity_id": "hugging-face",
+        "config": {
+          "feedUrl": "https://huggingface.co/blog/feed.xml",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-microsoft-research",
+      "name": "Microsoft Research",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.microsoft.com/en-us/research/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-microsoft-research",
+        "owner_entity_id": "microsoft",
+        "config": {
+          "feedUrl": "https://www.microsoft.com/en-us/research/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-nvidia-blog",
+      "name": "NVIDIA Blog",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://blogs.nvidia.com/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-nvidia-blog",
+        "owner_entity_id": "nvidia",
+        "config": {
+          "feedUrl": "https://blogs.nvidia.com/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-aws-ml",
+      "name": "AWS Machine Learning Blog",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://aws.amazon.com/blogs/machine-learning/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "教程"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-aws-ml",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://aws.amazon.com/blogs/machine-learning/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-github-ai",
+      "name": "GitHub Blog · AI & ML",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://github.blog/ai-and-ml/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-github-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://github.blog/ai-and-ml/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-mistral",
+      "name": "Mistral AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://mistral.ai/rss.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "官方",
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-mistral",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://mistral.ai/rss.xml",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-bair",
+      "name": "Berkeley AI Research",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://bair.berkeley.edu/blog/feed.xml",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "tags": [
+        "研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-bair",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://bair.berkeley.edu/blog/feed.xml",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-the-verge-ai",
+      "name": "The Verge · AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": [
+        "媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-the-verge-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-techcrunch-ai",
+      "name": "TechCrunch · AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": [
+        "媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-techcrunch-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://techcrunch.com/category/artificial-intelligence/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-ars-technica-ai",
+      "name": "Ars Technica · AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://arstechnica.com/ai/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": [
+        "媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-ars-technica-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://arstechnica.com/ai/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-mit-tech-review-ai",
+      "name": "MIT Technology Review · AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-mit-tech-review-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-the-decoder",
+      "name": "The Decoder",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://the-decoder.com/feed/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 60,
+      "tags": [
+        "媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-the-decoder",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://the-decoder.com/feed/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-simon-willison",
+      "name": "Simon Willison",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://simonwillison.net/atom/everything/",
+        "sort_by_published_at": false,
+        "initial_backfill_limit": 8,
+        "initial_backfill_months": 12
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "个人"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-simon-willison",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://simonwillison.net/atom/everything/",
+          "_aihot": {
+            "initialBackfillLimit": 8
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-import-ai",
+      "name": "Import AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://importai.substack.com/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "tags": [
+        "个人",
+        "周刊",
+        "前沿模型",
+        "论文与通用"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-import-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://importai.substack.com/feed",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-latent-space",
+      "name": "Latent Space",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.latent.space/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 180,
+      "tags": [
+        "个人",
+        "前沿模型",
+        "AI 应用落地"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-latent-space",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.latent.space/feed",
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          },
+          "sortByPublishedAt": true
+        }
+      }
+    },
+    {
+      "id": "rss-arxiv-cs-ai",
+      "name": "arXiv · cs.AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://rss.arxiv.org/rss/cs.AI",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "论文与通用",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-arxiv-cs-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://rss.arxiv.org/rss/cs.AI",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-arxiv-cs-ro",
+      "name": "arXiv · cs.RO",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://rss.arxiv.org/rss/cs.RO",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "物理 AI / 机器人",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-arxiv-cs-ro",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://rss.arxiv.org/rss/cs.RO",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-arxiv-cs-lg",
+      "name": "arXiv · cs.LG",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://rss.arxiv.org/rss/cs.LG",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "论文与通用",
+        "前沿模型",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-arxiv-cs-lg",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://rss.arxiv.org/rss/cs.LG",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-arxiv-cs-cl",
+      "name": "arXiv · cs.CL",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://rss.arxiv.org/rss/cs.CL",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "论文与通用",
+        "前沿模型",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-arxiv-cs-cl",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://rss.arxiv.org/rss/cs.CL",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-arxiv-cs-cv",
+      "name": "arXiv · cs.CV",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://rss.arxiv.org/rss/cs.CV",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "论文与通用",
+        "世界模型",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier",
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-arxiv-cs-cv",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://rss.arxiv.org/rss/cs.CV",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-epoch-ai",
+      "name": "Epoch AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://epochai.substack.com/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "前沿模型",
+        "年度报告"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-epoch-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://epochai.substack.com/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-qwen-blog",
+      "name": "Qwen Blog",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://qwenlm.github.io/blog/index.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-qwen-blog",
+        "owner_entity_id": "qwen",
+        "config": {
+          "feedUrl": "https://qwenlm.github.io/blog/index.xml",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-interconnects",
+      "name": "Interconnects",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.interconnects.ai/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "前沿模型",
+        "论文与通用"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-interconnects",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.interconnects.ai/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-qbitai",
+      "name": "量子位",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.qbitai.com/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "前沿模型",
+        "AI 应用落地"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-qbitai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.qbitai.com/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-product-hunt",
+      "name": "Product Hunt",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.producthunt.com/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI 应用落地",
+        "产品动态"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-product-hunt",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.producthunt.com/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-36kr-ai",
+      "name": "36氪",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://36kr.com/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI 应用落地",
+        "产业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-36kr-ai",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://36kr.com/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-geekpark",
+      "name": "极客公园",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.geekpark.net/rss",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI 应用落地",
+        "产业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-geekpark",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.geekpark.net/rss",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-a16z",
+      "name": "a16z",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://a16z.com/feed/",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI 应用落地",
+        "投资机构报告"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-a16z",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://a16z.com/feed/",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-nvidia-technical-blog",
+      "name": "NVIDIA Technical Blog",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://developer.nvidia.com/blog/feed",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "物理 AI / 机器人",
+        "世界模型",
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier",
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-nvidia-technical-blog",
+        "owner_entity_id": "nvidia",
+        "config": {
+          "feedUrl": "https://developer.nvidia.com/blog/feed",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-ieee-robotics",
+      "name": "IEEE Spectrum Robotics",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://spectrum.ieee.org/feeds/topic/robotics.rss",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "物理 AI / 机器人",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-ieee-robotics",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://spectrum.ieee.org/feeds/topic/robotics.rss",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-robot-report",
+      "name": "The Robot Report",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.therobotreport.com/feed/",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "物理 AI / 机器人",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "embodied-intelligence"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-robot-report",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.therobotreport.com/feed/",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-biorxiv",
+      "name": "bioRxiv",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://connect.biorxiv.org/biorxiv_xml.php?subject=all",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-biorxiv",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://connect.biorxiv.org/biorxiv_xml.php?subject=all",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-medrxiv",
+      "name": "medRxiv",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://connect.medrxiv.org/medrxiv_xml.php?subject=all",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-medrxiv",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://connect.medrxiv.org/medrxiv_xml.php?subject=all",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-nature",
+      "name": "Nature",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.nature.com/nature.rss",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "论文/研究"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-nature",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.nature.com/nature.rss",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-nature-machine-intelligence",
+      "name": "Nature Machine Intelligence",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.nature.com/natmachintell.rss",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "论文/研究",
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-nature-machine-intelligence",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.nature.com/natmachintell.rss",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-science-news",
+      "name": "Science News",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.science.org/rss/news_current.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-science-news",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.science.org/rss/news_current.xml",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-stat-news",
+      "name": "STAT News",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.statnews.com/feed/",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-stat-news",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.statnews.com/feed/",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-fierce-biotech",
+      "name": "Fierce Biotech",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.fiercebiotech.com/rss/xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-fierce-biotech",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.fiercebiotech.com/rss/xml",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-biopharma-dive",
+      "name": "BioPharma Dive",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://www.biopharmadive.com/feeds/news/",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-biopharma-dive",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://www.biopharmadive.com/feeds/news/",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-endpoints",
+      "name": "Endpoints News",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://endpoints.news/feed/",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": false,
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "生物医药",
+        "行业媒体"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-endpoints",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://endpoints.news/feed/",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "rss-sakana",
+      "name": "Sakana AI",
+      "kind": "rss",
+      "config": {
+        "feed_url": "https://sakana.ai/feed.xml",
+        "sort_by_published_at": true,
+        "initial_backfill_limit": 2,
+        "initial_backfill_months": 6
+      },
+      "desired_enabled": true,
+      "tier": "T1",
+      "first_party": true,
+      "participation_mode": "editorial",
+      "interval_minutes": 120,
+      "tags": [
+        "AI for Science",
+        "前沿模型"
+      ],
+      "routing": {
+        "candidate_topic_ids": [
+          "ai-frontier"
+        ],
+        "category_mode": "classify_per_document",
+        "status": "proposed"
+      },
+      "site_fulltext": false,
+      "syndicate_fulltext": false,
+      "availability_status": "not_rechecked",
+      "origin": {
+        "source_id": "rss-sakana",
+        "owner_entity_id": null,
+        "config": {
+          "feedUrl": "https://sakana.ai/feed.xml",
+          "sortByPublishedAt": true,
+          "_aihot": {
+            "initialBackfillLimit": 2,
+            "initialBackfillMonths": 6
+          }
+        }
+      }
+    }
+  ]
+}

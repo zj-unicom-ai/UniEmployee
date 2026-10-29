@@ -18,5 +18,6 @@
 | [本地开源业务系统对接候选](./open-source-business-systems-research.md) | EspoCRM、Zammad、ERPNext、Chatwoot 的场景匹配、部署与 API 依据 | 产品负责人 / 开发者 |
 | [本地 CRM Lab 集成验证记录](./crm-lab-integration-validation.md) | 合成 CRM API、MCP 与 Agent 端到端验证结果和 Docker 尚未覆盖项 | 开发者 / 验收人员 |
 | [企业业务本体演示问题清单](./ontology-demo-scenarios.md) | 路径查询、客户 360、实体展开、故障影响等 9 个已实测演示场景 | 售前 / 演示人员 / QA |
+| [小察数据源配置与持续研究技术方案](./market-intel-source-ingestion-design.md) | 小察信源配置、44 个首批 RSS、一键分批采集、队列进度、稳定性与质量门禁、研究到行动闭环 | 产品负责人 / 技术负责人 / 开发者 |
 
 快速索引：改配置看[配置参考](./configuration.md)；跑不起来看[部署排障速查](./deployment.md#排障速查)；想加员工看[新增指南](./add-employee.md)。
