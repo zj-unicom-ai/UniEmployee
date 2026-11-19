@@ -41,6 +41,7 @@ def _conn():
     """
     if dblayer.is_pg():
         return dblayer.connect("catalog")
+    DB.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(DB))
     con.row_factory = sqlite3.Row
     return con
