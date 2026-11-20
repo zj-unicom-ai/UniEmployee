@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -427,6 +428,21 @@ def test_fetch_only_keeps_feed_entry_when_article_page_is_blocked_and_retries_it
 
 
 def test_initial_backfill_excludes_undated_and_out_of_window_items(monkeypatch):
+    fixed_now = datetime(2026, 11, 20, 12, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(market_sources, "datetime", FrozenDateTime)
+    cutoff = fixed_now - timedelta(days=90)
+
+    def month_offset(offset):
+        month_index = cutoff.year * 12 + cutoff.month - 1 + offset
+        year, month_index = divmod(month_index, 12)
+        return f"{year:04d}-{month_index + 1:02d}"
+
     source = market_sources.create_source("tenant-a", "admin-a", {
         "name": "Three month feed", "kind": "rss",
         "config": {"feed_url": "https://three-month.example/rss", "initial_backfill_limit": 500,
@@ -437,7 +453,7 @@ def test_initial_backfill_excludes_undated_and_out_of_window_items(monkeypatch):
         con.execute("UPDATE market_sources SET health='healthy' WHERE tenant_id=? AND id=?", ("tenant-a", source["id"]))
     source = market_sources.set_enabled("tenant-a", "admin-a", source["id"], True, source["config_version"])
     run = market_sources.queue_collect("tenant-a", "admin-a", source["id"])
-    recent_date = market_research._now()
+    recent_date = fixed_now.isoformat()
     candidates = [
         {"external_id": "recent", "title": "Recent", "url": "https://publisher.example/recent", "published_at": recent_date,
          "summary": "recent", "body_text": "", "content_source": "summary", "has_fulltext": False},
@@ -446,11 +462,11 @@ def test_initial_backfill_excludes_undated_and_out_of_window_items(monkeypatch):
         {"external_id": "unknown", "title": "Unknown date", "url": "https://publisher.example/unknown", "published_at": "",
          "summary": "unknown", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "recent-month", "title": "Recent month", "url": "https://arxiv.org/abs/2608.12345", "published_at": "",
-         "publication_month": "2026-08", "summary": "recent month", "body_text": "", "content_source": "summary", "has_fulltext": False},
+         "publication_month": month_offset(1), "summary": "recent month", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "cutoff-month", "title": "Cutoff month", "url": "https://arxiv.org/abs/2607.12345", "published_at": "",
-         "publication_month": "2026-07", "summary": "cutoff month", "body_text": "", "content_source": "summary", "has_fulltext": False},
+         "publication_month": month_offset(0), "summary": "cutoff month", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "old-month", "title": "Old month", "url": "https://arxiv.org/abs/2606.12345", "published_at": "",
-         "publication_month": "2026-06", "summary": "old month", "body_text": "", "content_source": "summary", "has_fulltext": False},
+         "publication_month": month_offset(-1), "summary": "old month", "body_text": "", "content_source": "summary", "has_fulltext": False},
     ]
     monkeypatch.setattr(market_sources, "fetch_feed", lambda *args, **kwargs: {
         "status": 200, "url": "https://three-month.example/rss", "body": b"<rss/>", "etag": "v1", "last_modified": ""})
