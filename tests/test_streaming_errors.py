@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.exceptions import ModelRefusalError
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from app import runtime, traces
@@ -72,6 +73,15 @@ def test_generic_error_uses_internal_code():
     errs = [e for e in events if e["type"] == "error"]
     assert errs and errs[-1]["error_code"] == "internal_error"
     assert "secret-detail" not in errs[-1]["message"]
+
+
+def test_model_refusal_maps_to_refusal_code():
+    events, _ = asyncio.run(collect_error(
+        ModelRefusalError("Model refused: provider-private-details")))
+    errs = [e for e in events if e["type"] == "error"]
+    assert errs and errs[-1]["error_code"] == "model_refusal"
+    assert errs[-1]["message"] == "模型拒绝了该请求，请调整后重试"
+    assert "provider-private-details" not in errs[-1]["message"]
 
 
 def test_timeout_error_maps_to_timeout():
