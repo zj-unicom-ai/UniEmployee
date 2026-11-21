@@ -11,6 +11,7 @@ import re
 import sqlite3
 import time
 
+from langchain_core.exceptions import ModelRefusalError
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app import runtime, traces, catalog, approvals, conversations, guard
@@ -68,6 +69,8 @@ def _classify_error(exc: BaseException) -> tuple[str, str]:
     """把运行时异常映射为稳定的 error_code，避免把内部异常文本直接暴露给前端。"""
     name = type(exc).__name__
     text = str(exc).lower()
+    if isinstance(exc, ModelRefusalError):
+        return "model_refusal", "模型拒绝了该请求，请调整后重试"
     if "sandbox" in name.lower() or "sandbox" in text:
         return "sandbox_unavailable", "沙箱执行环境启动失败或不可达，请稍后重试"
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in text:
