@@ -1,6 +1,6 @@
 [project]
 name = "uniemployee"
-version = "0.25.0"
+version = "0.26.0"
 description = "UniEmployee 数字员工平台——基于 deepagents 的多租户数字员工运行平台"
 requires-python = ">=3.12"
 readme = "README.md"
@@ -25,6 +25,7 @@ dependencies = [
     "langchain-mcp-adapters==0.3.0",
     "langchain-openai==1.4.1",
     "fastmcp==3.4.4",
+    "octop-gateway==1.0.3",
     "httpx==0.28.1",
     "cryptography==45.0.5",
     "tzdata==2025.2",
