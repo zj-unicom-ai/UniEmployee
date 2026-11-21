@@ -399,6 +399,25 @@ async def _assemble_tools(spec: EmployeeSpec, checkpointer=None,
             cfg = dict(cfg)
             transport = (cfg.get("transport") or "stdio").lower()
             cfg["transport"] = transport
+            from app.connectors import oauth as connector_oauth
+            if connector_oauth.is_oauth_config(cfg):
+                # OAuth grants are user-scoped. Admin/template warmup has no
+                # user identity, so it must not compile this connector.
+                if not user_id:
+                    continue
+                user = _users.get_user(user_id)
+                if not user:
+                    continue
+                if transport not in ("http", "streamable-http", "streamable_http", "sse"):
+                    print(f"[mcp] OAuth 连接器 {name} 仅支持 HTTP/SSE，已跳过")
+                    continue
+                cfg = {
+                    key: value for key, value in cfg.items()
+                    if key != "auth_type" and not key.startswith("oauth_")
+                }
+                cfg["auth"] = connector_oauth.runtime_auth(
+                    name, user_id, user.get("tenant_id") or "default"
+                )
             if transport == "stdio":
                 if name == "crm_lab":
                     # MCP 子进程的 env 不继承应用进程的全部变量；仅传入此

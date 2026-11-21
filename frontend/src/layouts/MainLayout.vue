@@ -119,6 +119,7 @@ const mainNavOptions = [
   { label: '产物工作区', key: 'artifacts', icon: iconEl('<path d="M7 3h7l5 5v13H7a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 3v5h5M9 13h6M9 17h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '会话历史', key: 'history', icon: iconEl('<path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
   { label: '资源中心', key: 'resources', icon: iconEl('<path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
+  { label: '我的连接器', key: 'my-connectors', icon: iconEl('<path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.72-1.71" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') },
 ]
 
 const adminOnlyNavOptions = [
@@ -149,7 +150,7 @@ const settingsNavOptions = [
 
 const pageTitleMap = {
   home: '平台首页', chat: '对话工作台', artifacts: '产物工作区', history: '会话历史',
-  trace: '执行过程', resources: '资源中心',
+  trace: '执行过程', resources: '资源中心', 'my-connectors': '我的连接器',
   admin: '员工管理', users: '用户管理', 'change-password': '修改密码',
   im: 'IM 频道', ontology: '业务本体', cases: '案例', 'case-detail': '案例详情',
   automation: '自动任务',
@@ -176,7 +177,7 @@ const activeKey = computed(() => {
 })
 
 const menuOptions = computed(() => {
-  // 显式顺序：平台首页 → 对话工作台 → 产物工作区 → [员工管理] → 资源中心
+  // 显式顺序：平台首页 → 对话工作台 → 产物工作区 → [员工管理] → 资源中心 → 我的连接器
   //         → [业务本体/自动任务/用户管理/运行评估] → 会话历史 → [系统设置]
   // 方括号项仅 admin 可见
   const items = []
@@ -187,6 +188,7 @@ const menuOptions = computed(() => {
     items.push(adminOnlyNavOptions.find(x => x.key === 'admin'))
   }
   items.push(mainNavOptions.find(x => x.key === 'resources'))
+  items.push(mainNavOptions.find(x => x.key === 'my-connectors'))
   if (auth.isAdmin) {
     items.push(...adminOnlyNavOptions.filter(x => x.key !== 'admin'))
   }

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.25.0 (2026-11-21)
+
+### 新增：OAuth MCP 连接器
+
+- 支持 OAuth 2.0 Authorization Code + PKCE、OAuth metadata discovery、动态客户端注册及静态客户端配置。
+- 新增“我的连接器”页面；凭据按租户、用户和连接器隔离加密保存，支持按需刷新与 401 重试。
+- 增加 HTTPS/DNS 固定校验，避免 OAuth 服务地址解析到非公开网络；管理员可显式配置私网服务例外。
+
+### 升级说明
+
+- 启动时自动创建 OAuth 连接器数据表。启用前需设置稳定的 `CONNECTOR_OAUTH_ENCRYPTION_KEY` 和服务商登记一致的 `CONNECTOR_OAUTH_REDIRECT_URI`。
+- 断开操作只移除 UniEmployee 本地凭据；如需撤销服务商侧授权，需在 OAuth 服务商处操作。
+
+### 验证
+
+- OAuth 模拟流程：3 项通过；MCP 装配与运行时回归：8 项通过；前端 Vite 构建通过。
+- 本机按 CI 过滤规则运行的 SQLite 后端测试通过；PostgreSQL 集成测试未在本机运行。
+
 ## 0.24.1 (2026-11-20)
 
 ### 依赖升级与修复

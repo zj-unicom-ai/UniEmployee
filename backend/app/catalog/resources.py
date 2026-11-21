@@ -295,3 +295,8 @@ def delete_connector(conn_id: str) -> list[str]:
     con.commit()
     con.close()
     return affected
+
+
+def employees_using_connector(connector_id: str) -> list[str]:
+    """Return employees that currently have a connector assigned."""
+    return _unlink_view("connector", connector_id)
