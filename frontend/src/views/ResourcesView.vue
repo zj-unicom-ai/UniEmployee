@@ -143,7 +143,7 @@
           </n-alert>
         </n-form-item>
         <n-form-item v-if="modalType === 'sops'" label="内容"><n-input v-model:value="modalForm.content" type="textarea" :rows="8" /></n-form-item>
-        <n-form-item v-if="modalType === 'connectors'" label="配置 JSON"><n-input v-model:value="modalForm.config" type="textarea" :rows="6" placeholder='{"transport":"stdio","command":"...","args":[...]}' /></n-form-item>
+        <n-form-item v-if="modalType === 'connectors'" label="配置 JSON"><n-input v-model:value="modalForm.config" type="textarea" :rows="6" placeholder='{"transport":"stdio","command":"...","args":[...]} 或 {"transport":"http","url":"https://.../mcp","auth_type":"oauth2","oauth_scopes":"..."}' /></n-form-item>
 
       </n-form>
       <template #footer>

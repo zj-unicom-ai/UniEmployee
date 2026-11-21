@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -438,6 +439,14 @@ def test_initial_backfill_excludes_undated_and_out_of_window_items(monkeypatch):
     source = market_sources.set_enabled("tenant-a", "admin-a", source["id"], True, source["config_version"])
     run = market_sources.queue_collect("tenant-a", "admin-a", source["id"])
     recent_date = market_research._now()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 21, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(market_sources, "datetime", FrozenDateTime)
+
     candidates = [
         {"external_id": "recent", "title": "Recent", "url": "https://publisher.example/recent", "published_at": recent_date,
          "summary": "recent", "body_text": "", "content_source": "summary", "has_fulltext": False},
@@ -446,9 +455,9 @@ def test_initial_backfill_excludes_undated_and_out_of_window_items(monkeypatch):
         {"external_id": "unknown", "title": "Unknown date", "url": "https://publisher.example/unknown", "published_at": "",
          "summary": "unknown", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "recent-month", "title": "Recent month", "url": "https://arxiv.org/abs/2608.12345", "published_at": "",
-         "publication_month": "2026-08", "summary": "recent month", "body_text": "", "content_source": "summary", "has_fulltext": False},
+         "publication_month": "2026-10", "summary": "recent month", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "cutoff-month", "title": "Cutoff month", "url": "https://arxiv.org/abs/2607.12345", "published_at": "",
-         "publication_month": "2026-07", "summary": "cutoff month", "body_text": "", "content_source": "summary", "has_fulltext": False},
+         "publication_month": "2026-08", "summary": "cutoff month", "body_text": "", "content_source": "summary", "has_fulltext": False},
         {"external_id": "old-month", "title": "Old month", "url": "https://arxiv.org/abs/2606.12345", "published_at": "",
          "publication_month": "2026-06", "summary": "old month", "body_text": "", "content_source": "summary", "has_fulltext": False},
     ]

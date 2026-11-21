@@ -359,8 +359,19 @@ async def del_sop(sop_id: str, request: Request,
 async def create_connector(body: dict, request: Request,
                            admin: dict = Depends(auth.require_admin)):
     cid = body.get("id") or ("conn_" + time.strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6])
-    catalog.create_connector(cid, body.get("name", cid), body.get("description", ""),
-                             body.get("config", {}))
+    before = catalog.get_connector(cid)
+    config = body.get("config", {})
+    from app.connectors import oauth as connector_oauth
+    try:
+        connector_oauth.validate_connector_config(config)
+    except connector_oauth.OAuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    catalog.create_connector(cid, body.get("name", cid), body.get("description", ""), config)
+    if before:
+        if connector_oauth.configuration_signature(before.get("config")) != connector_oauth.configuration_signature(config):
+            connector_oauth.clear_connector(cid)
+            for employee_id in catalog._unlink_view("connector", cid):
+                runtime.invalidate(employee_id)
     audit.log("create", "connector", cid, admin, request,
               after=catalog.get_connector(cid))
     return {"id": cid}
@@ -378,8 +389,16 @@ async def get_connector(conn_id: str):
 async def edit_connector(conn_id: str, body: dict, request: Request,
                          admin: dict = Depends(auth.require_admin)):
     before = catalog.get_connector(conn_id)
-    ok = catalog.update_connector(conn_id, body.get("name", ""), body.get("description", ""),
-                                  body.get("config", {}))
+    config = body.get("config", {})
+    from app.connectors import oauth as connector_oauth
+    try:
+        connector_oauth.validate_connector_config(config)
+    except connector_oauth.OAuthError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    ok = catalog.update_connector(conn_id, body.get("name", ""), body.get("description", ""), config)
+    if ok and before:
+        if connector_oauth.configuration_signature(before.get("config")) != connector_oauth.configuration_signature(config):
+            connector_oauth.clear_connector(conn_id)
     for e in catalog._unlink_view("connector", conn_id):
         runtime.invalidate(e)
     audit.log("update", "connector", conn_id, admin, request,
@@ -392,6 +411,8 @@ async def del_connector(conn_id: str, request: Request,
                         admin: dict = Depends(auth.require_admin)):
     before = catalog.get_connector(conn_id)
     affected = catalog.delete_connector(conn_id)
+    from app.connectors import oauth as connector_oauth
+    connector_oauth.clear_connector(conn_id)
     for e in affected:
         runtime.invalidate(e)
     audit.log("delete", "connector", conn_id, admin, request, before=before)

@@ -71,6 +71,22 @@ def init():
     CREATE TABLE IF NOT EXISTS employee_kbs(employee_id TEXT, kb_id TEXT, PRIMARY KEY(employee_id, kb_id));
     CREATE TABLE IF NOT EXISTS employee_sops(employee_id TEXT, sop_id TEXT, PRIMARY KEY(employee_id, sop_id));
     CREATE TABLE IF NOT EXISTS employee_connectors(employee_id TEXT, connector_id TEXT, PRIMARY KEY(employee_id, connector_id));
+    CREATE TABLE IF NOT EXISTS connector_oauth_clients(
+      connector_id TEXT PRIMARY KEY, issuer TEXT NOT NULL, resource TEXT,
+      metadata_json TEXT NOT NULL, client_id TEXT NOT NULL,
+      client_secret_ciphertext TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS connector_oauth_states(
+      state_hash TEXT PRIMARY KEY, connector_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL, context_ciphertext TEXT NOT NULL,
+      expires_at INTEGER NOT NULL, created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_connector_oauth_states_expiry
+      ON connector_oauth_states(expires_at);
+    CREATE TABLE IF NOT EXISTS connector_oauth_connections(
+      connector_id TEXT NOT NULL, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+      credentials_ciphertext TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'connected',
+      expires_at INTEGER, scopes TEXT NOT NULL DEFAULT '',
+      connected_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(connector_id,user_id,tenant_id));
     CREATE TABLE IF NOT EXISTS orgs(
       id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT,
       sort_order INTEGER DEFAULT 0, created_at TEXT);

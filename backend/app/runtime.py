@@ -120,6 +120,22 @@ def invalidate_user(employee_id: str, user_id: str):
     _mcp_clients.pop(key, None)
 
 
+async def invalidate_user_runtime(employee_id: str, user_id: str):
+    """Drop all cached model variants for one employee/user pair and close MCP."""
+    prefix = f"{employee_id}|{user_id}"
+    async with _lock:
+        keys = [k for k in _agents if k == prefix or k.startswith(prefix + "|m:")]
+        clients = []
+        for key in keys:
+            _agents.pop(key, None)
+            _skill_bindings.pop(key, None)
+            client = _mcp_clients.pop(key, None)
+            if client is not None:
+                clients.append(client)
+    for client in clients:
+        await _close_mcp_client(client)
+
+
 def invalidate_user_agents(user_id: str):
     """丢弃某用户的全部 agent 变体（个人画像等用户级上下文变更后调用）。"""
     suffix = f"|{user_id}"
