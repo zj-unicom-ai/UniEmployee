@@ -1,9 +1,4 @@
-"""IM 频道路由：配置不同 IM 频道、平台内 Web 聊天、外部 Webhook 接入。
-
-每个频道可以配置 provider（web / wecom / feishu / dingtalk / generic），
-provider 不是 web 时可通过 /channels/{id}/incoming 接收外部 IM 消息，
-配置里的 outbound_webhook 可把数字员工回复推回对应 IM。
-"""
+"""IM 频道路由：平台内 Web 聊天、通用 Webhook 与原生多平台连接器。"""
 
 import json
 import time
@@ -12,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import auth, conversations, runtime
+from app import auth, conversations, im_gateway, runtime
 from app.models import (
     ImChannelCreate, ImChannelUpdate, ImConversationCreate, ImIncomingMessage, MessageIn,
 )
@@ -48,13 +43,18 @@ def _channel_item(ch: dict, user: dict) -> dict:
         "description": ch["description"],
         "kind": ch.get("kind") or ch.get("provider") or "web",
         "provider": ch.get("provider") or "web",
+        "mode": im_gateway.channel_mode(ch),
         "enabled": bool(ch.get("enabled", True)),
         "employees": _channel_employees(ch["id"], user),
     }
     if ch.get("provider", "web") != "web":
-        item["inbound_url"] = f"/api/im/channels/{ch['id']}/incoming"
+        if not im_gateway.is_native_channel(ch):
+            item["inbound_url"] = f"/api/im/channels/{ch['id']}/incoming"
+    status = im_gateway.gateway.status(ch["id"])
+    if status is not None:
+        item["runtime"] = status
     if user.get("role") == "admin":
-        item["config"] = ch.get("config") or {}
+        item["config"], item["secret_fields"] = im_gateway.redact_config(ch.get("config") or {})
     return item
 
 
@@ -102,22 +102,43 @@ async def list_channels(user: dict = Depends(auth.get_current_user_or_fallback))
     return {"items": out}
 
 
+@router.get("/providers")
+async def list_providers(_user: dict = Depends(auth.get_current_user_or_fallback)):
+    return {"items": im_gateway.provider_catalog()}
+
+
 @router.post("/channels")
 async def create_channel(body: ImChannelCreate,
                          user: dict = Depends(auth.get_current_user_or_fallback)):
     if user.get("role") != "admin":
         raise HTTPException(403, "仅管理员可创建 IM 频道")
-    row = conversations.create_channel(
-        name=body.name,
-        description=body.description,
-        kind=body.provider or "web",
-        provider=body.provider or "web",
-        config=body.config or {},
-        enabled=body.enabled,
-        created_by=user.get("id", "admin"),
-        employee_ids=body.employee_ids,
-    )
-    return row
+    provider = body.provider or "web"
+    mode = body.mode or "webhook"
+    if mode not in {"native", "webhook"}:
+        raise HTTPException(400, "不支持的 IM 接入方式")
+    if mode == "native" and not im_gateway.is_native_kind(provider):
+        raise HTTPException(400, "该平台不支持原生通道")
+    employee_ids = body.employee_ids
+    if mode == "native" and not employee_ids:
+        raise HTTPException(400, "原生 IM 通道必须绑定一个数字员工")
+    if mode == "native" and len(employee_ids) != 1:
+        raise HTTPException(400, "原生 IM 通道目前只支持绑定一个数字员工")
+    config = im_gateway.config_for_mode(body.config, mode)
+    try:
+        row = conversations.create_channel(
+            name=body.name,
+            description=body.description,
+            kind=provider,
+            provider=provider,
+            config=config,
+            enabled=body.enabled,
+            created_by=user.get("id", "admin"),
+            employee_ids=employee_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await im_gateway.gateway.sync_channel(row)
+    return _channel_item(row, user)
 
 
 @router.put("/channels/{channel_id}")
@@ -125,19 +146,51 @@ async def update_channel(channel_id: str, body: ImChannelUpdate,
                          user: dict = Depends(auth.get_current_user_or_fallback)):
     if user.get("role") != "admin":
         raise HTTPException(403, "仅管理员可修改 IM 频道")
-    ch = conversations.update_channel(
-        channel_id,
-        name=body.name,
-        description=body.description,
-        provider=body.provider,
-        kind=body.provider,
-        config=body.config,
-        enabled=body.enabled,
-        employee_ids=body.employee_ids,
-    )
+    existing = conversations.get_channel(channel_id)
+    if not existing:
+        raise HTTPException(404, "频道不存在")
+    provider = body.provider or existing.get("provider") or "web"
+    mode = body.mode or im_gateway.channel_mode(existing)
+    if mode not in {"native", "webhook"}:
+        raise HTTPException(400, "不支持的 IM 接入方式")
+    if mode == "native" and not im_gateway.is_native_kind(provider):
+        raise HTTPException(400, "该平台不支持原生通道")
+    config = body.config
+    same_provider = provider == (existing.get("provider") or existing.get("kind"))
+    if not same_provider and config is None:
+        config = {}
+    elif config is not None and same_provider:
+        config = im_gateway.merge_config_secrets(existing.get("config") or {}, config)
+    if mode == "native" and config is None:
+        config = existing.get("config") or {}
+    elif mode == "webhook" and config is None and im_gateway.is_native_channel(existing):
+        config = existing.get("config") or {}
+    if config is not None:
+        config = im_gateway.config_for_mode(config, mode)
+    employee_ids = body.employee_ids
+    if employee_ids is None:
+        employee_ids = conversations.list_employee_ids_for_channel(channel_id)
+    if mode == "native" and not employee_ids:
+        raise HTTPException(400, "原生 IM 通道必须绑定一个数字员工")
+    if mode == "native" and len(employee_ids) != 1:
+        raise HTTPException(400, "原生 IM 通道目前只支持绑定一个数字员工")
+    try:
+        ch = conversations.update_channel(
+            channel_id,
+            name=body.name,
+            description=body.description,
+            provider=provider,
+            kind=provider,
+            config=config,
+            enabled=body.enabled,
+            employee_ids=employee_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if not ch:
         raise HTTPException(404, "频道不存在")
-    return ch
+    await im_gateway.gateway.sync_channel(ch)
+    return _channel_item(ch, user)
 
 
 @router.delete("/channels/{channel_id}")
@@ -147,7 +200,19 @@ async def delete_channel(channel_id: str,
         raise HTTPException(403, "仅管理员可删除 IM 频道")
     if not conversations.delete_channel(channel_id):
         raise HTTPException(404, "频道不存在")
+    await im_gateway.gateway.remove_channel(channel_id)
     return {"ok": True}
+
+
+@router.post("/channels/{channel_id}/probe")
+async def probe_channel(channel_id: str,
+                        user: dict = Depends(auth.get_current_user_or_fallback)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可测试 IM 通道")
+    ch = conversations.get_channel(channel_id)
+    if not ch:
+        raise HTTPException(404, "频道不存在")
+    return await im_gateway.gateway.probe(ch)
 
 
 @router.post("/channels/{channel_id}/incoming")
@@ -158,6 +223,8 @@ async def incoming_message(channel_id: str, body: ImIncomingMessage):
         raise HTTPException(404, "频道不存在")
     if not ch.get("enabled", True):
         raise HTTPException(403, "频道已停用")
+    if im_gateway.is_native_channel(ch):
+        raise HTTPException(400, "原生 IM 通道由平台连接器自动接收消息")
     if ch.get("provider", "web") == "web":
         raise HTTPException(400, "Web 频道请使用平台内置聊天")
     cfg = ch.get("config") or {}

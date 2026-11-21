@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.26.0 (2026-11-21)
+
+### 新增：原生 IM 多平台接入
+
+- 复用 Octop MIT 许可 `octop-gateway` 协议适配器，新增飞书、钉钉、企业微信、微信 iLink、QQ、腾讯元宝、Telegram、Discord、华为小艺和 MQTT 原生通道；接入方式可显式选原生或 Webhook。
+- IM 频道页面新增平台凭据配置、员工绑定、连接状态和连接探测；消息桥接到 UniEmployee 会话，并支持收发附件。
+- 原生平台凭据在 conversations 数据库中使用 Fernet 加密保存；升级前已有的非原生 provider 记录继续按 Webhook 接入。
+
+### 升级说明
+
+- 新增配置通道前设置稳定的 `CONNECTOR_OAUTH_ENCRYPTION_KEY`；变更该密钥前需迁移已保存的 OAuth 和 IM 加密数据。
+- 安装新增的 `octop-gateway==1.0.3` 依赖并重启服务。平台机器人仍需在各自开发者后台开通相应消息权限。
+
 ## 0.25.0 (2026-11-21)
 
 ### 新增：OAuth MCP 连接器

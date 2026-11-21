@@ -24,7 +24,7 @@ Through its five-layer capability model — **Employee → Workflow/SOP → Skil
 - 🔐 **HITL + layered guardrails** — High-risk actions interrupt mid-flow for human approval. Sensitive-word filters, tool allowlists, filesystem/command-tool trimming, SQL read-only checks, and audit logs constrain execution.
 - ⏱️ **Automations** — Cron schedules and webhook events trigger the same runtime used by chat, including memory, guardrails, traces, and approvals.
 - 🧰 **Multiple execution backends** — Employees can use `state`, `local_shell`, `standard`, or `sandbox`; `net-ops` can route each conversation to an OpenSandbox container.
-- 📱 **Web Chat + IM Extension Architecture** — In-platform web chat and IM channel framework are available today; external WeChat / WeCom / Feishu / DingTalk providers remain planned.
+- 📱 **Web Chat + Native Multi-Platform IM** — Connect Feishu, DingTalk, WeCom, WeChat iLink, QQ, Yuanbao, Telegram, Discord, Huawei Xiaoyi, and MQTT through Octop's MIT-licensed protocol adapters. Configure credentials, bind an employee, and probe connection status in the IM Channels page.
 
 ## Demo
 
@@ -257,9 +257,9 @@ Slow tests (real network / browser) are marked with `@pytest.mark.slow` and skip
 
 ## Channel Integration
 
-In-platform **web chat** is supported today, covering the full conversation / history / trace chain.
+In-platform **web chat** and native channels for Feishu, DingTalk, WeCom, WeChat iLink, QQ, Yuanbao, Telegram, Discord, Huawei Xiaoyi, and MQTT are supported. Native channels route messages through UniEmployee's employee sessions, memory, guardrails, and traces; the generic Webhook endpoint remains compatible.
 
-The platform already implements an IM channel extension architecture: each channel can have a configured provider with multiple digital employees attached, and the in-platform IM page reuses the SSE conversation flow. External WeChat / WeCom / Feishu / DingTalk providers are not included in the current release.
+Configure bot credentials and bind one employee in the IM Channels page. Credentials are encrypted at rest with `CONNECTOR_OAUTH_ENCRYPTION_KEY`; set a stable Fernet key before adding channels. Bot setup and platform-specific permissions are documented in the [native IM guide](docs/guide/im-multi-platform.md).
 
 ## FAQ
 

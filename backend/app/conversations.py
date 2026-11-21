@@ -13,11 +13,24 @@ import sqlite3
 import time
 from pathlib import Path
 
+from cryptography.fernet import Fernet, InvalidToken
+
 from app import db as dblayer
 from app.paths import db_path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = db_path("conversations.db")
+_ENCRYPTED_CHANNEL_KINDS = frozenset({
+    "discord", "dingtalk", "feishu", "mqtt", "qq", "telegram",
+    "wecom", "weixin", "xiaoyi", "yuanbao", "generic",
+})
+_ENCRYPTED_CHANNEL_CONFIG = "fernet:v1:"
+_CHANNEL_SECRET_KEYS = frozenset({
+    "access_token", "ak", "api_key", "app_secret", "authorization", "bot_token",
+    "client_secret", "encrypt_key", "http_proxy", "http_proxy_auth", "outbound_webhook",
+    "password", "refresh_token", "secret", "sk", "token", "username",
+    "verification_token", "webhook_url",
+})
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -150,11 +163,65 @@ def _migrate(con):
     con.commit()
 
 
+def _channel_fernet() -> Fernet:
+    raw = os.environ.get("CONNECTOR_OAUTH_ENCRYPTION_KEY", "").strip()
+    if not raw:
+        raise ValueError(
+            "配置原生 IM 凭据前必须设置 CONNECTOR_OAUTH_ENCRYPTION_KEY（Fernet 密钥）。"
+        )
+    try:
+        return Fernet(raw.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise ValueError("CONNECTOR_OAUTH_ENCRYPTION_KEY 格式无效。") from exc
+
+
+def _contains_channel_secret(value) -> bool:
+    if isinstance(value, dict):
+        return any(
+            (str(key).lower() in _CHANNEL_SECRET_KEYS and bool(item))
+            or _contains_channel_secret(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_channel_secret(item) for item in value)
+    return False
+
+
+def _encode_channel_config(config: dict | None, provider: str) -> str:
+    raw = json.dumps(config or {}, ensure_ascii=False, separators=(",", ":"))
+    if provider not in _ENCRYPTED_CHANNEL_KINDS or not _contains_channel_secret(config or {}):
+        return raw
+    # Keep legacy generic Webhook creation working on installations that have
+    # not configured encryption yet. New native platform credentials fail
+    # closed because their setup is introduced together with this key requirement.
+    if provider == "generic" and not os.environ.get("CONNECTOR_OAUTH_ENCRYPTION_KEY", "").strip():
+        return raw
+    encrypted = _channel_fernet().encrypt(raw.encode("utf-8")).decode("ascii")
+    return _ENCRYPTED_CHANNEL_CONFIG + encrypted
+
+
+def _decode_channel_config(value: str | None) -> dict:
+    raw = value or "{}"
+    if raw.startswith(_ENCRYPTED_CHANNEL_CONFIG):
+        try:
+            payload = _channel_fernet().decrypt(
+                raw[len(_ENCRYPTED_CHANNEL_CONFIG):].encode("ascii")
+            )
+            parsed = json.loads(payload.decode("utf-8"))
+        except (InvalidToken, ValueError, UnicodeEncodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "IM 频道凭据无法解密；请检查 CONNECTOR_OAUTH_ENCRYPTION_KEY 是否与写入时一致。"
+            ) from exc
+    else:
+        parsed = json.loads(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _channel_row(row) -> dict:
     d = dict(row)
     try:
-        d["config"] = json.loads(d.get("config") or "{}") or {}
-    except Exception:
+        d["config"] = _decode_channel_config(d.get("config"))
+    except (json.JSONDecodeError, TypeError):
         d["config"] = {}
     d["enabled"] = bool(d.get("enabled"))
     return d
@@ -549,7 +616,7 @@ def create_channel(name: str, description: str = "", kind: str = "web",
     cid = "chan_" + time.strftime("%Y%m%d%H%M%S") + str(time.time()).split(".")[1]
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     provider = provider or kind or "web"
-    config_json = json.dumps(config or {}, ensure_ascii=False)
+    config_json = _encode_channel_config(config, provider)
     with _conn() as con:
         con.execute(
             "INSERT INTO channels(id, name, description, kind, provider, config, enabled, status, created_by, created_at, updated_at) "
@@ -621,7 +688,8 @@ def update_channel(channel_id: str, *, name: str | None = None,
         if provider is not None:
             fields.append("provider=?"); params.append(provider)
         if config is not None:
-            fields.append("config=?"); params.append(json.dumps(config, ensure_ascii=False))
+            effective_provider = provider or cur.get("provider") or cur.get("kind") or "web"
+            fields.append("config=?"); params.append(_encode_channel_config(config, effective_provider))
         if enabled is not None:
             fields.append("enabled=?"); params.append(1 if enabled else 0)
         if status is not None:

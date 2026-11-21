@@ -27,7 +27,7 @@ from app.errors import register_exception_handlers
 from app.streaming import recover_conversations
 from app.routes import router as app_router
 
-APP_VERSION = os.environ.get("APP_VERSION", "0.25.0")
+APP_VERSION = os.environ.get("APP_VERSION", "0.26.0")
 log = get_logger("app.main")
 
 # 用户被标记 must_change_password 时仍可访问的接口：登录、改密、当前用户信息。
@@ -143,6 +143,8 @@ async def lifespan(app):
         runtime.set_store(store)
         await runtime.warmup_all()
         await recover_conversations()
+        from app import im_gateway
+        await im_gateway.gateway.start()
         market_research_mcp_app = getattr(
             app.state, "market_research_mcp_http_app", None)
         if market_research_mcp_app is not None:
@@ -156,6 +158,7 @@ async def lifespan(app):
         await market_sources.shutdown()
         await market_intake.shutdown()
         await scheduler.stop()
+        await im_gateway.gateway.stop()
         await agent_runs.shutdown()
         await runtime.shutdown_mcp()
         if dblayer.is_pg():

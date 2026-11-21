@@ -75,6 +75,7 @@ class ImChannelCreate(BaseModel):
     name: str
     description: str = ""
     provider: str = "web"
+    mode: str = "webhook"
     config: dict = Field(default_factory=dict)
     enabled: bool = True
     employee_ids: list[str] = []
@@ -84,6 +85,7 @@ class ImChannelUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     provider: str | None = None
+    mode: str | None = None
     config: dict | None = None
     enabled: bool | None = None
     employee_ids: list[str] | None = None

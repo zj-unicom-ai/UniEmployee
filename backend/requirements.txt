@@ -15,6 +15,7 @@ psycopg[binary,pool]==3.3.4
 langchain-mcp-adapters==0.3.0
 langchain-openai==1.4.1
 fastmcp==3.4.4
+octop-gateway==1.0.3
 httpx==0.28.1
 tzdata==2025.2
 python-docx==1.2.0
